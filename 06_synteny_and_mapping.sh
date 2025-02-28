@@ -1,13 +1,13 @@
 #!/bin/bash
 # 06_synteny_and_mapping.sh
-# Purpose: Map transcripts to genomes and perform synteny analyses across species.
-# Inputs: Genome files (${GENOME}, ${GENOME_DIR}/*/*.fa), transcriptome files
-# Outputs: Mapping BAM files (${RESULTS_DIR}/mapping/), synteny results (${RESULTS_DIR}/synteny/)
-# Author: Jorge L. Perez-Moreno, Ph.D., Katz Lab, University of Massachusetts, Amherst.
+# Purpose: Analyze synteny across available genomes using MCScanX; mapping is optional if transcriptomes exist.
+# Inputs: Genomes in ${GENOME_DIR}/*.fasta, transcriptomes for mapping if available
+# Outputs: Synteny results in ${RESULTS_DIR}/synteny/, optional mapping BAMs in ${RESULTS_DIR}/mapping/
+# Author: Jorge L. Perez-Moreno, Ph.D., Katz Lab, University of Massachusetts, Amherst
 
 #SBATCH --job-name=synteny_mapping
-#SBATCH --output=${LOGS_DIR}/06_synteny_mapping_%j.out
-#SBATCH --error=${LOGS_DIR}/06_synteny_mapping_%j.err
+#SBATCH --output=${LOGS_DIR}/06_synteny_and_mapping_%j.out
+#SBATCH --error=${LOGS_DIR}/06_synteny_and_mapping_%j.err
 #SBATCH --time=${DEFAULT_TIME}
 #SBATCH $(scale_resources)
 #SBATCH --mail-type=ALL
@@ -17,38 +17,38 @@ source config.sh
 source functions.sh
 
 # Create output directories
-mkdir -p "${RESULTS_DIR}/mapping" "${RESULTS_DIR}/synteny" "${LOGS_DIR}"
+mkdir -p "${RESULTS_DIR}/mapping" "${RESULTS_DIR}/synteny" "${LOGS_DIR}" || { log "Error: Cannot create directories"; exit 1; }
 
-# Check dependency from step 02
-if [ ! -f "${RESULTS_DIR}/step_completed_extract_berghia.txt" ]; then
-    log "Error: Chemoreceptive GPCR identification step not completed."
-    exit 1
-fi
+# Check dependency
+check_file "${RESULTS_DIR}/step_completed_extract_berghia.txt"
 
 log "Starting synteny and mapping analysis."
 
-# Map Berghia transcriptome to its genome using minimap2
-run_command "map_berghia_minimap2" ${MINIMAP2} -ax splice -uf --secondary=no "${GENOME}" "${TRANSCRIPTOME}" > "${RESULTS_DIR}/mapping/berghia_transcripts.sam"
-run_command "map_berghia_samtools" ${SAMTOOLS} view -bS "${RESULTS_DIR}/mapping/berghia_transcripts.sam" | ${SAMTOOLS} sort -o "${RESULTS_DIR}/mapping/berghia_transcripts_sorted.bam"
-run_command "map_berghia_index" ${SAMTOOLS} index "${RESULTS_DIR}/mapping/berghia_transcripts_sorted.bam"
-
-# Perform synteny analysis with other genomes
-for genome in "${GENOME_DIR}"/*/*.fa; do
-    if [ "$genome" != "${GENOME}" ]; then
-        taxid_sample=$(basename "$(dirname "$genome")")
-        # Run MCScanX for synteny blocks
-        run_command "synteny_mcscanx_${taxid_sample}" ${MCSCANX} -a -e "${BLAST_EVALUE}" -m 25 -s 5 "${GENOME}" "$genome" "${RESULTS_DIR}/synteny/berghia_vs_${taxid_sample}_mcscanx"
-        # Run i-ADHoRe for additional synteny analysis
-        run_command "synteny_iadhore_${taxid_sample}" ${IADHORE} -i "${GENOME}" -j "$genome" -o "${RESULTS_DIR}/synteny/berghia_vs_${taxid_sample}_iadhore" -c "${DATA_DIR}/iadhore_config.ini"
+# --- Optional mapping of transcriptomes to genomes ---
+for genome in "${GENOME_DIR}"/*.fasta; do
+    taxid_sample=$(basename "$genome" .fasta)
+    trans="${TRANSCRIPTOME_DIR}/${taxid_sample}.aa"
+    if [ -f "$trans" ]; then
+        run_command "minimap2_${taxid_sample}" ${MINIMAP2} -ax splice -uf -k14 "$genome" "$trans" > "${RESULTS_DIR}/mapping/${taxid_sample}.sam"
+        run_command "samtools_${taxid_sample}" ${SAMTOOLS} view -bS "${RESULTS_DIR}/mapping/${taxid_sample}.sam" | ${SAMTOOLS} sort -o "${RESULTS_DIR}/mapping/${taxid_sample}.bam"
+        run_command "samtools_index_${taxid_sample}" ${SAMTOOLS} index "${RESULTS_DIR}/mapping/${taxid_sample}.bam"
+    else
+        log "Note: No transcriptome for $taxid_sample, skipping mapping"
     fi
 done
 
-# Annotate GPCR expansions from synteny blocks
-for col_file in "${RESULTS_DIR}/synteny/"*/*_mcscanx.collinearity; do
-    grep "GPCR" "$col_file" | awk '{print $1}' | sort -u >> "${RESULTS_DIR}/synteny/gpcr_synteny_ids.txt"
+# --- Synteny analysis with MCScanX for all available genomes ---
+for genome1 in "${GENOME_DIR}"/*.fasta; do
+    for genome2 in "${GENOME_DIR}"/*.fasta; do
+        if [ "$genome1" != "$genome2" ]; then
+            taxid1=$(basename "$genome1" .fasta)
+            taxid2=$(basename "$genome2" .fasta)
+            run_command "synteny_${taxid1}_vs_${taxid2}" ${MCSCANX} -a -b 2 "$genome1" "$genome2" "${RESULTS_DIR}/synteny/${taxid1}_vs_${taxid2}"
+        fi
+    done
 done
 
-# Plot synteny blocks
-python3 "${SCRIPTS_DIR}/plot_synteny.py" "${RESULTS_DIR}/synteny/berghia_vs_*_mcscanx.collinearity" "${RESULTS_DIR}/synteny/synteny_plot"
+# --- Plot synteny at different taxonomic levels ---
+python3 "${SCRIPTS_DIR}/plot_synteny.py" "${RESULTS_DIR}/synteny" "${RESULTS_DIR}/synteny/synteny_plot" || log "Warning: Synteny plotting failed"
 
 log "Synteny and mapping analysis completed."
