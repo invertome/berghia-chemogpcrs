@@ -1,33 +1,37 @@
 #!/usr/bin/env python3
 # plot_struct_vs_seq.py
-# Purpose: Compare structural and sequence-based phylogenetic trees using Robinson-Foulds distance.
-# Inputs: Structural tree ($1), sequence tree ($2), output plot file ($3)
-# Outputs: Comparison plot (${output_file}.png, ${output_file}.svg)
-# Author: Jorge L. Perez-Moreno, Ph.D., Katz Lab, University of Massachusetts, Amherst.
+# Purpose: Compare structural and sequence trees using generalized RF distance, accounting for differing taxon sets.
+# Inputs: Structural tree ($1), sequence tree ($2), output prefix ($3)
+# Outputs: Comparison plot in ${output_prefix}.png
+# Logic: Prunes both trees to common taxa before RF calculation.
+# Author: Jorge L. Perez-Moreno, Ph.D.
 
 import sys
 from ete3 import Tree
 import matplotlib.pyplot as plt
 
-# Command-line arguments
-struct_tree_file = sys.argv[1]  # Structural tree file (Newick)
-seq_tree_file = sys.argv[2]     # Sequence tree file (Newick)
-output_file = sys.argv[3]       # Output plot file (without extension)
+struct_tree_file = sys.argv[1]
+seq_tree_file = sys.argv[2]
+output_prefix = sys.argv[3]
 
-# Load trees
 t_struct = Tree(struct_tree_file)
 t_seq = Tree(seq_tree_file)
 
-# Calculate Robinson-Foulds distance
-rf_dist = t_struct.robinson_foulds(t_seq)[0]
+# Prune to common taxa
+common_taxa = set(t_struct.get_leaf_names()).intersection(set(t_seq.get_leaf_names()))
+if not common_taxa:
+    print("Error: No common taxa between trees")
+    sys.exit(1)
+t_seq.prune(common_taxa, preserve_branch_length=True)
+t_struct.prune(common_taxa, preserve_branch_length=True)
 
-# Create comparison plot
+# Calculate generalized RF distance
+rf, max_rf, _, _, _, _, _ = t_struct.robinson_foulds(t_seq, unrooted_trees=True)
+grf = rf / max_rf if max_rf > 0 else 0
+
 plt.figure(figsize=(10, 6))
-plt.text(0.5, 0.5, f"Robinson-Foulds Distance: {rf_dist}", ha='center', va='center', fontsize=14)
+plt.text(0.5, 0.5, f"Generalized RF Distance: {grf:.4f}", ha='center', va='center', fontsize=14)
 plt.title("Structural vs. Sequence Tree Comparison")
 plt.axis('off')
-
-# Save in both PNG and SVG formats
-plt.savefig(f"{output_file}.png", dpi=300, bbox_inches='tight')
-plt.savefig(f"{output_file}.svg", format='svg', bbox_inches='tight')
+plt.savefig(f"{output_prefix}.png", dpi=300)
 plt.close()
