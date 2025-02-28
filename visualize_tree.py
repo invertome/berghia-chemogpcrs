@@ -1,30 +1,32 @@
 #!/usr/bin/env python3
 # visualize_tree.py
-# Purpose: Generate PNG and SVG visualizations of phylogenetic trees with bootstrap/posterior support.
+# Purpose: Visualize phylogenetic trees with multiple layouts and receptor counts.
 # Inputs: Tree file ($1), output prefix ($2)
-# Outputs: Tree visualizations (${output_prefix}.png, ${output_prefix}.svg)
-# Author: Jorge L. Perez-Moreno, Ph.D., Katz Lab, University of Massachusetts, Amherst.
+# Outputs: Basic (${output_prefix}_basic.png), receptor (${output_prefix}_receptors.png), circular (${output_prefix}_circular.png) plots
+# Logic: Plots basic tree, adds receptor counts if metadata available, and provides circular layout.
+# Author: Jorge L. Perez-Moreno, Ph.D.
 
 import sys
 from ete3 import Tree, TreeStyle, NodeStyle, TextFace
 
-tree_file = sys.argv[1]  # Input tree file (Newick format)
-output_prefix = sys.argv[2]  # Output prefix for visualization files
+tree_file = sys.argv[1]
+output_prefix = sys.argv[2]
 
-# Load tree
 t = Tree(tree_file)
-
-# Define tree style
 ts = TreeStyle()
 ts.show_leaf_name = True
-ts.scale = 50  # Scale branch lengths visually
 
-# Add bootstrap/posterior support to nodes
-for node in t.traverse():
-    if not node.is_leaf() and node.support is not None:
-        support_label = f"{node.support:.2f}" if node.support <= 1 else f"{int(node.support)}"
-        node.add_face(TextFace(support_label, fsize=8), column=0, position="branch-top")
+# Basic tree plot
+t.render(f"{output_prefix}_basic.png", w=800, units='px', tree_style=ts)
 
-# Render tree in PNG and SVG formats
-t.render(f"{output_prefix}.png", w=800, units='px', tree_style=ts, dpi=300)
-t.render(f"{output_prefix}.svg", w=800, units='px', tree_style=ts)
+# Plot with receptor counts (assuming receptor_count in metadata, adjust as needed)
+for leaf in t:
+    if hasattr(leaf, 'receptor_count'):  # Placeholder for actual metadata
+        leaf.add_face(TextFace(f"Receptors: {leaf.receptor_count}"), column=0, position="branch-right")
+t.render(f"{output_prefix}_receptors.png", w=800, units='px', tree_style=ts)
+
+# Circular layout
+ts_circular = TreeStyle()
+ts_circular.mode = "c"
+ts_circular.show_leaf_name = True
+t.render(f"{output_prefix}_circular.png", w=800, units='px', tree_style=ts_circular)
