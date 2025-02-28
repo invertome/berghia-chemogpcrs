@@ -1,6 +1,8 @@
 #!/bin/bash
 # 09_report_generation.sh
-# Purpose: Generate a LaTeX report summarizing pipeline results.
+# Purpose: Generate a comprehensive LaTeX report summarizing the pipeline results.
+# Inputs: All analysis results from previous steps
+# Outputs: PDF report (${RESULTS_DIR}/pipeline_report.pdf)
 # Author: Jorge L. Perez-Moreno, Ph.D., Katz Lab, University of Massachusetts, Amherst.
 
 #SBATCH --job-name=report_generation
@@ -14,8 +16,10 @@
 source config.sh
 source functions.sh
 
+# Create report directory
 mkdir -p "${RESULTS_DIR}/report" "${LOGS_DIR}"
 
+# Check dependency from step 08
 if [ ! -f "${RESULTS_DIR}/step_completed_ranking.txt" ]; then
     log "Error: Structural analysis step not completed."
     exit 1
@@ -23,6 +27,7 @@ fi
 
 log "Starting report generation."
 
+# Generate LaTeX report template
 cat > "${RESULTS_DIR}/report/report.tex" <<'EOF'
 \documentclass{article}
 \usepackage{graphicx}
@@ -121,7 +126,10 @@ Structural phylogenies were compared with sequence-based trees (Fig. \ref{fig:st
 \end{document}
 EOF
 
+# Compile LaTeX report
 run_command "latex_compile" ${PDFLATEX} -output-directory="${RESULTS_DIR}/report" "${RESULTS_DIR}/report/report.tex"
+
+# Move compiled PDF to results directory
 mv "${RESULTS_DIR}/report/report.pdf" "${RESULTS_DIR}/pipeline_report.pdf"
 
 log "Report generation completed."
