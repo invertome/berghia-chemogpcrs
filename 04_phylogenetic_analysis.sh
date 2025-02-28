@@ -1,6 +1,8 @@
 #!/bin/bash
 # 04_phylogenetic_analysis.sh
-# Purpose: Build and refine phylogenetic trees at multiple levels using optimized methods.
+# Purpose: Build and refine phylogenetic trees at multiple levels using IQ-TREE, Phyloformer, and optionally MrBayes.
+# Inputs: GPCR FASTA files from step 02, LSE FASTAs from step 03b, reference sequences from step 01
+# Outputs: Phylogenetic trees (${RESULTS_DIR}/phylogenies/protein/*.treefile), visualizations (${RESULTS_DIR}/phylogenies/visualizations/)
 # Author: Jorge L. Perez-Moreno, Ph.D., Katz Lab, University of Massachusetts, Amherst.
 
 #SBATCH --job-name=phylogenetic_analysis
@@ -9,15 +11,17 @@
 #SBATCH --time=${DEFAULT_TIME}
 #SBATCH --cpus-per-task=16  # Cap for IQ-TREE/MrBayes
 #SBATCH --mem=${DEFAULT_MEM}
-#SBATCH --array=0-999%100   # Increased concurrency
+#SBATCH --array=0-999%100   # Increased concurrency for orthogroups
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=${SLURM_EMAIL}
 
 source config.sh
 source functions.sh
 
+# Create output directories
 mkdir -p "${RESULTS_DIR}/phylogenies/protein" "${RESULTS_DIR}/phylogenies/nucleotide" "${RESULTS_DIR}/phylogenies/visualizations" "${LOGS_DIR}"
 
+# Check dependency from step 03b
 if [ ! -f "${RESULTS_DIR}/step_completed_lse_classification.txt" ]; then
     log "Error: LSE classification step not completed."
     exit 1
@@ -25,7 +29,9 @@ fi
 
 log "Starting phylogenetic analysis."
 
-# Quality control function
+# --- Quality control function for alignments ---
+# Arguments: $1 - Alignment file
+# Returns: Exits with error if sequences don't meet length or gap criteria
 check_alignment() {
     local file="$1"
     local min_len="${MIN_SEQ_LENGTH}"
@@ -41,16 +47,39 @@ check_alignment() {
     ' "$file"
 }
 
-# All Berghia candidates + references
+# --- All Berghia candidates + references (large tree with refinement) ---
 if [ ! -f "${RESULTS_DIR}/step_completed_all_berghia_refs_iqtree.txt" ]; then
+    # Combine sequences
     cat "${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa" "${RESULTS_DIR}/reference_sequences/all_references.fa" > "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.fa"
+    
+    # Initial alignment with MAFFT
     run_command "all_berghia_refs_mafft" ${MAFFT} --auto --thread "${CPUS}" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.fa" > "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa"
     check_alignment "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" || { log "Error: Initial alignment quality check failed for all_berghia_refs"; exit 1; }
+    
+    # Trim with Trimal
     run_command "all_berghia_refs_trimal" ${TRIMAL} -in "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" -out "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa" -automated1
+    
+    # Refine with BMGE (entropy-based trimming)
     run_command "all_berghia_refs_bmge" ${BMGE} -i "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa" -t AA -o "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_bmge.fa"
-    python3 "${SCRIPTS_DIR}/prune_alignment.py" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_bmge.fa" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_pruned.fa" "${MIN_SEQ_LENGTH}" "${MAX_GAP_PERCENT}"
+    
+    # Optional ClipKIT trimming (phylogenetic-informed)
+    if [ "$USE_CLIPKIT" = true ]; then
+        run_command "all_berghia_refs_clipkit" ${CLIPKIT} smart-gap -i "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa" -o "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_clipkit.fa"
+        FINAL_ALN="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_clipkit.fa"
+    else
+        FINAL_ALN="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_bmge.fa"
+    fi
+    
+    # Prune sequences based on length and gaps
+    python3 "${SCRIPTS_DIR}/prune_alignment.py" "$FINAL_ALN" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_pruned.fa" "${MIN_SEQ_LENGTH}" "${MAX_GAP_PERCENT}"
+    
+    # Generate initial tree with FastTree
     run_command "all_berghia_refs_fasttree" ${FASTTREE} "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_pruned.fa" > "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_fasttree.tre"
+    
+    # Run IQ-TREE with refined alignment
     run_command "all_berghia_refs_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_pruned.fa" -m "${IQTREE_MODEL}" -B "${IQTREE_BOOTSTRAP}" -nt 16 -pre "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs" -t "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_fasttree.tre"
+    
+    # Optional MrBayes run
     if [ "$USE_MRBAYES" = true ]; then
         echo "begin mrbayes;" > "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.nex"
         echo "set autoclose=yes nowarn=yes;" >> "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.nex"
@@ -62,14 +91,20 @@ if [ ! -f "${RESULTS_DIR}/step_completed_all_berghia_refs_iqtree.txt" ]; then
         echo "end;" >> "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.nex"
         run_command "all_berghia_refs_mrbayes" ${MRBAYES} -i "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.nex"
     fi
-    run_command "all_berghia_refs_phyloformer" ${PHYLOFORMER} -i "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_pruned.fa" -o "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_phyloformer.tre" --model LG+G --threads "${CPUS}"
+    
+    # Run Phyloformer with model testing
+    python3 "${SCRIPTS_DIR}/test_phyloformer_models.py" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_pruned.fa" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_phyloformer" "${CPUS}"
 fi
 
+# --- Generate visualizations for all_berghia_refs ---
 python3 "${SCRIPTS_DIR}/visualize_tree.py" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.treefile" "${RESULTS_DIR}/phylogenies/visualizations/all_berghia_refs_iqtree"
+if [ "$USE_MRBAYES" = true ] && [ -f "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.nex.con.tre" ]; then
+    python3 "${SCRIPTS_DIR}/visualize_tree.py" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.nex.con.tre" "${RESULTS_DIR}/phylogenies/visualizations/all_berghia_refs_mrbayes"
+fi
 python3 "${SCRIPTS_DIR}/visualize_tree.py" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_phyloformer.tre" "${RESULTS_DIR}/phylogenies/visualizations/all_berghia_refs_phyloformer"
 python3 "${SCRIPTS_DIR}/plot_phyloformer_iqtree.py" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.treefile" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_phyloformer.tre" "${RESULTS_DIR}/phylogenies/visualizations/all_berghia_refs_comparison.png"
 
-# Multi-level LSE trees
+# --- Multi-level LSE trees ---
 for level in "aeolids" "nudibranchs" "gastropods"; do
     if [ -f "${RESULTS_DIR}/lse_classification/lse_${level}.fa" ] && [ ! -f "${RESULTS_DIR}/step_completed_lse_${level}_iqtree.txt" ]; then
         mkdir -p "${RESULTS_DIR}/phylogenies/protein/lse_${level}"
@@ -82,7 +117,7 @@ for level in "aeolids" "nudibranchs" "gastropods"; do
     fi
 done
 
-# Orthogroup-specific trees
+# --- Orthogroup-specific trees ---
 ORTHOGROUPS=("${RESULTS_DIR}/orthogroups/OrthoFinder/Results*/Orthogroups/OG"*.fa)
 if [ ${#ORTHOGROUPS[@]} -eq 0 ]; then
     log "Error: No orthogroups found."
