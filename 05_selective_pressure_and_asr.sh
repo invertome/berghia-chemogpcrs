@@ -150,3 +150,20 @@ EOF
     # Compute LRT and plot
     python3 "${SCRIPTS_DIR}/compute_lrt.py" "$base" "${RESULTS_DIR}/selective_pressure/${base}_codeml_lse_null.out" "${RESULTS_DIR}/selective_pressure/${base}_codeml_lse_alt.out" "${RESULTS_DIR}/selective_pressure/lrt_results_lse.csv"
     python3 "${SCRIPTS_DIR}/plot_selective_pressure.py" "${RESULTS_DIR}/selective_pressure/l
+    # Plot Likelihood Ratio Test (LRT) results for lineage-specific expansion (LSE) orthogroups
+    python3 "${SCRIPTS_DIR}/plot_selective_pressure.py" "${RESULTS_DIR}/selective_pressure/lrt_results_lse.csv" "${RESULTS_DIR}/selective_pressure/lrt_plot_lse_${base}"
+
+    # Select deep nodes for ASR using a Python script
+    deep_nodes=$(python3 "${SCRIPTS_DIR}/select_deep_nodes.py" "$tree" "${BERGHIA_TAXID}")
+    for node in $deep_nodes; do
+        # Run FastML for ASR on each selected node
+        run_command "${base}_${node}_asr" ${FASTML} --seq "$nuc_align" --tree "$tree" --out_seq "${RESULTS_DIR}/asr/${base}_${node}_asr.fa" --out_tree "${RESULTS_DIR}/asr/${base}_${node}_asr.tree" --node "$node" -t 8 --verbose
+    done
+    
+    # Plot ASR results for the first selected node as a representative example
+    if [ -f "${RESULTS_DIR}/asr/${base}_${deep_nodes%% *}_asr.fa" ]; then
+        python3 "${SCRIPTS_DIR}/plot_asr.py" "$tree" "${RESULTS_DIR}/asr/${base}_${deep_nodes%% *}_asr.fa" "${RESULTS_DIR}/asr/${base}_asr_plot"
+    fi
+fi
+
+log "Selective pressure and ASR analysis completed for ${base}."
