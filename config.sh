@@ -1,131 +1,83 @@
 #!/bin/bash
 # config.sh
 # Purpose: Define pipeline-wide variables, paths, and customizable settings for GPCR analysis in Berghia stephanieae.
-# Author: Jorge L. Perez-Moreno, Ph.D., Katz Lab, University of Massachusetts, Amherst.
+# Notes: This script is sourced by all other scripts to ensure consistent configuration.
 
 # --- Directories ---
-# Base directory for the pipeline
-PIPELINE_DIR="/path/to/pipeline"
-# Input data directory
-DATA_DIR="${PIPELINE_DIR}/data"
-# Results output directory
-RESULTS_DIR="${PIPELINE_DIR}/results"
-# Logging directory
-LOGS_DIR="${PIPELINE_DIR}/logs"
-# Transcriptome input directory
-TRANSCRIPTOME_DIR="${PIPELINE_DIR}/transcriptomes"
-# Genome input directory
-GENOME_DIR="${PIPELINE_DIR}/genomes"
-# Reference sequences directory
-REFERENCE_DIR="${PIPELINE_DIR}/gpcr_references"
-# Quantification data directory
-QUANT_DIR="${PIPELINE_DIR}/quantification"
-# Scripts directory
-SCRIPTS_DIR="${PIPELINE_DIR}/scripts"
+PIPELINE_DIR="/path/to/pipeline"                # Root directory for the pipeline
+DATA_DIR="${PIPELINE_DIR}/data"                 # Input data storage
+RESULTS_DIR="${PIPELINE_DIR}/results"           # Output results storage
+LOGS_DIR="${PIPELINE_DIR}/logs"                 # Log files storage
+TRANSCRIPTOME_DIR="${PIPELINE_DIR}/transcriptomes"  # Directory for transcriptome files
+GENOME_DIR="${PIPELINE_DIR}/genomes"            # Directory for genome files
+REFERENCE_DIR="${PIPELINE_DIR}/gpcr_references" # Directory for reference sequences and HMMs
+QUANT_DIR="${PIPELINE_DIR}/quantification"      # Directory for expression data
+SCRIPTS_DIR="${PIPELINE_DIR}/scripts"           # Directory for supporting scripts
 
 # --- Input Files ---
-# Genome FASTA file for Berghia
-GENOME="${DATA_DIR}/berghia_genome.fa"
-# Transcriptome FASTA file for Berghia
-TRANSCRIPTOME="${DATA_DIR}/berghia_transcriptome.fa"
+GENOME="${DATA_DIR}/berghia_genome.fa"          # Berghia genome FASTA file
+TRANSCRIPTOME="${DATA_DIR}/berghia_transcriptome.fa"  # Berghia transcriptome FASTA file
 
 # --- Taxonomic Settings ---
-# NCBI TaxIDs for species included in the analysis
-TAXA=("9606" "10090" "66289" "6447")  # Human, Mouse, Aplysia, Lottia
-# Berghia stephanieae TaxID
-BERGHIA_TAXID="1263399"
+TAXA=("9606" "10090" "66289" "6447")           # TaxIDs: Human, Mouse, Aplysia, Lottia
+BERGHIA_TAXID="1263399"                        # TaxID for Berghia stephanieae
 
 # --- Custom HMMs (Optional) ---
-# Path to custom conserved HMM (leave empty to build from references)
-CONSERVED_HMM="${REFERENCE_DIR}/conserved.hmm"
-# Path to custom LSE HMM (leave empty to build from references)
-LSE_HMM="${REFERENCE_DIR}/lse.hmm"
+CONSERVED_HMM="${REFERENCE_DIR}/conserved.hmm"  # Optional custom HMM for conserved GPCRs
+LSE_HMM="${REFERENCE_DIR}/lse.hmm"              # Optional custom HMM for LSE GPCRs
 
 # --- Resource Limits ---
-# Default CPU count (global cap, overridden where specified)
-DEFAULT_CPUS=16
-# Default memory allocation
-DEFAULT_MEM="16G"
-# Default job time limit
-DEFAULT_TIME="24:00:00"
-# Enable GPU usage for AlphaFold
-GPU_ENABLED=true
+DEFAULT_CPUS=16                                 # Default number of CPUs for parallel tasks
+DEFAULT_MEM="16G"                               # Default memory allocation
+DEFAULT_TIME="24:00:00"                         # Default SLURM job time limit
+GPU_ENABLED=true                                # Enable GPU usage if available
 
 # --- Tool Paths ---
-# Paths to bioinformatics tools (assumed in PATH or Conda environment)
-HMMBUILD="hmmbuild"          # HMMER tool for building HMMs
-HMMSEARCH="hmmsearch"        # HMMER tool for searching with HMMs
-HHBLITS="hhblits"            # HHSuite tool for profile-profile alignment
-HHMAKE="hhmake"              # HHSuite tool for creating HMMs
-MAFFT="mafft"                # Multiple sequence alignment tool
-IQTREE="iqtree2"             # Phylogenetic tree inference tool
-FASTTREE="FastTree"          # Fast phylogenetic tree inference
-TRIMAL="trimal"              # Alignment trimming tool
-CODEML="codeml"              # PAML tool for codon-based selection analysis
-FASTML="fastml"              # Ancestral sequence reconstruction tool
-ETE3="ete3"                  # Python library for tree manipulation
-MINIMAP2="minimap2"          # Read mapping tool
-SAMTOOLS="samtools"          # SAM/BAM file processing tool
-MCSCANX="MCScanX"            # Synteny analysis tool
-IADHORE="/path/to/i-adhore"  # Synteny analysis tool (custom path)
-ALPHAFOLD="/path/to/alphafold"  # Protein structure prediction tool
-FOLDTREE="/path/to/foldtree"    # Structural phylogeny tool
-TMALIGN="/path/to/TMalign"      # Structural alignment tool
-SEQTK="seqtk"                   # Sequence manipulation tool
-ORTHOFINDER="orthofinder"       # Orthology inference tool
-PHYLOFORMER="/path/to/phyloformer"  # Deep learning phylogeny tool
-PDFLATEX="pdflatex"             # LaTeX compiler for report generation
-BUSCO="busco"                   # BUSCO gene identification tool
-DEEPTMHMM="deeptmhmm"           # Transmembrane prediction tool
-ASTRAL="astral"                 # Coalescent-based species tree inference
-MRBAYES="mb"                    # Bayesian phylogenetic inference tool
-BMGE="bmge"                     # Alignment trimming tool
-CLIPKIT="clipkit"               # Phylogenetic-informed alignment trimming
+# Note: Ensure these tools are installed and accessible in your environment
+HMMBUILD="hmmbuild"                            # Path to HMMER hmmbuild
+HMMSEARCH="hmmsearch"                          # Path to HMMER hmmsearch
+HHBLITS="hhblits"                              # Path to HHblits
+HHMAKE="hhmake"                                # Path to HHmake
+MAFFT="mafft"                                  # Path to MAFFT aligner
+IQTREE="iqtree2"                               # Path to IQ-TREE
+FASTTREE="FastTree"                            # Path to FastTree
+TRIMAL="trimal"                                # Path to TrimAl
+CODEML="codeml"                                # Path to PAML codeml
+FASTML="fastml"                                # Path to FastML
+ETE3="ete3"                                    # Path to ETE3 (used via Python)
+MINIMAP2="minimap2"                            # Path to minimap2
+SAMTOOLS="samtools"                            # Path to samtools
+MCSCANX="MCScanX"                              # Path to MCScanX
+ALPHAFOLD="/path/to/alphafold"                 # Path to AlphaFold
+FOLDTREE="/path/to/foldtree"                   # Path to FoldTree
+TMALIGN="/path/to/TMalign"                     # Path to TMalign
+SEQTK="seqtk"                                  # Path to seqtk
+ORTHOFINDER="orthofinder"                      # Path to OrthoFinder
+PDFLATEX="pdflatex"                            # Path to pdflatex
+BUSCO="busco"                                  # Path to BUSCO
+DEEPTMHMM="deeptmhmm"                          # Path to DeepTMHMM
+ASTRAL="astral"                                # Path to ASTRAL
 
 # --- Analysis Settings ---
-# E-value threshold for HMM searches
-HMM_EVALUE="1e-5"
-# E-value threshold for HHblits searches
-HHBLITS_EVALUE="1e-5"
-# E-value threshold for BLAST in synteny analysis
-BLAST_EVALUE="1e-5"
-# Model for IQ-TREE (ModelFinder Plus)
-IQTREE_MODEL="MFP"
-# Number of bootstrap replicates for IQ-TREE
-IQTREE_BOOTSTRAP=1000
-# Inflation parameter for OrthoFinder clustering
-ORTHOFINDER_INFLATION=1.2
-# TPM threshold for expression filtering
-TPM_THRESHOLD=10
-# Weight for rhinophore expression
-TPM_WEIGHT_RHINOPHORE=2
-# Weight for oral-tentacle expression
-TPM_WEIGHT_ORAL=1
-# Minimum number of transmembrane regions for GPCR filtering
-MIN_TM_REGIONS=6
-# Minimum sequence length for quality control
-MIN_SEQ_LENGTH=100
-# Maximum gap percentage allowed in alignments
-MAX_GAP_PERCENT=50
-# Toggle Bayesian inference with MrBayes
-USE_MRBAYES=false
-# Toggle ClipKIT trimming (alternative to BMGE)
-USE_CLIPKIT=false
-# FoldTree structural alignment method (options: tmalign, rmsd)
-FOLDTREE_METHOD="tmalign"
+HMM_EVALUE="1e-5"                              # E-value threshold for HMMsearch
+HHBLITS_EVALUE="1e-5"                          # E-value threshold for HHblits
+IQTREE_MODEL="MFP"                             # Model for IQ-TREE (ModelFinder Plus)
+IQTREE_BOOTSTRAP=1000                          # Number of bootstrap replicates for IQ-TREE
+ORTHOFINDER_INFLATION=1.2                      # Inflation parameter for OrthoFinder
+TPM_THRESHOLD=10                               # Minimum TPM for expression filtering
+TPM_WEIGHT_RHINOPHORE=2                        # Weight for rhinophore TPM in ranking
+TPM_WEIGHT_ORAL=1                              # Weight for oral TPM in ranking
+MIN_TM_REGIONS=6                               # Minimum transmembrane regions for GPCR filtering
+MIN_SEQ_LENGTH=100                             # Minimum sequence length for alignments
+MAX_GAP_PERCENT=50                             # Maximum gap percentage in alignments
+FOLDTREE_METHOD="tmalign"                      # Method for FoldTree structural phylogeny
 
 # --- Output Files ---
-# Mapping file for reference sequence IDs
-ID_MAP="${RESULTS_DIR}/reference_sequences/id_map.csv"
-# Species tree file from BUSCO/ASTRAL
-SPECIES_TREE="${RESULTS_DIR}/busco/busco_species_tree.tre"
+ID_MAP="${RESULTS_DIR}/reference_sequences/id_map.csv"  # Mapping of short IDs to original IDs
+SPECIES_TREE="${RESULTS_DIR}/busco/busco_species_tree.tre"  # Species tree from BUSCO/ASTRAL
 
 # --- SLURM Settings ---
-# Partition for SLURM jobs
-SLURM_PARTITION="compute"
-# Number of nodes per job
-SLURM_NODES=1
-# Number of tasks per job
-SLURM_NTASKS=1
-# Email for SLURM notifications
-SLURM_EMAIL="jperezmoreno@umass.edu"
+SLURM_PARTITION="compute"                      # SLURM partition name
+SLURM_NODES=1                                  # Number of SLURM nodes
+SLURM_NTASKS=1                                 # Number of SLURM tasks
+SLURM_EMAIL="jperezmoreno@umass.edu"           # Email for SLURM notifications
