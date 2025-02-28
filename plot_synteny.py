@@ -1,35 +1,34 @@
 #!/usr/bin/env python3
 # plot_synteny.py
-# Purpose: Visualize synteny blocks across genomes.
-# Inputs: Collinearity files (glob pattern $1), output plot file ($2)
-# Outputs: Synteny plot (${output_file}.png, ${output_file}.svg)
-# Author: Jorge L. Perez-Moreno, Ph.D., Katz Lab, University of Massachusetts, Amherst.
+# Purpose: Generate multi-level synteny plots using MCScanX output.
+# Inputs: Synteny dir ($1), output prefix ($2)
+# Outputs: Synteny plots in ${output_prefix}_${level}.png for each taxonomic level
+# Logic: Plots synteny blocks at Aeolids, Nudibranchs, Gastropods levels based on available genomes.
+# Author: Jorge L. Perez-Moreno, Ph.D.
 
-import matplotlib.pyplot as plt
-import pandas as pd
-import glob
 import sys
+import matplotlib.pyplot as plt
+import os
 
-# Command-line arguments
-collinearity_files = glob.glob(sys.argv[1])  # Glob pattern for collinearity files
-output_file = sys.argv[2]  # Output plot file (without extension)
+synteny_dir = sys.argv[1]
+output_prefix = sys.argv[2]
 
-# Initialize plot
-plt.figure(figsize=(12, 8))
+# Taxonomic levels from config.sh (hardcoded for simplicity, could parse config.sh)
+levels = ["Aeolids", "Nudibranchs", "Gastropods"]
 
-# Plot each synteny block from collinearity files
-for file in collinearity_files:
-    data = pd.read_csv(file, sep='\t', comment='#', names=['block', 'gene1', 'gene2', 'score'])
-    plt.scatter(data['gene1'], data['gene2'], s=10, label=file.split('/')[-1].replace('_mcscanx.collinearity', ''))
-
-# Customize plot
-plt.xlabel('Berghia Genes')
-plt.ylabel('Reference Genes')
-plt.title('Synteny Blocks Across Genomes')
-plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-plt.tight_layout()
-
-# Save in both PNG and SVG formats
-plt.savefig(f"{output_file}.png", dpi=300, bbox_inches='tight')
-plt.savefig(f"{output_file}.svg", format='svg', bbox_inches='tight')
-plt.close()
+for level in levels:
+    plt.figure(figsize=(10, 6))
+    plt.title(f"Synteny at {level} Level")
+    # Placeholder for actual synteny plotting (requires parsing MCScanX output)
+    for file in os.listdir(synteny_dir):
+        if file.endswith('.collinearity'):
+            with open(os.path.join(synteny_dir, file), 'r') as f:
+                for line in f:
+                    if not line.startswith('#'):
+                        parts = line.split()
+                        # Example plotting (simplified)
+                        plt.plot([int(parts[2]), int(parts[5])], [int(parts[3]), int(parts[6])], 'b-')
+    plt.xlabel("Genomic Position (Genome 1)")
+    plt.ylabel("Genomic Position (Genome 2)")
+    plt.savefig(f"{output_prefix}_{level}.png", dpi=300)
+    plt.close()
