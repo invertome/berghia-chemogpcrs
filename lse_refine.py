@@ -6,6 +6,7 @@
 # Author: Jorge L. Perez-Moreno, Ph.D., Katz Lab, University of Massachusetts, Amherst.
 
 import sys
+import os
 from ete3 import NCBITaxa, Tree
 import pandas as pd
 
@@ -24,8 +25,37 @@ gene_tree = Tree(gene_tree_file)
 synteny_ids = pd.read_csv(synteny_file, names=['id'])['id'].tolist() if os.path.exists(synteny_file) else []
 
 # Extract TaxIDs from orthogroup FASTA
-taxids = [line.split()[0][1:].split('_')[0] for line in open(og_file) if line.startswith('>')]
-lineages = [set(ncbi.get_lineage(int(taxid))) for taxid in taxids]
+taxid_strings = [line.split()[0][1:].split('_')[0] for line in open(og_file) if line.startswith('>')]
+
+# Convert to integers, handling non-numeric taxids gracefully
+taxids = []
+for t in taxid_strings:
+    try:
+        taxids.append(int(t))
+    except ValueError:
+        # If taxid is not numeric (e.g., 'berghia'), try to look it up or skip
+        print(f"Warning: Non-numeric taxid '{t}', skipping lineage lookup", file=sys.stderr)
+        continue
+
+if not taxids:
+    print(f"Warning: No valid taxids found in {og_file}", file=sys.stderr)
+    sys.exit(0)
+
+# Get lineages for valid taxids
+lineages = []
+for taxid in taxids:
+    try:
+        lineage = ncbi.get_lineage(taxid)
+        if lineage:
+            lineages.append(set(lineage))
+    except Exception as e:
+        print(f"Warning: Could not get lineage for taxid {taxid}: {e}", file=sys.stderr)
+        continue
+
+if not lineages:
+    print(f"Warning: No valid lineages found for {og_file}", file=sys.stderr)
+    sys.exit(0)
+
 common_lineage = set.intersection(*lineages)
 
 # Determine taxonomic level for LSE classification

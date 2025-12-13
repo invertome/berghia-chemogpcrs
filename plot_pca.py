@@ -19,12 +19,16 @@ scores = pd.read_csv(tmalign_scores_file, names=['file', 'tm_score'], sep=',')
 scores['id1'] = scores['file'].apply(lambda x: x.split('tmalign_')[1].split('_')[0])
 scores['id2'] = scores['file'].apply(lambda x: '_'.join(x.split('tmalign_')[1].split('_')[1:]).replace('.txt', ''))
 
-# Create similarity matrix
+# Create similarity matrix and convert to distance matrix
 pivot = scores.pivot(index='id1', columns='id2', values='tm_score').fillna(0)
 
-# Perform PCA
+# Convert similarity to distance (1 - TM_score) for proper PCA
+# TM-score ranges from 0 to 1, where 1 = identical structures
+distance_matrix = 1 - pivot
+
+# Perform PCA on distance matrix
 pca = PCA(n_components=2)
-pca_result = pca.fit_transform(pivot)
+pca_result = pca.fit_transform(distance_matrix)
 
 # Plot PCA
 plt.figure(figsize=(10, 6))

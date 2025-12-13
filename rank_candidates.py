@@ -78,14 +78,36 @@ def get_dnds_score(candidate_id, dnds_data):
     # Default: neutral assumption (no data available)
     return 1.0
 
+# Calculate raw scores for all candidates
 phylo_scores, dnds_scores, synteny_scores, expr_scores, lse_depths = [], [], [], [], []
+
+# Calculate LSE depth threshold using percentile approach
+all_depths = []
+for id in candidates['id']:
+    try:
+        nodes = t.search_nodes(name=id)
+        if nodes:
+            all_depths.append(nodes[0].get_distance(t))
+    except:
+        pass
+
+# Use 75th percentile of depths as threshold for "deep" LSE
+import numpy as np
+lse_threshold = np.percentile(all_depths, 75) if all_depths else 0.5
+
 for id in candidates['id']:
     phylo_score = 1 / (min_distance_to_refs(id) + 1e-5)
     dnds_score = get_dnds_score(id, dnds_data)
     synteny_score = 1 if id in synteny_ids else 0
     expr_score = expr_data[expr_data['id'] == id]['weight'].sum() if id in expr_data['id'].values else 0
-    lse_depth = t.search_nodes(name=id)[0].get_distance(t) if id in t else 0
-    lse_depth_score = lse_depth if lse_depth > 0.5 else 0
+
+    # Use percentile-based threshold for LSE depth
+    try:
+        nodes = t.search_nodes(name=id)
+        lse_depth = nodes[0].get_distance(t) if nodes else 0
+    except:
+        lse_depth = 0
+    lse_depth_score = lse_depth if lse_depth > lse_threshold else 0
 
     phylo_scores.append(phylo_score)
     dnds_scores.append(dnds_score)
@@ -98,8 +120,11 @@ df = pd.DataFrame({
     'synteny_score': synteny_scores, 'expression_score': expr_scores, 'lse_depth_score': lse_depths
 })
 
+# Normalize continuous scores to [0,1] range
+# Note: synteny_score is already binary (0 or 1), so it's inherently normalized
 for col in ['phylo_score', 'dnds_score', 'expression_score', 'lse_depth_score']:
-    df[col] = (df[col] - df[col].min()) / (df[col].max() - df[col].min()) if df[col].max() > df[col].min() else 0
+    col_range = df[col].max() - df[col].min()
+    df[col] = (df[col] - df[col].min()) / col_range if col_range > 0 else 0
 
 phylo_weight, dnds_weight, synteny_weight, expr_weight, lse_depth_weight = map(float, [
     os.getenv('PHYLO_WEIGHT', 2), os.getenv('DNDS_WEIGHT', 1), os.getenv('SYNTENY_WEIGHT', 3),

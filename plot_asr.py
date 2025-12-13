@@ -7,7 +7,7 @@
 # Author: Jorge L. Perez-Moreno, Ph.D.
 
 import sys
-from ete3 import Tree, NodeStyle, TextFace
+from ete3 import Tree, TreeStyle, NodeStyle, TextFace
 
 tree_file = sys.argv[1]
 asr_fasta = sys.argv[2]

@@ -14,11 +14,33 @@ alt_file = sys.argv[3]   # PAML output for alternative model
 output_file = sys.argv[4]  # Output CSV file
 
 # Extract log-likelihoods from PAML output
+# PAML lnL line format varies but typically contains: lnL(ntime: X np: Y): Z = <value>
+# Or: lnL = <value> or lnL: <value>
+import re
+
+def extract_lnL(filepath):
+    """Extract log-likelihood value from PAML output file."""
+    with open(filepath) as f:
+        for line in f:
+            if 'lnL' in line:
+                # Try multiple patterns for PAML output format variations
+                # Pattern 1: lnL(ntime: X np: Y): Z = -12345.67
+                match = re.search(r'lnL\([^)]+\):\s*\S+\s*=\s*([-\d.]+)', line)
+                if match:
+                    return float(match.group(1))
+                # Pattern 2: lnL = -12345.67
+                match = re.search(r'lnL\s*=\s*([-\d.]+)', line)
+                if match:
+                    return float(match.group(1))
+                # Pattern 3: Just find any floating point number after lnL
+                match = re.search(r'lnL.*?([-]\d+\.\d+)', line)
+                if match:
+                    return float(match.group(1))
+    raise ValueError(f"No lnL value found in {filepath}")
+
 try:
-    with open(null_file) as f:
-        lnL_null = float(next(line for line in f if 'lnL' in line).split()[4])
-    with open(alt_file) as f:
-        lnL_alt = float(next(line for line in f if 'lnL' in line).split()[4])
+    lnL_null = extract_lnL(null_file)
+    lnL_alt = extract_lnL(alt_file)
 except Exception as e:
     print(f"Error processing {base}: {e}", file=sys.stderr)
     lnL_null, lnL_alt = 0, 0

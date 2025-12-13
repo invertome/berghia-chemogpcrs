@@ -34,7 +34,27 @@ run_command "hhdb_creation" ${HHMAKE} -i "${RESULTS_DIR}/reference_sequences/all
 
 # --- HHblits search ---
 run_command "hhblits_berghia" ${HHBLITS} -i "${RESULTS_DIR}/chemogpcrs/complete_berghia.fa" -d "${RESULTS_DIR}/hhdb/references.hhm" -o "${RESULTS_DIR}/chemogpcrs/hhblits_berghia.hhr" -e "${HHBLITS_EVALUE}" -cpu "${CPUS}"
-awk -v evalue="${HHBLITS_EVALUE}" '$5 < evalue {print $1}' "${RESULTS_DIR}/chemogpcrs/hhblits_berghia.hhr" | sort -u > "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_hhblits_berghia.txt" || { log "Error: Failed to extract HHblits hits"; exit 1; }
+# Parse HHR format: Extract query IDs from hits with E-value below threshold
+# HHR format varies but hit lines start with sequence index and contain E-value
+python3 -c "
+import sys, re
+evalue_thresh = float('${HHBLITS_EVALUE}')
+current_query = None
+with open('${RESULTS_DIR}/chemogpcrs/hhblits_berghia.hhr') as f:
+    for line in f:
+        if line.startswith('Query'):
+            current_query = line.split()[1]
+        # Match hit lines: ' No Hit Prob E-value P-value Score...'
+        elif re.match(r'^\s*\d+\s+\S+', line) and current_query:
+            parts = line.split()
+            if len(parts) >= 5:
+                try:
+                    evalue = float(parts[4])
+                    if evalue < evalue_thresh:
+                        print(current_query)
+                except (ValueError, IndexError):
+                    pass
+" | sort -u > "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_hhblits_berghia.txt" || { log "Error: Failed to extract HHblits hits"; exit 1; }
 
 # --- HMMSEARCH if custom HMMs provided ---
 if [ -f "${RESULTS_DIR}/hmms/conserved.hmm" ]; then
@@ -65,7 +85,25 @@ for trans in "${TRANSCRIPTOME_DIR}"/*.aa; do
     run_command "seqtk_complete_${taxid_sample}" ${SEQTK} subseq "$trans" "${RESULTS_DIR}/chemogpcrs/complete_ids_${taxid_sample}.txt" > "${RESULTS_DIR}/chemogpcrs/complete_${taxid_sample}.fa"
     
     run_command "hhblits_${taxid_sample}" ${HHBLITS} -i "${RESULTS_DIR}/chemogpcrs/complete_${taxid_sample}.fa" -d "${RESULTS_DIR}/hhdb/references.hhm" -o "${RESULTS_DIR}/chemogpcrs/hhblits_${taxid_sample}.hhr" -e "${HHBLITS_EVALUE}" -cpu "${CPUS}"
-    awk -v evalue="${HHBLITS_EVALUE}" '$5 < evalue {print $1}' "${RESULTS_DIR}/chemogpcrs/hhblits_${taxid_sample}.hhr" | sort -u > "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_hhblits_${taxid_sample}.txt"
+    # Parse HHR format properly
+    python3 -c "
+import sys, re
+evalue_thresh = float('${HHBLITS_EVALUE}')
+current_query = None
+with open('${RESULTS_DIR}/chemogpcrs/hhblits_${taxid_sample}.hhr') as f:
+    for line in f:
+        if line.startswith('Query'):
+            current_query = line.split()[1]
+        elif re.match(r'^\s*\d+\s+\S+', line) and current_query:
+            parts = line.split()
+            if len(parts) >= 5:
+                try:
+                    evalue = float(parts[4])
+                    if evalue < evalue_thresh:
+                        print(current_query)
+                except (ValueError, IndexError):
+                    pass
+" | sort -u > "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_hhblits_${taxid_sample}.txt"
     
     if [ -f "${RESULTS_DIR}/hmms/conserved.hmm" ]; then
         run_command "hmmsearch_conserved_${taxid_sample}" ${HMMSEARCH} --domtblout "${RESULTS_DIR}/chemogpcrs/hmmsearch_conserved_${taxid_sample}.domtbl" -E "${HMM_EVALUE}" "${RESULTS_DIR}/hmms/conserved.hmm" "${RESULTS_DIR}/chemogpcrs/complete_${taxid_sample}.fa"
@@ -81,6 +119,8 @@ for trans in "${TRANSCRIPTOME_DIR}"/*.aa; do
         "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_hmmsearch_conserved_${taxid_sample}.txt" \
         "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_hmmsearch_lse_${taxid_sample}.txt" 2>/dev/null | sort -u > "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_${taxid_sample}.txt"
     run_command "extract_${taxid_sample}" ${SEQTK} subseq "${RESULTS_DIR}/chemogpcrs/complete_${taxid_sample}.fa" "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_${taxid_sample}.txt" > "${RESULTS_DIR}/chemogpcrs/chemogpcrs_${taxid_sample}.fa"
+    touch "${RESULTS_DIR}/step_completed_extract_${taxid_sample}.txt"
 done
 
+touch "${RESULTS_DIR}/step_completed_extract_berghia.txt"
 log "Chemoreceptive GPCR identification completed."

@@ -26,18 +26,76 @@ check_file "${RESULTS_DIR}/step_completed_lse_classification.txt"
 log "Starting phylogenetic analysis."
 
 # --- Alignment Quality Check Function ---
+# Validates alignment has sufficient sequence length and not too many gaps
 check_alignment() {
     local file="$1"
-    local min_len="${MIN_SEQ_LENGTH}"
-    local max_gap="${MAX_GAP_PERCENT}"
+    local min_len="${MIN_SEQ_LENGTH:-100}"
+    local max_gap="${MAX_GAP_PERCENT:-50}"
+
     awk -v min_len="$min_len" -v max_gap="$max_gap" '
-    BEGIN { seq_len = 0; gaps = 0; seq_count = 0 }
-    /^>/ { if (seq_len > 0) {
-        if (seq_len < min_len || (gaps/seq_len)*100 > max_gap) exit 1
-        seq_count++
-    } seq_len = 0; gaps = 0 }
-    !/^>/ { seq_len += length($0); gaps += gsub("-", "-", $0) }
-    END { if (seq_count == 0 || seq_len < min_len || (gaps/seq_len)*100 > max_gap) exit 1 }
+    BEGIN {
+        seq_len = 0
+        gaps = 0
+        seq_count = 0
+        total_len = 0
+        total_gaps = 0
+        failed = 0
+    }
+    /^>/ {
+        # Process previous sequence if exists
+        if (seq_len > 0) {
+            seq_count++
+            total_len += seq_len
+            total_gaps += gaps
+            gap_pct = (gaps / seq_len) * 100
+            if (seq_len < min_len) {
+                failed = 1
+            }
+        }
+        # Reset for new sequence
+        seq_len = 0
+        gaps = 0
+        next
+    }
+    !/^>/ {
+        # Accumulate sequence stats (handles multi-line FASTA)
+        line = $0
+        seq_len += length(line)
+        # Count gap characters
+        n = gsub(/-/, "-", line)
+        gaps += n
+    }
+    END {
+        # Process last sequence
+        if (seq_len > 0) {
+            seq_count++
+            total_len += seq_len
+            total_gaps += gaps
+            if (seq_len < min_len) {
+                failed = 1
+            }
+        }
+
+        # Check overall alignment quality
+        if (seq_count == 0) {
+            print "ERROR: No sequences found" > "/dev/stderr"
+            exit 1
+        }
+
+        avg_gap_pct = (total_gaps / total_len) * 100
+        if (avg_gap_pct > max_gap) {
+            print "ERROR: Average gap percentage " avg_gap_pct "% exceeds " max_gap "%" > "/dev/stderr"
+            exit 1
+        }
+
+        if (failed) {
+            print "ERROR: Some sequences shorter than " min_len " residues" > "/dev/stderr"
+            exit 1
+        }
+
+        # Success
+        exit 0
+    }
     ' "$file"
 }
 
@@ -90,11 +148,28 @@ for level in "${!lse_taxids[@]}"; do
 done
 
 # --- Orthogroup Trees ---
-ORTHOGROUPS=("${RESULTS_DIR}/orthogroups/OrthoFinder/Results*/Orthogroups/OG"*.fa)
-[ ${#ORTHOGROUPS[@]} -eq 0 ] && { log "Error: No orthogroups found"; exit 1; }
+ORTHOGROUPS=("${RESULTS_DIR}/orthogroups/OrthoFinder/Results"*/Orthogroups/OG*.fa)
 
-og="${ORTHOGROUPS[$SLURM_ARRAY_TASK_ID]}"
-[ -z "$og" ] || [ ! -f "$og" ] && { log "Skipping missing orthogroup at index ${SLURM_ARRAY_TASK_ID}"; exit 0; }
+# Handle case where no orthogroups exist
+if [ ${#ORTHOGROUPS[@]} -eq 0 ] || [ ! -f "${ORTHOGROUPS[0]}" ]; then
+    log "Warning: No orthogroups found for phylogenetic analysis"
+    exit 0
+fi
+
+# Handle SLURM array indexing - skip if index exceeds available orthogroups
+if [ -n "$SLURM_ARRAY_TASK_ID" ]; then
+    if [ "$SLURM_ARRAY_TASK_ID" -ge ${#ORTHOGROUPS[@]} ]; then
+        log "Skipping: Array index ${SLURM_ARRAY_TASK_ID} exceeds available orthogroups (${#ORTHOGROUPS[@]})"
+        exit 0
+    fi
+    og="${ORTHOGROUPS[$SLURM_ARRAY_TASK_ID]}"
+else
+    # Non-array mode: process all orthogroups sequentially (for testing)
+    log "Running in non-array mode, processing first orthogroup only"
+    og="${ORTHOGROUPS[0]}"
+fi
+
+[ -z "$og" ] || [ ! -f "$og" ] && { log "Skipping missing orthogroup"; exit 0; }
 
 base=$(basename "$og" .fa)
 if [ ! -f "${RESULTS_DIR}/step_completed_${base}_iqtree.txt" ]; then

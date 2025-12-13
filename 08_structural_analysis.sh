@@ -44,7 +44,7 @@ mv "${RESULTS_DIR}/structural_analysis/top_ids_unique.txt" "${RESULTS_DIR}/struc
 run_command "seqtk_top" ${SEQTK} subseq "${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa" "${RESULTS_DIR}/structural_analysis/top_ids.txt" > "${RESULTS_DIR}/structural_analysis/top_seqs.fa"
 
 # --- Predict structures with AlphaFold ---
-run_command "alphafold" ${ALPHAFOLD} --fasta_paths="${RESULTS_DIR}/structural_analysis/top_seqs.fa" --output_dir="${RESULTS_DIR}/structural_analysis/alphafold" --max_template_date=2023-01-01 --use_gpu=${GPU_ENABLE} --model_preset=monomer
+run_command "alphafold" ${ALPHAFOLD} --fasta_paths="${RESULTS_DIR}/structural_analysis/top_seqs.fa" --output_dir="${RESULTS_DIR}/structural_analysis/alphafold" --max_template_date=2023-01-01 --use_gpu=${GPU_ENABLED} --model_preset=monomer
 
 # --- Fetch reference structures and metadata ---
 run_command "fetch_references" python3 "${SCRIPTS_DIR}/fetch_ligands.py" \
@@ -63,4 +63,5 @@ run_command "foldtree" ${FOLDTREE} --input_dir "${RESULTS_DIR}/structural_analys
 # --- Compare structural and sequence trees ---
 python3 "${SCRIPTS_DIR}/plot_struct_vs_seq.py" "${RESULTS_DIR}/structural_analysis/foldtree.tre" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.treefile" "${RESULTS_DIR}/structural_analysis/struct_vs_seq_plot"
 
+touch "${RESULTS_DIR}/step_completed_foldtree.txt"
 log "Structural analysis completed."

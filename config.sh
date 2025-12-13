@@ -79,6 +79,8 @@ export LSE_DEPTH_WEIGHT=1
 # --- GPCRdb Fetch Parameters ---
 export GPCRDB_SEARCH_TERMS="chemoreceptor,invertebrate"
 export GPCRDB_SPECIES="Aplysia,Lottia"
+# GPCR families: "all" for all families, or comma-separated: "Class_A,Class_B1,Class_C,Adhesion,Frizzled"
+export GPCRDB_FAMILIES="all"
 
 # --- Taxonomic Levels for LSE ---
 export LSE_LEVELS=("Aeolids:taxid_aeolid1,taxid_aeolid2" "Nudibranchs:taxid_nudi1,taxid_nudi2" "Gastropods:taxid_gastro1,taxid_gastro2")

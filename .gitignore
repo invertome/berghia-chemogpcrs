@@ -1,3 +1,5 @@
 
-# Ignore the generated review file
+# Ignore the generated review files
 Deep_Codebase_Review.md
+ARCHITECTURAL_REVIEW.md
+CLAUDE.md

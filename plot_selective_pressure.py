@@ -6,6 +6,7 @@
 # Author: Jorge L. Perez-Moreno, Ph.D., Katz Lab, University of Massachusetts, Amherst.
 
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 import sys
@@ -26,7 +27,7 @@ if df.empty:
 
 # Plot LRT results
 plt.figure(figsize=(10, 6))
-sns.scatterplot(data=df, x='chi2_stat', y=-df['p_value'].apply(lambda x: pd.np.log10(x) if x > 0 else 0), hue='base', legend=False)
+sns.scatterplot(data=df, x='chi2_stat', y=-df['p_value'].apply(lambda x: np.log10(x) if x > 0 else 0), hue='base', legend=False)
 plt.xlabel('Chi-squared Statistic')
 plt.ylabel('-log10(p-value)')
 plt.title('Selective Pressure Analysis (LRT)')
