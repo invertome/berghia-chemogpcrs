@@ -47,7 +47,13 @@ if [ ! -f "${RESULTS_DIR}/step_completed_all_berghia_refs_iqtree.txt" ]; then
     run_command "all_berghia_refs_mafft" ${MAFFT} --auto --thread "${CPUS}" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.fa" > "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa"
     check_alignment "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" || { log "Error: Alignment quality check failed"; exit 1; }
     run_command "all_berghia_refs_clipkit" ${CLIPKIT} smart-gap -i "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" -o "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa"
-    run_command "all_berghia_refs_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa" -m "${IQTREE_MODEL}" -B "${IQTREE_BOOTSTRAP}" -nt "${CPUS}" -pre "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs"
+
+    # FastTree seed strategy: Generate approximate ML tree first to avoid local optima
+    # This is important for large, divergent gene families like GPCRs
+    run_command "all_berghia_refs_fasttree" ${FASTTREE} -lg -gamma "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa" > "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_fasttree.tre"
+
+    # Use FastTree result as starting tree for IQ-TREE (-t option)
+    run_command "all_berghia_refs_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa" -m "${IQTREE_MODEL}" -B "${IQTREE_BOOTSTRAP}" -nt "${CPUS}" -t "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_fasttree.tre" -pre "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs"
     run_command "phyloformer_all_berghia" python3 "${SCRIPTS_DIR}/test_phyloformer_models.py" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_phyloformer" "${CPUS}"
     if [ "$USE_MRBAYES" = true ]; then
         cat <<EOF > "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.nex"
@@ -74,7 +80,11 @@ for level in "${!lse_taxids[@]}"; do
         run_command "lse_${level}_mafft" ${MAFFT} --auto --thread "${CPUS}" "${RESULTS_DIR}/lse_classification/lse_${level}.fa" > "${RESULTS_DIR}/phylogenies/protein/lse_${level}/aligned.fa"
         check_alignment "${RESULTS_DIR}/phylogenies/protein/lse_${level}/aligned.fa" || { log "Error: Alignment quality check failed for lse_${level}"; exit 1; }
         run_command "lse_${level}_trimal" ${TRIMAL} -in "${RESULTS_DIR}/phylogenies/protein/lse_${level}/aligned.fa" -out "${RESULTS_DIR}/phylogenies/protein/lse_${level}/trimmed.fa" -automated1
-        run_command "lse_${level}_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/lse_${level}/trimmed.fa" -m "${IQTREE_MODEL}" -B "${IQTREE_BOOTSTRAP}" -nt "${CPUS}" -pre "${RESULTS_DIR}/phylogenies/protein/lse_${level}"
+
+        # FastTree seed strategy for LSE trees
+        run_command "lse_${level}_fasttree" ${FASTTREE} -lg -gamma "${RESULTS_DIR}/phylogenies/protein/lse_${level}/trimmed.fa" > "${RESULTS_DIR}/phylogenies/protein/lse_${level}/fasttree.tre"
+        run_command "lse_${level}_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/lse_${level}/trimmed.fa" -m "${IQTREE_MODEL}" -B "${IQTREE_BOOTSTRAP}" -nt "${CPUS}" -t "${RESULTS_DIR}/phylogenies/protein/lse_${level}/fasttree.tre" -pre "${RESULTS_DIR}/phylogenies/protein/lse_${level}"
+
         python3 "${SCRIPTS_DIR}/visualize_tree.py" "${RESULTS_DIR}/phylogenies/protein/lse_${level}.treefile" "${RESULTS_DIR}/phylogenies/visualizations/lse_${level}"
     fi
 done
@@ -91,7 +101,10 @@ if [ ! -f "${RESULTS_DIR}/step_completed_${base}_iqtree.txt" ]; then
     run_command "${base}_mafft" ${MAFFT} --auto --thread "${CPUS}" "$og" > "${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa"
     check_alignment "${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" || { log "Error: Alignment quality check failed for ${base}"; exit 1; }
     run_command "${base}_trimal" ${TRIMAL} -in "${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" -out "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa" -automated1
-    run_command "${base}_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa" -m "${IQTREE_MODEL}" -B "${IQTREE_BOOTSTRAP}" -nt "${CPUS}" -pre "${RESULTS_DIR}/phylogenies/protein/${base}"
+
+    # FastTree seed strategy for orthogroup trees
+    run_command "${base}_fasttree" ${FASTTREE} -lg -gamma "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa" > "${RESULTS_DIR}/phylogenies/protein/${base}_fasttree.tre"
+    run_command "${base}_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa" -m "${IQTREE_MODEL}" -B "${IQTREE_BOOTSTRAP}" -nt "${CPUS}" -t "${RESULTS_DIR}/phylogenies/protein/${base}_fasttree.tre" -pre "${RESULTS_DIR}/phylogenies/protein/${base}"
 fi
 
 python3 "${SCRIPTS_DIR}/visualize_tree.py" "${RESULTS_DIR}/phylogenies/protein/${base}.treefile" "${RESULTS_DIR}/phylogenies/visualizations/${base}"

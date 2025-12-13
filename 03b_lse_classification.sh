@@ -28,28 +28,40 @@ log "Starting LSE classification."
 declare -A lse_taxids
 for level in "${LSE_LEVELS[@]}"; do
     level_name=$(echo "$level" | cut -d':' -f1)
-    taxids=$(echo "$level" | cut -d':' -f2 | tr ',' ' ')
+    # Normalize separators: replace commas with spaces, collapse multiple spaces
+    taxids=$(echo "$level" | cut -d':' -f2 | tr ',' ' ' | tr -s ' ')
     lse_taxids["$level_name"]="$taxids"
 done
 
 # --- Process each orthogroup ---
-for og in "${RESULTS_DIR}/orthogroups/OrthoFinder/Results*/Orthogroups/OG"*.fa; do
+for og in "${RESULTS_DIR}/orthogroups/OrthoFinder/Results"*/Orthogroups/OG*.fa; do
+    # Skip if glob doesn't match any files
+    [ -e "$og" ] || continue
+
     base=$(basename "$og" .fa)
-    # Extract taxids from headers (before first '_')
-    taxids=$(grep "^>" "$og" | sed 's/>//' | cut -d'_' -f1 | sort -u | tr '\n' ' ' | sed 's/ $//')
-    
+    # Extract taxids from headers (before first '_'), normalize whitespace
+    taxids=$(grep "^>" "$og" | sed 's/>//' | cut -d'_' -f1 | sort -u | tr '\n' ' ' | tr -s ' ' | sed 's/^ //;s/ $//')
+
     # Check against each LSE level
     for level in "${!lse_taxids[@]}"; do
         level_taxids="${lse_taxids[$level]}"
-        level_taxid_array=($level_taxids)
-        taxid_array=($taxids)
+
+        # Use read with IFS to safely split into arrays
+        IFS=' ' read -r -a level_taxid_array <<< "$level_taxids"
+        IFS=' ' read -r -a taxid_array <<< "$taxids"
+
         match=true
         for t in "${taxid_array[@]}"; do
+            # Skip empty elements
+            [ -z "$t" ] && continue
+            # Check if taxid is in the level's taxid list
             if [[ ! " ${level_taxids} " =~ " ${t} " ]]; then
                 match=false
                 break
             fi
         done
+
+        # Verify exact match (same number of taxids)
         if [ "$match" = true ] && [ ${#taxid_array[@]} -eq ${#level_taxid_array[@]} ]; then
             echo "$base" >> "${RESULTS_DIR}/lse_classification/lse_${level}.txt"
             break

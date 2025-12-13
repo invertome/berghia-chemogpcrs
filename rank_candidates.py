@@ -24,22 +24,69 @@ synteny_ids = pd.read_csv(synteny_file, names=['id'])['id'].tolist() if os.path.
 t = Tree(f"{phylo_dir}/all_berghia_refs.treefile")
 ref_ids = [leaf.name for leaf in t if leaf.name.startswith('ref_')]
 
+# Load aBSREL dN/dS results
+dnds_data = {}
+absrel_files = ['absrel_results.csv', 'absrel_results_lse.csv']
+for absrel_file in absrel_files:
+    absrel_path = os.path.join(selective_dir, absrel_file)
+    if os.path.exists(absrel_path):
+        try:
+            absrel_df = pd.read_csv(absrel_path)
+            # Expected columns: branch_id, omega, p_value, corrected_p_value
+            for _, row in absrel_df.iterrows():
+                branch_id = row.get('branch_id', row.get('id', ''))
+                omega = row.get('omega', row.get('dnds', row.get('dN/dS', None)))
+                if pd.notna(omega) and branch_id:
+                    # Store omega value; for branches under positive selection (p < 0.05),
+                    # omega > 1 indicates diversifying selection
+                    dnds_data[branch_id] = float(omega)
+        except Exception as e:
+            print(f"Warning: Could not parse {absrel_path}: {e}", file=sys.stderr)
+
 def min_distance_to_refs(node_name):
     if node_name in ref_ids:
         return 0
     distances = [t.get_distance(node_name, ref) for ref in ref_ids]
     return min(distances) if distances else float('inf')
 
+def get_dnds_score(candidate_id, dnds_data):
+    """
+    Calculate dN/dS score for ranking.
+
+    Biological interpretation:
+    - dN/dS < 1: purifying selection (conserved function)
+    - dN/dS = 1: neutral evolution
+    - dN/dS > 1: positive/diversifying selection (potential functional divergence)
+
+    For chemoreceptor discovery, we want candidates showing evidence of:
+    1. Strong purifying selection (conserved chemoreceptor function) OR
+    2. Positive selection (potential novel/specialized function)
+
+    Score: distance from neutrality (|omega - 1|) weighted by direction
+    """
+    if candidate_id in dnds_data:
+        omega = dnds_data[candidate_id]
+        # Score candidates far from neutral evolution higher
+        # Both strong purifying (omega << 1) and positive selection (omega > 1) are interesting
+        if omega > 1:
+            # Positive selection - potentially diversifying/novel function
+            return omega  # Higher omega = higher score
+        else:
+            # Purifying selection - conserved function
+            # Transform so strong purifying selection scores well: 1/(omega + 0.01)
+            return 1 / (omega + 0.01)
+    # Default: neutral assumption (no data available)
+    return 1.0
+
 phylo_scores, dnds_scores, synteny_scores, expr_scores, lse_depths = [], [], [], [], []
 for id in candidates['id']:
     phylo_score = 1 / (min_distance_to_refs(id) + 1e-5)
-    dnds = 1.0  # Placeholder; parse from selective_dir if available
-    dnds_score = 1 / (dnds + 1e-5)
+    dnds_score = get_dnds_score(id, dnds_data)
     synteny_score = 1 if id in synteny_ids else 0
     expr_score = expr_data[expr_data['id'] == id]['weight'].sum() if id in expr_data['id'].values else 0
     lse_depth = t.search_nodes(name=id)[0].get_distance(t) if id in t else 0
     lse_depth_score = lse_depth if lse_depth > 0.5 else 0
-    
+
     phylo_scores.append(phylo_score)
     dnds_scores.append(dnds_score)
     synteny_scores.append(synteny_score)
