@@ -85,5 +85,11 @@ export GPCRDB_FAMILIES="all"
 # --- Taxonomic Levels for LSE ---
 export LSE_LEVELS=("Aeolids:taxid_aeolid1,taxid_aeolid2" "Nudibranchs:taxid_nudi1,taxid_nudi2" "Gastropods:taxid_gastro1,taxid_gastro2")
 
+# --- NCBI Taxonomy IDs for LSE Classification ---
+# These are used by lse_refine.py to determine taxonomic levels
+export LSE_AEOLID_TAXID=54397      # Aeolidida (aeolid nudibranchs)
+export LSE_NUDIBRANCH_TAXID=13843  # Nudibranchia (all nudibranchs)
+export LSE_GASTROPOD_TAXID=644     # Gastropoda (all gastropods)
+
 # --- Species Tree ---
 export SPECIES_TREE="${RESULTS_DIR}/busco/busco_species_tree.tre"

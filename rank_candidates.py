@@ -21,7 +21,7 @@ candidates = pd.read_csv(candidates_file, names=['id'])
 expr_data = pd.read_csv(expression_file, names=['id', 'weight']) if os.path.exists(expression_file) else pd.DataFrame(columns=['id', 'weight'])
 synteny_ids = pd.read_csv(synteny_file, names=['id'])['id'].tolist() if os.path.exists(synteny_file) else []
 
-t = Tree(f"{phylo_dir}/all_berghia_refs.treefile")
+t = Tree(f"{phylo_dir}/all_berghia_refs.treefile", format=1)  # format=1 for IQ-TREE output with support values
 ref_ids = [leaf.name for leaf in t if leaf.name.startswith('ref_')]
 
 # Load aBSREL dN/dS results
@@ -51,7 +51,7 @@ def min_distance_to_refs(node_name):
 
 def get_dnds_score(candidate_id, dnds_data):
     """
-    Calculate dN/dS score for ranking.
+    Calculate dN/dS score for ranking using log-transformation for symmetry.
 
     Biological interpretation:
     - dN/dS < 1: purifying selection (conserved function)
@@ -62,21 +62,21 @@ def get_dnds_score(candidate_id, dnds_data):
     1. Strong purifying selection (conserved chemoreceptor function) OR
     2. Positive selection (potential novel/specialized function)
 
-    Score: distance from neutrality (|omega - 1|) weighted by direction
+    Score: |log(omega)| - distance from neutrality on log scale
+    This provides symmetric treatment of purifying and positive selection:
+    - omega = 0.1 → score = |log(0.1)| = 2.3 (strong purifying)
+    - omega = 1.0 → score = |log(1.0)| = 0.0 (neutral)
+    - omega = 10  → score = |log(10)| = 2.3 (strong positive)
     """
     if candidate_id in dnds_data:
         omega = dnds_data[candidate_id]
-        # Score candidates far from neutral evolution higher
-        # Both strong purifying (omega << 1) and positive selection (omega > 1) are interesting
-        if omega > 1:
-            # Positive selection - potentially diversifying/novel function
-            return omega  # Higher omega = higher score
-        else:
-            # Purifying selection - conserved function
-            # Transform so strong purifying selection scores well: 1/(omega + 0.01)
-            return 1 / (omega + 0.01)
+        # Avoid log(0) by setting minimum omega
+        omega = max(omega, 0.001)
+        # Log-transform for symmetric treatment of selection pressures
+        # Higher absolute values indicate stronger selection (either direction)
+        return abs(np.log(omega))
     # Default: neutral assumption (no data available)
-    return 1.0
+    return 0.0  # Neutral = log(1) = 0
 
 # Calculate raw scores for all candidates
 phylo_scores, dnds_scores, synteny_scores, expr_scores, lse_depths = [], [], [], [], []

@@ -14,7 +14,7 @@ tree_file = sys.argv[1]
 taxid = sys.argv[2]
 min_distance = float(sys.argv[3])  # Used as fallback or minimum threshold
 
-t = Tree(tree_file)
+t = Tree(tree_file, format=1)  # format=1 for IQ-TREE output with support values
 
 # Calculate distances from root for all internal nodes
 node_distances = []

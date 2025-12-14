@@ -13,7 +13,7 @@ from collections import defaultdict
 tree_file = sys.argv[1]
 output_prefix = sys.argv[2]
 
-t = Tree(tree_file)
+t = Tree(tree_file, format=1)  # format=1 for IQ-TREE output with support values
 
 # Define color palette for different sequence types
 COLORS = {
@@ -112,4 +112,14 @@ for leaf in t:
 
 t.render(f"{output_prefix}_circular.png", w=1000, units='px', tree_style=ts_circular)
 
-print(f"Generated tree visualizations: {output_prefix}_basic.png, {output_prefix}_colored.png, {output_prefix}_circular.png")
+# --- Publication-quality vector outputs ---
+# PDF output for publications (scalable, editable)
+t.render(f"{output_prefix}_colored.pdf", w=200, units='mm', tree_style=ts_colored)
+
+# SVG output for further editing in vector graphics software
+t.render(f"{output_prefix}_colored.svg", tree_style=ts_colored)
+
+print(f"Generated tree visualizations:")
+print(f"  PNG: {output_prefix}_basic.png, {output_prefix}_colored.png, {output_prefix}_circular.png")
+print(f"  PDF: {output_prefix}_colored.pdf (publication quality)")
+print(f"  SVG: {output_prefix}_colored.svg (editable vector)")
