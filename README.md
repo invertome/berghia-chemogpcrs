@@ -94,11 +94,13 @@ Step 06: Synteny & Mapping
          ▼
 Step 07: Candidate Ranking
          │
-         ├── Phylogenetic proximity score
-         ├── dN/dS score (log-transformed)
-         ├── Synteny conservation score
+         ├── Weighted phylogenetic proximity (chemoreceptor refs prioritized)
+         ├── Separate purifying/positive selection scores
+         ├── Quantitative synteny scoring (anchor counts)
          ├── Expression score
-         └── LSE depth score
+         ├── LSE depth score
+         ├── Benjamini-Hochberg FDR correction
+         └── Evidence completeness tracking
          │
          ▼
 Step 08: Structural Analysis
@@ -278,6 +280,29 @@ for pkg in packages:
 "
 ```
 
+### API-Independent Mode (Recommended)
+
+The pipeline can run completely offline by pre-downloading required databases:
+
+```bash
+# Download NCBI Taxonomy and GPCRdb data locally
+python3 setup_databases.py --db-dir databases
+
+# Optional: also download PDB structure files
+python3 setup_databases.py --db-dir databases --download-structures --max-structures 200
+
+# Verify setup
+python3 setup_databases.py --db-dir databases --verify-only
+```
+
+This creates:
+- `databases/taxa.sqlite` - Local NCBI Taxonomy database
+- `databases/gpcrdb/receptors.json` - GPCRdb receptor data
+- `databases/gpcrdb/structures.json` - Structure metadata
+- `databases/gpcrdb/reference_categories.json` - Chemoreceptor vs other GPCR classification
+
+The pipeline automatically uses local databases when `LOCAL_DB_DIR` is set in `config.sh`.
+
 ---
 
 ## Directory Structure
@@ -394,11 +419,31 @@ export NUM_STRUCTURAL_CANDIDATES=10 # Candidates for AlphaFold
 
 ```bash
 # Adjust weights to prioritize different evidence types
-export PHYLO_WEIGHT=2        # Phylogenetic proximity to references
-export DNDS_WEIGHT=1         # Selective pressure (|log(omega)|)
-export SYNTENY_WEIGHT=3      # Synteny conservation
-export EXPR_WEIGHT=1         # Expression level
-export LSE_DEPTH_WEIGHT=1    # LSE clade depth
+export PHYLO_WEIGHT=2           # Phylogenetic proximity to references
+export PURIFYING_WEIGHT=1       # Weight for purifying selection (omega < 1)
+export POSITIVE_WEIGHT=1        # Weight for positive selection (omega > 1)
+export SYNTENY_WEIGHT=3         # Synteny conservation
+export EXPR_WEIGHT=1            # Expression level
+export LSE_DEPTH_WEIGHT=1       # LSE clade depth
+
+# Reference weighting (chemoreceptors prioritized over other GPCRs)
+export CHEMORECEPTOR_REF_WEIGHT=2.0   # Weight for known chemoreceptor references
+export OTHER_GPCR_REF_WEIGHT=1.0      # Weight for other GPCR references
+```
+
+### Statistical Thresholds
+
+```bash
+export ABSREL_FDR_THRESHOLD=0.05      # FDR threshold for significant selection
+export BOOTSTRAP_THRESHOLD=70         # Minimum bootstrap support for confident nodes
+export LSE_DEPTH_PERCENTILE=75        # Percentile for "deep" LSE classification
+```
+
+### Local Database Directory
+
+```bash
+# For API-independent mode (run setup_databases.py first)
+export LOCAL_DB_DIR="${BASE_DIR}/databases"
 ```
 
 ### NCBI Taxonomy IDs for LSE Classification
@@ -594,37 +639,55 @@ export GPCRDB_FAMILIES="all"  # Or: "Class_A,Class_B1,Class_C,Adhesion,Frizzled"
 
 ### Step 07: Candidate Ranking (`07_candidate_ranking.sh`)
 
-**Purpose:** Integrate all evidence to rank GPCR candidates.
+**Purpose:** Integrate all evidence to rank GPCR candidates using an improved multi-evidence algorithm.
 
 **Inputs:**
 - Candidate IDs from Step 02
 - Expression data
 - Phylogenetic trees from Step 04
 - dN/dS results from Step 05
-- Synteny IDs from Step 06
+- Synteny directory from Step 06
+- Reference categories (from local database)
 
 **Outputs:**
 - `${RESULTS_DIR}/ranking/ranked_candidates_sorted.csv`
 - Ranking visualization plots
 
-**Scoring components:**
+**Improved Scoring Algorithm:**
 
 | Score | Description | Calculation |
 |-------|-------------|-------------|
-| `phylo_score` | Phylogenetic proximity | `1 / (min_distance_to_refs + ε)` |
-| `dnds_score` | Selective pressure | `|log(omega)|` (symmetric for purifying/positive) |
-| `synteny_score` | Synteny conservation | Binary (0 or 1) |
+| `phylo_score` | Weighted phylogenetic proximity | `Σ(ref_weight / distance)` where chemoreceptor refs weighted 2× |
+| `purifying_score` | Purifying selection strength | `|log(omega)|` when omega < 1, boosted 1.5× if FDR-significant |
+| `positive_score` | Positive selection strength | `log(omega)` when omega > 1, boosted 1.5× if FDR-significant |
+| `synteny_score` | Quantitative synteny | `anchor_count / max_anchors` (0.0 to 1.0) |
 | `expression_score` | Expression level | From expression data file |
 | `lse_depth_score` | LSE clade depth | Tree depth if > 75th percentile |
+
+**Statistical Corrections:**
+- Benjamini-Hochberg FDR correction applied to all aBSREL p-values
+- Only branches with corrected p < 0.05 marked as significant
+
+**Evidence Completeness:**
+- Each candidate tracked for available evidence types
+- `evidence_completeness` score (0.0 to 1.0) indicates data availability
+- Confidence tiers assigned: High, Medium, Low
 
 **Final rank score:**
 ```
 rank_score = (phylo_score × PHYLO_WEIGHT) +
-             (dnds_score × DNDS_WEIGHT) +
+             (purifying_score × PURIFYING_WEIGHT) +
+             (positive_score × POSITIVE_WEIGHT) +
              (synteny_score × SYNTENY_WEIGHT) +
              (expression_score × EXPR_WEIGHT) +
              (lse_depth_score × LSE_DEPTH_WEIGHT)
 ```
+
+**Output columns:**
+- `id`, `rank_score`, `confidence_tier`, `evidence_completeness`
+- `phylo_score`, `purifying_score`, `positive_score`, `selection_significant`
+- `synteny_score`, `expression_score`, `has_expression_data`
+- `lse_depth_score`, `raw_tree_depth`
 
 ---
 
@@ -674,13 +737,14 @@ rank_score = (phylo_score × PHYLO_WEIGHT) +
 
 | Script | Purpose | Usage |
 |--------|---------|-------|
-| `rank_candidates.py` | Integrate evidence and rank candidates | `python3 rank_candidates.py <candidates> <expression> <phylo_dir> <selective_dir> <synteny> <output>` |
-| `lse_refine.py` | Classify LSEs with NCBI Taxonomy | `python3 lse_refine.py <fasta> <tree> <output_prefix>` |
+| `setup_databases.py` | Download local databases for API-independent mode | `python3 setup_databases.py --db-dir databases` |
+| `rank_candidates.py` | Integrate evidence and rank candidates (improved) | `python3 rank_candidates.py <candidates> <expression> <phylo_dir> <selective_dir> <synteny_dir> <output>` |
+| `lse_refine.py` | Classify LSEs with NCBI Taxonomy (local DB support) | `python3 lse_refine.py <fasta> <tree> <output_prefix>` |
 | `select_deep_nodes.py` | Select deep ancestral nodes for ASR | `python3 select_deep_nodes.py <tree> <taxid> <min_distance>` |
 | `update_headers.py` | Standardize FASTA headers (Biopython) | `python3 update_headers.py <fasta> <id_map_output>` |
 | `parse_hhr.py` | Parse HHblits/HHsearch results | `python3 parse_hhr.py <input.hhr> <evalue> [output.txt]` |
 | `parse_absrel.py` | Parse HyPhy aBSREL JSON output | `python3 parse_absrel.py <input.json> <output.csv>` |
-| `fetch_ligands.py` | Fetch GPCRdb structures with retry | `python3 fetch_ligands.py <output_dir> <ligand_csv> <terms> <species>` |
+| `fetch_ligands.py` | Fetch GPCRdb structures (local fallback) | `python3 fetch_ligands.py <output_dir> <ligand_csv> <terms> <species>` |
 
 ### Visualization Scripts
 

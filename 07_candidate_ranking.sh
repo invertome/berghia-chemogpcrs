@@ -27,13 +27,14 @@ log "Starting candidate ranking."
 # Extract all GPCR IDs
 awk '/^>/ {print substr($1,2)}' "${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa" > "${RESULTS_DIR}/ranking/candidate_ids.txt"
 
-# Run ranking script (assuming rank_candidates.py exists and is functional)
+# Run ranking script with improved algorithm
+# Note: Now takes synteny directory (not file) for quantitative scoring
 run_command "rank_candidates" python3 "${SCRIPTS_DIR}/rank_candidates.py" \
     "${RESULTS_DIR}/ranking/candidate_ids.txt" \
     "${EXPRESSION_DATA}" \
     "${RESULTS_DIR}/phylogenies/protein" \
     "${RESULTS_DIR}/selective_pressure" \
-    "${RESULTS_DIR}/synteny/synteny_ids.txt" \
+    "${RESULTS_DIR}/synteny" \
     "${RESULTS_DIR}/ranking/ranked_candidates_sorted.csv"
 
 # Generate plots

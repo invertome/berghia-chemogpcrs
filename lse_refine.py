@@ -7,6 +7,7 @@
 
 import sys
 import os
+from pathlib import Path
 from ete3 import NCBITaxa, Tree
 import pandas as pd
 
@@ -23,8 +24,18 @@ LSE_AEOLID_TAXID = int(os.getenv('LSE_AEOLID_TAXID', 54397))      # Aeolidida
 LSE_NUDIBRANCH_TAXID = int(os.getenv('LSE_NUDIBRANCH_TAXID', 13843))  # Nudibranchia
 LSE_GASTROPOD_TAXID = int(os.getenv('LSE_GASTROPOD_TAXID', 644))   # Gastropoda
 
-# Load taxonomic and tree data
-ncbi = NCBITaxa()
+# Use local taxonomy database if available (set via setup_databases.py)
+LOCAL_DB_DIR = os.getenv('LOCAL_DB_DIR', '')
+local_taxa_db = Path(LOCAL_DB_DIR) / "taxa.sqlite" if LOCAL_DB_DIR else None
+
+if local_taxa_db and local_taxa_db.exists():
+    ncbi = NCBITaxa(dbfile=str(local_taxa_db))
+    print(f"Using local taxonomy database: {local_taxa_db}", file=sys.stderr)
+else:
+    ncbi = NCBITaxa()  # Will use default location or download if needed
+    if LOCAL_DB_DIR:
+        print(f"Warning: Local taxonomy database not found at {local_taxa_db}, using default", file=sys.stderr)
+
 id_map = pd.read_csv(id_map_file)
 species_tree = Tree(species_tree_file, format=1)  # format=1 for trees with internal node names
 gene_tree = Tree(gene_tree_file, format=1)

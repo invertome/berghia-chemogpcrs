@@ -71,10 +71,20 @@ export MIN_ASR_DISTANCE=0.5  # Minimum distance for deep node selection in ASR
 
 # --- Ranking Weights ---
 export PHYLO_WEIGHT=2
-export DNDS_WEIGHT=1
+export PURIFYING_WEIGHT=1       # Weight for purifying selection (omega < 1)
+export POSITIVE_WEIGHT=1        # Weight for positive selection (omega > 1)
 export SYNTENY_WEIGHT=3
 export EXPR_WEIGHT=1
 export LSE_DEPTH_WEIGHT=1
+
+# --- Reference Weighting (for phylogenetic distance) ---
+export CHEMORECEPTOR_REF_WEIGHT=2.0   # Weight for known chemoreceptor references
+export OTHER_GPCR_REF_WEIGHT=1.0      # Weight for other GPCR references
+
+# --- Statistical Thresholds ---
+export ABSREL_FDR_THRESHOLD=0.05      # FDR threshold for significant selection
+export BOOTSTRAP_THRESHOLD=70         # Minimum bootstrap support for confident nodes
+export LSE_DEPTH_PERCENTILE=75        # Percentile for "deep" LSE classification
 
 # --- GPCRdb Fetch Parameters ---
 export GPCRDB_SEARCH_TERMS="chemoreceptor,invertebrate"
@@ -93,3 +103,8 @@ export LSE_GASTROPOD_TAXID=644     # Gastropoda (all gastropods)
 
 # --- Species Tree ---
 export SPECIES_TREE="${RESULTS_DIR}/busco/busco_species_tree.tre"
+
+# --- Local Database Directory (for API-independent mode) ---
+# Run setup_databases.py first to populate this directory
+# Set to empty string to use online APIs
+export LOCAL_DB_DIR="${BASE_DIR}/databases"
