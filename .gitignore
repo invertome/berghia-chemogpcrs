@@ -1,6 +1,26 @@
+# Ignore this file itself
+.gitignore
 
 # Ignore the generated review files
 Deep_Codebase_Review.md
 ARCHITECTURAL_REVIEW.md
 CLAUDE.md
 VALIDATION_REPORT.md
+
+# Local databases (large files, user-specific)
+databases/
+
+# Results directory (generated outputs)
+results/
+
+# Log files
+*.log
+*.err
+
+# Python cache
+__pycache__/
+*.pyc
+
+# IDE files
+.vscode/
+.idea/
