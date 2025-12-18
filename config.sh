@@ -45,6 +45,10 @@ export DEEPTMHMM="deeptmhmm"
 export ASTRAL="astral"
 export MRBAYES="mb"
 export CLIPKIT="clipkit"
+export CDHIT="cd-hit"
+export CAFE="cafe5"
+export NOTUNG="java -jar ${BASE_DIR}/tools/Notung-2.9.jar"
+export RSCRIPT="Rscript"
 
 # --- Pipeline Parameters ---
 export TAXA=("taxid1" "taxid2" "taxid_berghia")
@@ -68,6 +72,34 @@ export FOLDTREE_METHOD="upgma"
 export USE_MRBAYES=false
 export NUM_STRUCTURAL_CANDIDATES=10
 export MIN_ASR_DISTANCE=0.5  # Minimum distance for deep node selection in ASR
+
+# --- CD-HIT Clustering Parameters ---
+export CDHIT_IDENTITY=0.98       # 98% identity threshold for clustering
+export CDHIT_WORDSIZE=5          # Word size for sequence comparison
+export CDHIT_MEMORY=16000        # Memory limit in MB
+
+# --- CAFE5 Parameters ---
+export CAFE_LAMBDA_SEARCH=true   # Search for optimal lambda
+export CAFE_PVALUE_THRESHOLD=0.05  # P-value threshold for significant expansions
+
+# --- Sensitivity Analysis Parameters ---
+export RUN_SENSITIVITY=true              # Run Monte Carlo sensitivity analysis
+export SENSITIVITY_PERTURBATION=0.5      # Weight variation range (+/- 50%)
+export SENSITIVITY_ITERATIONS=100        # Number of Monte Carlo iterations
+
+# --- Cross-Validation Parameters ---
+export RUN_CROSSVAL=false                # Run k-fold cross-validation on reference classification
+export CROSSVAL_FOLDS=5                  # Number of CV folds
+
+# --- Expression Analysis Parameters ---
+export SALMON_QUANT_DIR="${BASE_DIR}/expression_data"  # Directory with Salmon quant.sf outputs
+export MIN_TPM_THRESHOLD=1.0             # Minimum TPM for "expressed"
+export TAU_THRESHOLD=0.8                 # Tau index threshold for tissue-specific
+export CHEMOSENSORY_TISSUES="rhinophore,oral_veil,tentacle,cephalic"  # Tissues to check for enrichment
+
+# --- Run Mode ---
+# Set to "local" to run without SLURM, "slurm" for cluster execution
+export RUN_MODE="${RUN_MODE:-slurm}"
 
 # --- Ranking Weights ---
 export PHYLO_WEIGHT=2

@@ -3,11 +3,11 @@
 # Purpose: Rank GPCR candidates using phylogenetic proximity, dN/dS, expression, and synteny.
 # Inputs: Candidate IDs ($1), expression data ($2), phylogeny dir ($3), selective pressure dir ($4),
 #         synteny dir ($5), output CSV ($6), [reference categories JSON ($7)]
-# Outputs: Ranked candidates CSV with evidence completeness scores
+# Outputs: Ranked candidates CSV with evidence completeness scores and sensitivity analysis
 # Author: Jorge L. Perez-Moreno, Ph.D.
 
 """
-Improved Ranking Algorithm
+Improved Ranking Algorithm with Sensitivity Analysis
 
 Key improvements over original:
 1. Separate purifying and positive selection scores (not combined |log(omega)|)
@@ -15,6 +15,8 @@ Key improvements over original:
 3. Quantitative synteny scoring (uses anchor counts, not just binary)
 4. Proper missing data handling (tracks evidence completeness)
 5. Configurable via environment variables
+6. Sensitivity analysis: tests weight parameter variations, reports ranking stability
+7. Cross-validation support for reference classification validation
 """
 
 import pandas as pd
@@ -22,7 +24,9 @@ import numpy as np
 import os
 import sys
 import json
+import itertools
 from pathlib import Path
+from scipy import stats
 from ete3 import Tree
 
 # --- Input Arguments ---
@@ -56,6 +60,15 @@ LSE_DEPTH_PERCENTILE = float(os.getenv('LSE_DEPTH_PERCENTILE', 75))
 
 # Local database directory (for reference categories)
 LOCAL_DB_DIR = os.getenv('LOCAL_DB_DIR', '')
+
+# Sensitivity analysis settings
+RUN_SENSITIVITY = os.getenv('RUN_SENSITIVITY', 'true').lower() == 'true'
+SENSITIVITY_PERTURBATION = float(os.getenv('SENSITIVITY_PERTURBATION', 0.5))  # +/- 50% weight variation
+SENSITIVITY_ITERATIONS = int(os.getenv('SENSITIVITY_ITERATIONS', 100))  # Monte Carlo iterations
+
+# Cross-validation settings
+RUN_CROSSVAL = os.getenv('RUN_CROSSVAL', 'false').lower() == 'true'
+CROSSVAL_FOLDS = int(os.getenv('CROSSVAL_FOLDS', 5))
 
 # --- Load Input Data ---
 candidates = pd.read_csv(candidates_file, names=['id'])
@@ -353,6 +366,215 @@ def get_lse_depth_score(candidate_id, tree, threshold):
     return 0.0, 0.0
 
 
+# --- Sensitivity Analysis Functions ---
+
+def calculate_rank_score(df, weights):
+    """
+    Calculate rank scores with given weight parameters.
+
+    Args:
+        df: DataFrame with normalized score columns
+        weights: dict with keys phylo, purifying, positive, synteny, expr, lse_depth
+
+    Returns:
+        Series of rank scores
+    """
+    return (
+        df['phylo_score_norm'] * weights['phylo'] +
+        df['purifying_score_norm'] * weights['purifying'] +
+        df['positive_score_norm'] * weights['positive'] +
+        df['synteny_score_norm'] * weights['synteny'] +
+        df['expression_score_norm'] * weights['expr'] +
+        df['lse_depth_score_norm'] * weights['lse_depth']
+    )
+
+
+def run_sensitivity_analysis(df, base_weights, perturbation=0.5, n_iterations=100):
+    """
+    Run Monte Carlo sensitivity analysis on weight parameters.
+
+    Tests how robust rankings are to weight variations.
+
+    Args:
+        df: DataFrame with normalized score columns
+        base_weights: dict of base weight values
+        perturbation: fraction of weight to vary (+/- this amount)
+        n_iterations: number of Monte Carlo iterations
+
+    Returns:
+        dict with sensitivity analysis results
+    """
+    np.random.seed(42)  # For reproducibility
+
+    # Calculate baseline rankings
+    baseline_scores = calculate_rank_score(df, base_weights)
+    baseline_ranks = baseline_scores.rank(ascending=False)
+
+    # Store rank variations for each candidate
+    rank_variations = {cid: [] for cid in df['id']}
+    weight_samples = []
+
+    for _ in range(n_iterations):
+        # Perturb weights randomly within range
+        perturbed_weights = {}
+        for key, base_val in base_weights.items():
+            min_val = base_val * (1 - perturbation)
+            max_val = base_val * (1 + perturbation)
+            perturbed_weights[key] = np.random.uniform(min_val, max_val)
+
+        weight_samples.append(perturbed_weights.copy())
+
+        # Calculate perturbed scores and ranks
+        perturbed_scores = calculate_rank_score(df, perturbed_weights)
+        perturbed_ranks = perturbed_scores.rank(ascending=False)
+
+        # Record rank for each candidate
+        for idx, cid in enumerate(df['id']):
+            rank_variations[cid].append(perturbed_ranks.iloc[idx])
+
+    # Calculate stability metrics for each candidate
+    stability_results = []
+    for cid in df['id']:
+        ranks = rank_variations[cid]
+        baseline_rank = baseline_ranks[df['id'] == cid].values[0]
+
+        stability_results.append({
+            'id': cid,
+            'baseline_rank': int(baseline_rank),
+            'mean_rank': np.mean(ranks),
+            'std_rank': np.std(ranks),
+            'min_rank': int(np.min(ranks)),
+            'max_rank': int(np.max(ranks)),
+            'rank_range': int(np.max(ranks) - np.min(ranks)),
+            'rank_stability': 1.0 - (np.std(ranks) / len(df))  # Higher = more stable
+        })
+
+    stability_df = pd.DataFrame(stability_results)
+
+    # Calculate global metrics
+    overall_stability = stability_df['rank_stability'].mean()
+    top10_stable = stability_df.nsmallest(10, 'baseline_rank')['rank_stability'].mean()
+
+    # Calculate weight importance via correlation
+    weight_importance = {}
+    for key in base_weights.keys():
+        weight_values = [ws[key] for ws in weight_samples]
+        # Correlate weight values with top candidate's rank
+        top_cid = df.loc[baseline_scores.idxmax(), 'id']
+        top_ranks = rank_variations[top_cid]
+        corr, _ = stats.spearmanr(weight_values, top_ranks)
+        weight_importance[key] = abs(corr) if not np.isnan(corr) else 0.0
+
+    return {
+        'stability_df': stability_df,
+        'overall_stability': overall_stability,
+        'top10_stability': top10_stable,
+        'weight_importance': weight_importance,
+        'n_iterations': n_iterations,
+        'perturbation': perturbation
+    }
+
+
+def run_leave_one_out_crossval(df, tree, ref_ids, base_weights, n_folds=5):
+    """
+    Run k-fold cross-validation on reference classification.
+
+    Tests how well the scoring function identifies known chemoreceptors
+    when they're held out from the reference set.
+
+    Args:
+        df: DataFrame with candidate scores
+        tree: phylogenetic tree
+        ref_ids: list of reference sequence IDs
+        base_weights: weight parameters
+        n_folds: number of CV folds
+
+    Returns:
+        dict with cross-validation metrics
+    """
+    if len(ref_ids) < n_folds:
+        print(f"Warning: Not enough references ({len(ref_ids)}) for {n_folds}-fold CV",
+              file=sys.stderr)
+        return None
+
+    # Shuffle and split references into folds
+    np.random.seed(42)
+    shuffled_refs = np.random.permutation(ref_ids)
+    fold_size = len(shuffled_refs) // n_folds
+
+    cv_results = []
+
+    for fold in range(n_folds):
+        # Hold out this fold's references
+        start_idx = fold * fold_size
+        end_idx = start_idx + fold_size if fold < n_folds - 1 else len(shuffled_refs)
+        held_out = set(shuffled_refs[start_idx:end_idx])
+        training_refs = [r for r in ref_ids if r not in held_out]
+
+        # Recalculate phylo scores with reduced reference set
+        phylo_scores_cv = []
+        for cid in df['id']:
+            try:
+                total_weighted_inverse = 0.0
+                for ref in training_refs:
+                    try:
+                        distance = tree.get_distance(cid, ref)
+                        weight = categorize_reference(ref)
+                        total_weighted_inverse += weight / (distance + 1e-6)
+                    except Exception:
+                        continue
+                phylo_scores_cv.append(total_weighted_inverse)
+            except Exception:
+                phylo_scores_cv.append(0.0)
+
+        # Normalize and calculate rank scores
+        phylo_array = np.array(phylo_scores_cv)
+        if phylo_array.max() > phylo_array.min():
+            phylo_norm = (phylo_array - phylo_array.min()) / (phylo_array.max() - phylo_array.min())
+        else:
+            phylo_norm = np.zeros_like(phylo_array)
+
+        # Calculate scores with CV phylo scores
+        cv_scores = (
+            phylo_norm * base_weights['phylo'] +
+            df['purifying_score_norm'].values * base_weights['purifying'] +
+            df['positive_score_norm'].values * base_weights['positive'] +
+            df['synteny_score_norm'].values * base_weights['synteny'] +
+            df['expression_score_norm'].values * base_weights['expr'] +
+            df['lse_depth_score_norm'].values * base_weights['lse_depth']
+        )
+
+        cv_ranks = pd.Series(cv_scores).rank(ascending=False)
+
+        # Check how well held-out references rank
+        for held_ref in held_out:
+            if held_ref in df['id'].values:
+                ref_idx = df[df['id'] == held_ref].index[0]
+                ref_rank = cv_ranks.iloc[ref_idx]
+                ref_percentile = 100 * (1 - ref_rank / len(df))
+                cv_results.append({
+                    'fold': fold,
+                    'held_out_ref': held_ref,
+                    'rank': int(ref_rank),
+                    'percentile': ref_percentile,
+                    'in_top_10pct': ref_percentile >= 90
+                })
+
+    if not cv_results:
+        return None
+
+    cv_df = pd.DataFrame(cv_results)
+
+    return {
+        'cv_results': cv_df,
+        'mean_percentile': cv_df['percentile'].mean(),
+        'std_percentile': cv_df['percentile'].std(),
+        'top_10pct_rate': cv_df['in_top_10pct'].mean(),
+        'n_folds': n_folds,
+        'n_refs_tested': len(cv_df)
+    }
+
+
 # --- Calculate Scores for All Candidates ---
 
 # First pass: collect all depths for percentile calculation
@@ -478,6 +700,112 @@ output_cols = [
 
 df_sorted[output_cols].to_csv(output_file, index=False)
 
+# --- Run Sensitivity Analysis ---
+sensitivity_results = None
+if RUN_SENSITIVITY:
+    print(f"\nRunning sensitivity analysis ({SENSITIVITY_ITERATIONS} iterations)...", file=sys.stderr)
+
+    base_weights = {
+        'phylo': PHYLO_WEIGHT,
+        'purifying': PURIFYING_WEIGHT,
+        'positive': POSITIVE_WEIGHT,
+        'synteny': SYNTENY_WEIGHT,
+        'expr': EXPR_WEIGHT,
+        'lse_depth': LSE_DEPTH_WEIGHT
+    }
+
+    sensitivity_results = run_sensitivity_analysis(
+        df, base_weights,
+        perturbation=SENSITIVITY_PERTURBATION,
+        n_iterations=SENSITIVITY_ITERATIONS
+    )
+
+    # Add stability metrics to main output
+    stability_df = sensitivity_results['stability_df']
+    df_sorted = df_sorted.merge(
+        stability_df[['id', 'rank_stability', 'std_rank', 'rank_range']],
+        on='id',
+        how='left'
+    )
+
+    # Write sensitivity analysis results
+    output_dir = Path(output_file).parent
+    sensitivity_file = output_dir / 'sensitivity_analysis.csv'
+    stability_df.to_csv(sensitivity_file, index=False)
+
+    # Write weight importance
+    importance_file = output_dir / 'weight_importance.json'
+    with open(importance_file, 'w') as f:
+        json.dump({
+            'weight_importance': sensitivity_results['weight_importance'],
+            'overall_stability': sensitivity_results['overall_stability'],
+            'top10_stability': sensitivity_results['top10_stability'],
+            'perturbation': SENSITIVITY_PERTURBATION,
+            'n_iterations': SENSITIVITY_ITERATIONS
+        }, f, indent=2)
+
+    print(f"  Overall ranking stability: {sensitivity_results['overall_stability']:.3f}", file=sys.stderr)
+    print(f"  Top-10 candidates stability: {sensitivity_results['top10_stability']:.3f}", file=sys.stderr)
+    print(f"  Weight importance (Spearman |rho|):", file=sys.stderr)
+    for weight, importance in sorted(sensitivity_results['weight_importance'].items(),
+                                     key=lambda x: x[1], reverse=True):
+        print(f"    {weight}: {importance:.3f}", file=sys.stderr)
+
+# --- Run Cross-Validation ---
+cv_results = None
+if RUN_CROSSVAL and len(ref_ids) >= CROSSVAL_FOLDS:
+    print(f"\nRunning {CROSSVAL_FOLDS}-fold cross-validation on reference classification...",
+          file=sys.stderr)
+
+    base_weights = {
+        'phylo': PHYLO_WEIGHT,
+        'purifying': PURIFYING_WEIGHT,
+        'positive': POSITIVE_WEIGHT,
+        'synteny': SYNTENY_WEIGHT,
+        'expr': EXPR_WEIGHT,
+        'lse_depth': LSE_DEPTH_WEIGHT
+    }
+
+    cv_results = run_leave_one_out_crossval(
+        df, t, ref_ids, base_weights,
+        n_folds=CROSSVAL_FOLDS
+    )
+
+    if cv_results:
+        # Write CV results
+        output_dir = Path(output_file).parent
+        cv_file = output_dir / 'crossval_results.csv'
+        cv_results['cv_results'].to_csv(cv_file, index=False)
+
+        cv_summary_file = output_dir / 'crossval_summary.json'
+        with open(cv_summary_file, 'w') as f:
+            json.dump({
+                'mean_percentile': cv_results['mean_percentile'],
+                'std_percentile': cv_results['std_percentile'],
+                'top_10pct_recovery_rate': cv_results['top_10pct_rate'],
+                'n_folds': cv_results['n_folds'],
+                'n_refs_tested': cv_results['n_refs_tested']
+            }, f, indent=2)
+
+        print(f"  Mean held-out reference percentile: {cv_results['mean_percentile']:.1f}%",
+              file=sys.stderr)
+        print(f"  Top-10% recovery rate: {cv_results['top_10pct_rate']*100:.1f}%",
+              file=sys.stderr)
+
+# --- Update output columns if sensitivity was run ---
+output_cols = [
+    'id', 'rank_score', 'confidence_tier', 'evidence_completeness',
+    'phylo_score', 'purifying_score', 'positive_score', 'selection_significant',
+    'synteny_score', 'expression_score', 'has_expression_data',
+    'lse_depth_score', 'raw_tree_depth'
+]
+
+if sensitivity_results and 'rank_stability' in df_sorted.columns:
+    output_cols.extend(['rank_stability', 'std_rank', 'rank_range'])
+
+# Re-save with additional columns
+df_sorted[output_cols].to_csv(output_file, index=False)
+
 # --- Summary Statistics ---
 print(f"\nRanking Summary:", file=sys.stderr)
 print(f"  Total candidates: {len(df)}", file=sys.stderr)
@@ -487,4 +815,12 @@ print(f"  Low confidence: {len(df[df['confidence_tier'] == 'Low'])}", file=sys.s
 print(f"  With significant selection: {df['selection_significant'].sum()}", file=sys.stderr)
 print(f"  With synteny support: {(df['synteny_score'] > 0).sum()}", file=sys.stderr)
 print(f"  With expression data: {df['has_expression_data'].sum()}", file=sys.stderr)
+
+if sensitivity_results:
+    print(f"\nSensitivity analysis written to: {output_dir}/sensitivity_analysis.csv", file=sys.stderr)
+    print(f"Weight importance written to: {output_dir}/weight_importance.json", file=sys.stderr)
+
+if cv_results:
+    print(f"Cross-validation results written to: {output_dir}/crossval_results.csv", file=sys.stderr)
+
 print(f"\nOutput written to: {output_file}", file=sys.stderr)
