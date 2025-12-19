@@ -55,6 +55,19 @@ if [ -z "$(ls "${RESULTS_DIR}/orthogroups/input/ref_"*.fa 2>/dev/null)" ]; then
     cp "${RESULTS_DIR}/reference_sequences/all_references.fa" "${RESULTS_DIR}/orthogroups/input/references.fa"
 fi
 
+# --- Pre-flight resource check ---
+# Detect available resources
+detect_resources
+
+# Estimate memory requirements for OrthoFinder based on input size
+log "Checking resource requirements for OrthoFinder..."
+get_dataset_stats "${RESULTS_DIR}/orthogroups/input"
+
+# Check if we have sufficient memory for the dataset
+if ! check_resource_requirements "${RESULTS_DIR}/orthogroups/input" orthofinder; then
+    log --level=WARN "Proceeding despite resource warning - monitor for OOM errors"
+fi
+
 # Run OrthoFinder
 # Note: -M msa removed (invalid in OrthoFinder 2.5+), using default MSA method
 # -a for number of BLAST threads, -t for tree inference threads

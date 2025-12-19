@@ -382,6 +382,351 @@ berghia-chemogpcrs/
 
 ---
 
+## Input Data Setup
+
+Before running the pipeline, you must prepare your input files in the correct format and directory structure. This section provides detailed instructions for each required and optional input type.
+
+### Directory Preparation
+
+Create the required input directories:
+
+```bash
+mkdir -p references transcriptomes genomes expression_data custom_hmms
+```
+
+### 1. Reference Sequences (Required)
+
+Reference sequences are known GPCRs used to build HMM profiles and identify candidates in your transcriptomes.
+
+#### File Location
+```
+references/
+├── taxid1_conserved_refs.aa     # Conserved GPCR references for taxon 1
+├── taxid1_lse_refs.aa           # LSE-specific references for taxon 1
+├── taxid2_conserved_refs.aa     # Conserved references for taxon 2
+├── taxid2_lse_refs.aa           # LSE-specific references for taxon 2
+└── ...
+```
+
+#### Naming Convention
+Files must follow the pattern: `{TAXID}_conserved_refs.aa` and `{TAXID}_lse_refs.aa`
+
+- `TAXID` must match entries in the `TAXA` array in `config.sh`
+- Use NCBI taxonomy IDs (e.g., `9606` for human) or custom identifiers
+- The `.aa` extension indicates amino acid (protein) sequences
+
+#### File Format
+Standard FASTA format with informative headers:
+
+```fasta
+>sp|P30872|OR1A1_HUMAN Olfactory receptor 1A1 OS=Homo sapiens OX=9606 GN=OR1A1
+MEFRNLTVITDFLMSLPFPFQTNLSCVFILVFVATHTVIALVTLAGNLLIILAVTSDPRLH
+TPMYFFLSNLSFVDLCFSSVTVPKMLANFIHSGRPISYAGCITQMFFCVLFGVDSGMLFAF
+...
+>sp|Q9UBG0|OR2W1_HUMAN Olfactory receptor 2W1 OS=Homo sapiens OX=9606 GN=OR2W1
+MSGENGTVSLEFFLLGLSSQPQQQQLLFVFFLSMYLATVLGNLLIMLSVLSDSHLHTPMYF
+...
+```
+
+**Recommended header fields (for automatic metadata extraction):**
+- `OS=` - Organism/species name
+- `OX=` - NCBI taxonomy ID
+- `GN=` - Gene name
+
+The pipeline will parse these fields to populate the metadata CSV.
+
+#### Sourcing Reference Sequences
+
+| Source | Description | Recommended For |
+|--------|-------------|-----------------|
+| [GPCRdb](https://gpcrdb.org) | Curated GPCR database | Class A GPCRs, mammalian |
+| [UniProt](https://uniprot.org) | Reviewed protein sequences | Broad taxonomic coverage |
+| NCBI Protein | Comprehensive, includes predictions | Invertebrate GPCRs |
+| Published studies | Species-specific validated sequences | Closely related species |
+
+**Example download from UniProt:**
+```bash
+# Download all reviewed olfactory receptors
+wget "https://rest.uniprot.org/uniprotkb/stream?query=family:olfactory+AND+reviewed:true&format=fasta" \
+    -O references/vertebrate_conserved_refs.aa
+```
+
+#### Conserved vs. LSE References
+
+- **Conserved (`_conserved_refs.aa`)**: Broadly conserved GPCRs found across taxa (e.g., rhodopsin, adrenergic receptors). Used to identify canonical GPCR domains.
+
+- **LSE (`_lse_refs.aa`)**: Lineage-specific expansions unique to certain clades (e.g., mollusk-specific chemoreceptors). Used to identify novel, clade-specific expansions.
+
+### 2. Transcriptomes (Required)
+
+Predicted protein sequences from your target species and outgroups.
+
+#### File Location
+```
+transcriptomes/
+├── taxid_berghia.aa             # Target species (Berghia stephanieae)
+├── taxid1.aa                    # Outgroup/comparative species 1
+├── taxid2.aa                    # Outgroup/comparative species 2
+├── taxid_berghia.mrna           # (Optional) Nucleotide CDS for dN/dS
+├── taxid_berghia.cds            # (Alternative extension)
+└── ...
+```
+
+#### Naming Convention
+- Protein files: `{TAXID}.aa` (amino acid FASTA)
+- Nucleotide files: `{TAXID}.mrna`, `{TAXID}.cds`, or `{TAXID}.fna`
+- `TAXID` must match entries in the `TAXA` array in `config.sh`
+
+#### File Format
+
+**Protein sequences (.aa):**
+```fasta
+>transcript_001 gene=chemoreceptor1
+MKTIIALSYIFCLVFAQDASGRTIFDAVANTSIYTDNPSSSTSREYFTPVVEGINFDVCCF
+FVVFLHLLGIGIALLSTLVAGNYVVLKIFHFKSLHTPMNFIISMLAVADLLLGFLVMPFAL
+...
+>transcript_002 gene=or42a
+MVTELQNNPYPVFQNLMYGIFIYALVFLLGNSVVIAISIDPHLHTPMYFFLANLSLADACF
+...
+```
+
+**Nucleotide CDS (.mrna/.cds) - Optional but required for dN/dS analysis:**
+```fasta
+>transcript_001
+ATGAAAACCATTATCGCTCTTTCCTATATATTCTGCCTGGTATTTGCTCAAGATGCATCT
+GGACGAACCATATTTGATGCTGTTGCTAATACAAGTATTTACACAGATAATCCATCATCA
+...
+```
+
+**Requirements:**
+- Headers must match between `.aa` and `.mrna`/`.cds` files for dN/dS analysis
+- Nucleotide sequences must be in-frame CDS (start with ATG, length divisible by 3)
+- No internal stop codons (except terminal)
+
+#### Preparing Transcriptomes
+
+From Trinity assembly:
+```bash
+# Predict ORFs with TransDecoder
+TransDecoder.LongOrfs -t trinity_assembly.fasta
+TransDecoder.Predict -t trinity_assembly.fasta
+
+# Rename outputs
+mv trinity_assembly.fasta.transdecoder.pep transcriptomes/taxid_berghia.aa
+mv trinity_assembly.fasta.transdecoder.cds transcriptomes/taxid_berghia.cds
+```
+
+From genome annotation (GFF + genome):
+```bash
+# Extract protein sequences
+gffread annotation.gff -g genome.fa -y transcriptomes/taxid_berghia.aa
+
+# Extract CDS
+gffread annotation.gff -g genome.fa -x transcriptomes/taxid_berghia.cds
+```
+
+### 3. Genomes (Optional)
+
+Genome assemblies for synteny analysis and structural context.
+
+#### File Location
+```
+genomes/
+├── taxid_berghia.fasta          # Target species genome
+├── taxid_berghia.gff            # Gene annotations (GFF3 format)
+├── taxid1.fasta                 # Comparative species genome
+└── taxid1.gff
+```
+
+#### File Format
+
+**Genome FASTA:**
+```fasta
+>scaffold_1
+ATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCG...
+>scaffold_2
+GCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTA...
+```
+
+**GFF3 annotations:**
+```
+##gff-version 3
+scaffold_1	maker	gene	1000	5000	.	+	.	ID=gene001;Name=chemoreceptor1
+scaffold_1	maker	mRNA	1000	5000	.	+	.	ID=mRNA001;Parent=gene001
+scaffold_1	maker	CDS	1000	2000	.	+	0	ID=cds001;Parent=mRNA001
+scaffold_1	maker	CDS	3000	5000	.	+	2	ID=cds002;Parent=mRNA001
+```
+
+### 4. Expression Data (Optional)
+
+Gene expression data for tissue-specific analysis.
+
+#### Option A: Salmon Quantification (Recommended)
+
+```
+expression_data/
+├── rhinophore/
+│   └── quant.sf
+├── oral_veil/
+│   └── quant.sf
+├── tentacle/
+│   └── quant.sf
+├── foot/
+│   └── quant.sf
+└── tissue_annotations.tsv       # Optional: map sample names to tissue types
+```
+
+**quant.sf format (Salmon output):**
+```
+Name	Length	EffectiveLength	TPM	NumReads
+transcript_001	1245	1095.2	15.234	1523
+transcript_002	987	837.4	8.721	892
+...
+```
+
+**tissue_annotations.tsv (optional):**
+```
+sample	tissue_type	is_chemosensory
+rhinophore	rhinophore	yes
+oral_veil	oral_veil	yes
+foot	foot	no
+mantle	mantle	no
+```
+
+#### Option B: Pre-computed Expression Matrix
+
+```
+expression_data.csv
+```
+
+**Format:**
+```csv
+gene_id,rhinophore,oral_veil,tentacle,foot,mantle
+transcript_001,15.2,12.3,18.7,2.1,0.5
+transcript_002,0.3,0.1,0.2,45.6,38.2
+...
+```
+
+### 5. Custom HMMs (Optional)
+
+Pre-built HMM profiles to skip HMM building in Step 01.
+
+#### File Location
+```
+custom_hmms/
+├── conserved.hmm                # Combined conserved GPCR HMM
+└── lse.hmm                      # Combined LSE-specific HMM
+```
+
+These should be HMMER3 format profiles built with `hmmbuild`.
+
+### 6. Configuring config.sh
+
+After preparing your input files, update `config.sh` to match your data:
+
+```bash
+# --- Taxa Configuration ---
+# List all taxa IDs (must match filenames in references/ and transcriptomes/)
+export TAXA=("9606" "7227" "taxid_berghia")
+export BERGHIA_TAXID="taxid_berghia"
+
+# --- Input Files ---
+# Primary transcriptome for target species
+export TRANSCRIPTOME="${TRANSCRIPTOME_DIR}/taxid_berghia.aa"
+
+# Genome (optional - set to empty string if not available)
+export GENOME="${GENOME_DIR}/taxid_berghia.fasta"
+
+# Expression data (optional)
+export EXPRESSION_DATA="${BASE_DIR}/expression_data.csv"
+export SALMON_QUANT_DIR="${BASE_DIR}/expression_data"
+
+# Custom HMMs (optional - comment out to build from references)
+# export CONSERVED_HMM="${BASE_DIR}/custom_hmms/conserved.hmm"
+# export LSE_HMM="${BASE_DIR}/custom_hmms/lse.hmm"
+
+# --- LSE Levels ---
+# Define taxonomic groupings for LSE classification
+# Format: "LevelName:taxid1,taxid2,taxid3"
+export LSE_LEVELS=(
+    "Aeolids:taxid_aeolid1,taxid_aeolid2,taxid_berghia"
+    "Nudibranchs:taxid_nudi1,taxid_aeolid1,taxid_aeolid2,taxid_berghia"
+    "Gastropods:taxid_lottia,taxid_aplysia,taxid_nudi1,taxid_berghia"
+)
+
+# Chemosensory tissues for expression analysis
+export CHEMOSENSORY_TISSUES="rhinophore,oral_veil,tentacle,cephalic"
+```
+
+### 7. Validation Checklist
+
+Before running the pipeline, verify your setup:
+
+```bash
+# Run the configuration validator
+./validate_config.sh --verbose
+
+# Check for common issues:
+# ✓ All TAXA entries have matching reference files
+# ✓ All TAXA entries have matching transcriptome files
+# ✓ File naming conventions are correct
+# ✓ FASTA files are valid (no empty sequences, proper headers)
+# ✓ Nucleotide files match protein files (for dN/dS)
+```
+
+**Common issues and fixes:**
+
+| Issue | Cause | Fix |
+|-------|-------|-----|
+| "No reference file for taxid X" | Filename mismatch | Ensure `{taxid}_conserved_refs.aa` exists |
+| "Taxid not in TAXA array" | Missing config entry | Add taxid to `TAXA` array in config.sh |
+| "Case mismatch" | Linux case sensitivity | Ensure exact case match in filenames |
+| "No nucleotide sequences" | Missing .mrna/.cds file | Provide CDS file or dN/dS will be skipped |
+| "Empty reference file" | Download failed | Re-download reference sequences |
+
+### 8. Example Setup
+
+Complete example for analyzing *Berghia stephanieae* with two outgroups:
+
+```bash
+# 1. Create directories
+mkdir -p references transcriptomes genomes expression_data
+
+# 2. Download reference GPCRs
+# From GPCRdb - Class A olfactory receptors
+wget "https://gpcrdb.org/services/receptorlist/?family=olfactory" -O refs_raw.json
+# Process and save as FASTA...
+
+# 3. Prepare references (example structure)
+cat > references/9606_conserved_refs.aa << 'EOF'
+>sp|P30872|OR1A1_HUMAN OS=Homo sapiens OX=9606 GN=OR1A1
+MEFRNLTVIT...
+EOF
+
+cat > references/9606_lse_refs.aa << 'EOF'
+>sp|Q8NGJ6|OR51E1_HUMAN OS=Homo sapiens OX=9606 GN=OR51E1
+MDTQNFSSVT...
+EOF
+
+# 4. Copy transcriptomes
+cp /path/to/berghia_proteins.fa transcriptomes/taxid_berghia.aa
+cp /path/to/berghia_cds.fa transcriptomes/taxid_berghia.cds
+cp /path/to/aplysia_proteins.fa transcriptomes/6500.aa
+cp /path/to/lottia_proteins.fa transcriptomes/225164.aa
+
+# 5. Copy expression data (if available)
+cp -r /path/to/salmon_quants/* expression_data/
+
+# 6. Update config.sh
+sed -i 's/TAXA=.*/TAXA=("9606" "6500" "225164" "taxid_berghia")/' config.sh
+sed -i 's/BERGHIA_TAXID=.*/BERGHIA_TAXID="taxid_berghia"/' config.sh
+
+# 7. Validate
+./validate_config.sh --verbose --fix
+```
+
+---
+
 ## Configuration
 
 Edit `config.sh` to customize the pipeline. Key new parameters:
@@ -423,6 +768,49 @@ export SALMON_QUANT_DIR="${BASE_DIR}/expression_data"
 export MIN_TPM_THRESHOLD=1.0             # Minimum TPM for "expressed"
 export TAU_THRESHOLD=0.8                 # Tissue specificity threshold
 export CHEMOSENSORY_TISSUES="rhinophore,oral_veil,tentacle,cephalic"
+```
+
+### Memory Estimation Profiles
+
+The pipeline includes data-aware resource estimation to prevent out-of-memory (OOM) failures on large datasets. These multipliers are used to estimate memory requirements based on dataset size:
+
+```bash
+export MEM_MULT_IQTREE=100       # bytes per site per taxon (ML tree inference)
+export MEM_MULT_ORTHOFINDER=50   # bytes per sequence pair (all-vs-all DIAMOND)
+export MEM_MULT_MAFFT=20         # bytes per residue pair (multiple alignment)
+export MEM_MULT_HYPHY=200        # bytes per site per branch (aBSREL)
+export MEM_MULT_FASTTREE=50      # bytes per site per taxon (approximate ML)
+export MEM_BASE_GB=4             # base memory overhead in GB
+export MEM_MAX_GB=128            # maximum memory to request via SLURM
+```
+
+**How it works:**
+- Before running memory-intensive tools (OrthoFinder, IQ-TREE, HyPhy), the pipeline estimates required memory
+- If estimated memory exceeds available resources, a warning is logged with suggestions:
+  - Reduce input size with CD-HIT clustering
+  - Request more memory via SLURM
+  - Use a high-memory node
+- Tune the multipliers based on your empirical observations
+
+### Sequence Metadata System
+
+The pipeline uses a centralized metadata CSV (`id_map.csv`) instead of parsing FASTA headers directly. This eliminates fragility when reference database formats change.
+
+**Generated columns:**
+- `original_id` - Original sequence identifier
+- `short_id` - Standardized short ID (e.g., `ref_9606_1`)
+- `taxid` - Taxonomic identifier
+- `source_type` - reference/target/outgroup
+- `species_name` - Species name (if extractable)
+- `gene_name` - Gene name (if extractable)
+- `seq_length` - Sequence length
+
+**Usage in custom scripts:**
+```python
+from get_metadata import MetadataLookup
+lookup = MetadataLookup('results/reference_sequences/id_map.csv')
+taxid = lookup.get_taxid('ref_9606_1')
+source = lookup.get_source_type('ref_9606_1')
 ```
 
 ---
@@ -481,6 +869,7 @@ export CHEMOSENSORY_TISSUES="rhinophore,oral_veil,tentacle,cephalic"
 
 | Script | Purpose | Usage |
 |--------|---------|-------|
+| `scripts/get_metadata.py` | Centralized sequence metadata lookup | `python3 get_metadata.py -m id_map.csv --seq-id ref_9606_1` |
 | `scripts/expression_analysis.py` | Parse Salmon quant.sf, calculate tau index | `python3 expression_analysis.py <quant_dir> <candidates> <output_prefix>` |
 | `scripts/divergence_dating.py` | Estimate divergence times with calibrations | `python3 divergence_dating.py <tree> <output_prefix> [calibrations]` |
 | `scripts/convergent_evolution.py` | Detect convergent amino acid substitutions | `python3 convergent_evolution.py <alignment> <tree> <output_prefix>` |
@@ -493,7 +882,8 @@ export CHEMOSENSORY_TISSUES="rhinophore,oral_veil,tentacle,cephalic"
 | Script | New Features |
 |--------|--------------|
 | `rank_candidates.py` | Sensitivity analysis, cross-validation, rank stability metrics |
-| `functions.sh` | Checkpointing, provenance tracking, adaptive resource detection |
+| `update_headers.py` | Extended metadata CSV with source_type, species_name, gene_name columns |
+| `functions.sh` | Checkpointing, provenance tracking, resource estimation, metadata lookup helpers |
 
 ---
 

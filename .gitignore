@@ -25,3 +25,4 @@ __pycache__/
 # IDE files
 .vscode/
 .idea/
+PIPELINE_VALIDITY_ASSESSMENT.md

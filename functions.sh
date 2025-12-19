@@ -454,3 +454,323 @@ finalize_pipeline() {
 
 # --- Trap for Clean Exit ---
 trap 'finalize_pipeline $?' EXIT
+
+# =============================================================================
+# METADATA LOOKUP FUNCTIONS
+# =============================================================================
+# These functions provide centralized sequence metadata lookups, eliminating
+# the need for fragile FASTA header parsing throughout the pipeline.
+
+# --- Get Taxid for Sequence ID ---
+# Arguments: $1 - Sequence ID
+# Returns: Taxid string
+get_taxid_for_seq() {
+    local seq_id="$1"
+    local metadata_file="${ID_MAP:-${RESULTS_DIR}/reference_sequences/id_map.csv}"
+
+    if [ -f "$metadata_file" ]; then
+        python3 "${SCRIPTS_DIR}/get_metadata.py" --metadata "$metadata_file" --seq-id "$seq_id" --field taxid
+    else
+        # Fallback to header parsing if metadata file doesn't exist
+        if [[ "$seq_id" == ref_* ]]; then
+            echo "$seq_id" | cut -d'_' -f2
+        else
+            echo "$seq_id" | cut -d'_' -f1
+        fi
+    fi
+}
+
+# --- Get Source Type for Sequence ID ---
+# Arguments: $1 - Sequence ID
+# Returns: source_type (reference/target/outgroup/unknown)
+get_source_type_for_seq() {
+    local seq_id="$1"
+    local metadata_file="${ID_MAP:-${RESULTS_DIR}/reference_sequences/id_map.csv}"
+
+    if [ -f "$metadata_file" ]; then
+        python3 "${SCRIPTS_DIR}/get_metadata.py" --metadata "$metadata_file" --seq-id "$seq_id" --field source_type
+    else
+        # Fallback
+        if [[ "$seq_id" == ref_* ]]; then
+            echo "reference"
+        else
+            echo "unknown"
+        fi
+    fi
+}
+
+# --- Check if Sequence is Reference ---
+# Arguments: $1 - Sequence ID
+# Returns: 0 if reference, 1 otherwise
+is_reference_seq() {
+    local seq_id="$1"
+    local source_type=$(get_source_type_for_seq "$seq_id")
+    [ "$source_type" = "reference" ]
+}
+
+# --- Get Unique Taxids from FASTA ---
+# Arguments: $1 - FASTA file, $2 - (optional) --exclude-refs
+# Returns: Space-separated list of unique taxids
+get_taxids_from_fasta() {
+    local fasta_file="$1"
+    local exclude_refs="${2:-}"
+    local metadata_file="${ID_MAP:-${RESULTS_DIR}/reference_sequences/id_map.csv}"
+
+    if [ -f "$metadata_file" ]; then
+        if [ "$exclude_refs" = "--exclude-refs" ]; then
+            python3 "${SCRIPTS_DIR}/get_metadata.py" --metadata "$metadata_file" --fasta "$fasta_file" --unique-taxids --exclude-refs
+        else
+            python3 "${SCRIPTS_DIR}/get_metadata.py" --metadata "$metadata_file" --fasta "$fasta_file" --unique-taxids
+        fi
+    else
+        # Fallback: parse headers directly
+        grep "^>" "$fasta_file" | sed 's/>//' | while read -r header; do
+            if [[ "$header" == ref_* ]]; then
+                echo "$header" | cut -d'_' -f2
+            else
+                echo "$header" | cut -d'_' -f1
+            fi
+        done | sort -u | tr '\n' ' ' | sed 's/ $//'
+    fi
+}
+
+# --- Get Non-Reference Taxids from FASTA ---
+# Arguments: $1 - FASTA file
+# Returns: Space-separated list of unique taxids (excluding references)
+get_non_ref_taxids_from_fasta() {
+    get_taxids_from_fasta "$1" --exclude-refs
+}
+
+# =============================================================================
+# RESOURCE ESTIMATION FUNCTIONS
+# =============================================================================
+# These functions estimate memory requirements based on data size to prevent
+# OOM failures on large datasets.
+
+# Tool-specific memory multipliers (bytes per unit)
+# These can be overridden in config.sh
+: ${MEM_MULT_IQTREE:=100}        # bytes per site per taxon
+: ${MEM_MULT_ORTHOFINDER:=50}    # bytes per sequence pair
+: ${MEM_MULT_MAFFT:=20}          # bytes per residue pair
+: ${MEM_MULT_HYPHY:=200}         # bytes per site per branch
+: ${MEM_MULT_FASTTREE:=50}       # bytes per site per taxon
+: ${MEM_BASE_GB:=4}              # base memory overhead in GB
+: ${MEM_MAX_GB:=128}             # maximum memory to request
+
+# --- Count Sequences in FASTA ---
+# Arguments: $1 - FASTA file
+# Returns: Number of sequences
+count_sequences() {
+    local fasta="$1"
+    grep -c "^>" "$fasta" 2>/dev/null || echo 0
+}
+
+# --- Get Average Sequence Length ---
+# Arguments: $1 - FASTA file
+# Returns: Average sequence length (integer)
+get_avg_seq_length() {
+    local fasta="$1"
+    awk '/^>/{if(seq)print length(seq);seq=""} !/^>/{seq=seq$0} END{if(seq)print length(seq)}' "$fasta" 2>/dev/null | \
+        awk '{s+=$1;n++}END{if(n>0)print int(s/n);else print 0}'
+}
+
+# --- Get Alignment Length ---
+# Arguments: $1 - Alignment file (FASTA format)
+# Returns: Alignment length (number of columns)
+get_alignment_length() {
+    local aln="$1"
+    # Get length of first sequence (all should be same length in alignment)
+    awk '/^>/{if(seq){print length(seq);exit}seq=""} !/^>/{seq=seq$0} END{if(seq)print length(seq)}' "$aln" 2>/dev/null || echo 0
+}
+
+# --- Estimate Memory for Alignment ---
+# Arguments: $1 - FASTA file
+# Returns: Estimated memory in GB (e.g., "8G")
+estimate_memory_for_alignment() {
+    local fasta="$1"
+    local num_seqs=$(count_sequences "$fasta")
+    local avg_len=$(get_avg_seq_length "$fasta")
+
+    # Distance matrix: O(n^2) with ~10 bytes per cell
+    local mem_bytes=$(( num_seqs * num_seqs * 10 + num_seqs * avg_len * MEM_MULT_MAFFT ))
+    local mem_gb=$(( mem_bytes / 1073741824 + MEM_BASE_GB ))
+
+    # Cap at maximum
+    [ $mem_gb -gt $MEM_MAX_GB ] && mem_gb=$MEM_MAX_GB
+    [ $mem_gb -lt $MEM_BASE_GB ] && mem_gb=$MEM_BASE_GB
+
+    echo "${mem_gb}G"
+}
+
+# --- Estimate Memory for Tree Building ---
+# Arguments: $1 - Alignment file
+# Returns: Estimated memory in GB (e.g., "16G")
+estimate_memory_for_tree() {
+    local aln="$1"
+    local num_seqs=$(count_sequences "$aln")
+    local aln_len=$(get_alignment_length "$aln")
+
+    # IQ-TREE memory: sites * taxa * multiplier
+    local mem_bytes=$(( num_seqs * aln_len * MEM_MULT_IQTREE ))
+    local mem_gb=$(( mem_bytes / 1073741824 + MEM_BASE_GB ))
+
+    # Cap at maximum
+    [ $mem_gb -gt $MEM_MAX_GB ] && mem_gb=$MEM_MAX_GB
+    [ $mem_gb -lt $MEM_BASE_GB ] && mem_gb=$MEM_BASE_GB
+
+    echo "${mem_gb}G"
+}
+
+# --- Estimate Memory for OrthoFinder ---
+# Arguments: $1 - Directory with proteomes or total sequence count
+# Returns: Estimated memory in GB
+estimate_memory_for_orthofinder() {
+    local input="$1"
+    local total_seqs=0
+
+    if [ -d "$input" ]; then
+        # Count sequences across all FASTA files in directory
+        for f in "$input"/*.fa "$input"/*.faa "$input"/*.fasta; do
+            [ -f "$f" ] && total_seqs=$((total_seqs + $(count_sequences "$f")))
+        done
+    else
+        # Assume input is sequence count
+        total_seqs="$input"
+    fi
+
+    # OrthoFinder: O(n^2) for all-vs-all DIAMOND
+    local mem_bytes=$(( total_seqs * total_seqs * MEM_MULT_ORTHOFINDER ))
+    local mem_gb=$(( mem_bytes / 1073741824 + MEM_BASE_GB ))
+
+    # Cap at maximum
+    [ $mem_gb -gt $MEM_MAX_GB ] && mem_gb=$MEM_MAX_GB
+    [ $mem_gb -lt 8 ] && mem_gb=8  # OrthoFinder needs at least 8GB
+
+    echo "${mem_gb}G"
+}
+
+# --- Estimate Memory for HyPhy ---
+# Arguments: $1 - Alignment file, $2 - Tree file (optional, for branch count)
+# Returns: Estimated memory in GB
+estimate_memory_for_hyphy() {
+    local aln="$1"
+    local tree="${2:-}"
+    local num_seqs=$(count_sequences "$aln")
+    local aln_len=$(get_alignment_length "$aln")
+
+    # Estimate branches: 2n-2 for binary tree
+    local num_branches=$((2 * num_seqs - 2))
+
+    # HyPhy aBSREL: sites * branches * multiplier
+    local mem_bytes=$(( aln_len * num_branches * MEM_MULT_HYPHY ))
+    local mem_gb=$(( mem_bytes / 1073741824 + MEM_BASE_GB ))
+
+    # Cap at maximum
+    [ $mem_gb -gt $MEM_MAX_GB ] && mem_gb=$MEM_MAX_GB
+    [ $mem_gb -lt $MEM_BASE_GB ] && mem_gb=$MEM_BASE_GB
+
+    echo "${mem_gb}G"
+}
+
+# --- Check Resource Requirements (Pre-flight) ---
+# Arguments: $1 - Input file, $2 - Tool name (alignment/tree/orthofinder/hyphy)
+# Returns: 0 if OK, 1 if insufficient resources (with warning)
+check_resource_requirements() {
+    local input="$1"
+    local tool="$2"
+    local estimated=""
+
+    case "$tool" in
+        alignment|mafft)
+            estimated=$(estimate_memory_for_alignment "$input")
+            ;;
+        tree|iqtree|fasttree)
+            estimated=$(estimate_memory_for_tree "$input")
+            ;;
+        orthofinder)
+            estimated=$(estimate_memory_for_orthofinder "$input")
+            ;;
+        hyphy|absrel)
+            estimated=$(estimate_memory_for_hyphy "$input")
+            ;;
+        *)
+            log --level=WARN "Unknown tool for resource estimation: $tool"
+            return 0
+            ;;
+    esac
+
+    local estimated_gb=${estimated%G}
+    local available_gb=${DETECTED_MEM_GB:-64}
+
+    if [ "$estimated_gb" -gt "$available_gb" ]; then
+        log --level=WARN "Resource warning for $tool:"
+        log --level=WARN "  Estimated memory: ${estimated}"
+        log --level=WARN "  Available memory: ${available_gb}G"
+        log --level=WARN "  Consider: (1) reducing input size with CD-HIT"
+        log --level=WARN "            (2) requesting more memory via SLURM"
+        log --level=WARN "            (3) using a high-memory node"
+        return 1
+    fi
+
+    if [ "$VERBOSE" = true ] || [ "${DEBUG:-}" = true ]; then
+        log "Resource check for $tool: ${estimated} estimated, ${available_gb}G available"
+    fi
+
+    return 0
+}
+
+# --- Data-Aware Resource Scaling ---
+# Arguments: $1 - Input file, $2 - Tool name
+# Returns: SLURM resource directives
+scale_resources_for_data() {
+    local input="$1"
+    local tool="$2"
+    local estimated=""
+
+    case "$tool" in
+        alignment|mafft)
+            estimated=$(estimate_memory_for_alignment "$input")
+            ;;
+        tree|iqtree|fasttree)
+            estimated=$(estimate_memory_for_tree "$input")
+            ;;
+        orthofinder)
+            estimated=$(estimate_memory_for_orthofinder "$input")
+            ;;
+        hyphy|absrel)
+            estimated=$(estimate_memory_for_hyphy "$input")
+            ;;
+        *)
+            estimated="${DEFAULT_MEM:-32G}"
+            ;;
+    esac
+
+    echo "--cpus-per-task=${CPUS:-8} --mem=${estimated}"
+}
+
+# --- Get Dataset Statistics ---
+# Arguments: $1 - FASTA file or directory
+# Returns: Prints statistics to stdout
+get_dataset_stats() {
+    local input="$1"
+
+    if [ -f "$input" ]; then
+        local num_seqs=$(count_sequences "$input")
+        local avg_len=$(get_avg_seq_length "$input")
+        local total_residues=$((num_seqs * avg_len))
+        echo "Sequences: $num_seqs"
+        echo "Avg length: $avg_len"
+        echo "Total residues: $total_residues"
+    elif [ -d "$input" ]; then
+        local total_seqs=0
+        local num_files=0
+        for f in "$input"/*.fa "$input"/*.faa "$input"/*.fasta; do
+            if [ -f "$f" ]; then
+                total_seqs=$((total_seqs + $(count_sequences "$f")))
+                num_files=$((num_files + 1))
+            fi
+        done
+        echo "Files: $num_files"
+        echo "Total sequences: $total_seqs"
+    fi
+}

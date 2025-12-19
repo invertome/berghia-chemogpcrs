@@ -124,7 +124,8 @@ for blast_file in "${RESULTS_DIR}/synteny/"*.blast; do
     [ -f "$blast_file" ] || continue
     base=$(basename "$blast_file" .blast)
 
-    # Extract taxids
+    # Extract taxids from filename (pipeline-controlled format: taxid1_taxid2.blast)
+    # Note: This is parsing pipeline-generated filenames, not external data headers
     taxid1=$(echo "$base" | cut -d'_' -f1)
     taxid2=$(echo "$base" | cut -d'_' -f2-)
 

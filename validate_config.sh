@@ -396,6 +396,91 @@ validate_parameter_ranges() {
     fi
 }
 
+validate_memory_profiles() {
+    print_header "Validating Memory Estimation Profiles"
+
+    # Check that memory multipliers are set and reasonable
+    local mem_vars=("MEM_MULT_IQTREE" "MEM_MULT_ORTHOFINDER" "MEM_MULT_MAFFT" "MEM_MULT_HYPHY" "MEM_MULT_FASTTREE")
+
+    for var in "${mem_vars[@]}"; do
+        local value="${!var}"
+        if [ -z "$value" ]; then
+            print_warning "$var not set - will use default"
+        elif [ "$value" -gt 0 ] 2>/dev/null; then
+            if [ "$VERBOSE" = true ]; then
+                print_ok "$var = $value"
+            fi
+        else
+            print_warning "$var has invalid value: $value"
+        fi
+    done
+
+    # Check MEM_BASE_GB
+    if [ -n "${MEM_BASE_GB}" ] && [ "${MEM_BASE_GB}" -ge 1 ] 2>/dev/null; then
+        print_ok "MEM_BASE_GB = ${MEM_BASE_GB}G"
+    else
+        print_warning "MEM_BASE_GB not set or invalid - will use default (4G)"
+    fi
+
+    # Check MEM_MAX_GB
+    if [ -n "${MEM_MAX_GB}" ] && [ "${MEM_MAX_GB}" -ge 8 ] 2>/dev/null; then
+        print_ok "MEM_MAX_GB = ${MEM_MAX_GB}G"
+    else
+        print_warning "MEM_MAX_GB not set or too low - will use default (128G)"
+    fi
+
+    # Check if MEM_MAX_GB exceeds available system memory
+    local available_mem_gb=$(free -g 2>/dev/null | awk '/^Mem:/{print $2}' || echo 0)
+    if [ "$available_mem_gb" -gt 0 ] && [ -n "${MEM_MAX_GB}" ]; then
+        if [ "${MEM_MAX_GB}" -gt "$available_mem_gb" ]; then
+            print_warning "MEM_MAX_GB (${MEM_MAX_GB}G) exceeds available system memory (${available_mem_gb}G)"
+        fi
+    fi
+}
+
+validate_metadata_utilities() {
+    print_header "Validating Metadata Utilities"
+
+    # Check for get_metadata.py script
+    local metadata_script="${SCRIPTS_DIR}/get_metadata.py"
+    if [ -f "$metadata_script" ]; then
+        print_ok "Metadata lookup utility found: $metadata_script"
+
+        # Check if it's executable or can be run with python3
+        if [ -x "$metadata_script" ] || command -v python3 &>/dev/null; then
+            if [ "$VERBOSE" = true ]; then
+                print_ok "Metadata utility is executable"
+            fi
+        else
+            print_warning "Metadata utility may not be executable - ensure python3 is available"
+        fi
+    else
+        print_warning "Metadata lookup utility not found: $metadata_script"
+        print_fix "The pipeline will fall back to header parsing (less robust)"
+    fi
+
+    # Check if ID_MAP exists (only relevant after step 01 has run)
+    if [ -n "${ID_MAP}" ]; then
+        if [ -f "${ID_MAP}" ]; then
+            local entry_count=$(wc -l < "${ID_MAP}" 2>/dev/null || echo 0)
+            entry_count=$((entry_count - 1))  # Subtract header row
+            print_ok "ID_MAP exists with $entry_count entries: ${ID_MAP}"
+
+            # Validate CSV structure
+            local header=$(head -1 "${ID_MAP}" 2>/dev/null)
+            if [[ "$header" == *"original_id"* && "$header" == *"short_id"* && "$header" == *"taxid"* ]]; then
+                if [ "$VERBOSE" = true ]; then
+                    print_ok "ID_MAP has valid CSV structure"
+                fi
+            else
+                print_warning "ID_MAP may have incorrect structure - expected columns: original_id,short_id,taxid,..."
+            fi
+        else
+            print_warning "ID_MAP not found (will be created in step 01): ${ID_MAP}"
+        fi
+    fi
+}
+
 # --- Main ---
 
 echo -e "${BLUE}=======================================${NC}"
@@ -414,6 +499,8 @@ validate_local_databases
 validate_tools
 check_case_sensitivity
 validate_parameter_ranges
+validate_memory_profiles
+validate_metadata_utilities
 
 # --- Summary ---
 print_header "Validation Summary"

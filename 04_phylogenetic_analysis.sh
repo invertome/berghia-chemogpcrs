@@ -99,9 +99,19 @@ check_alignment() {
     ' "$file"
 }
 
+# --- Pre-flight resource check ---
+detect_resources
+
 # --- All Berghia candidates + references ---
 if [ ! -f "${RESULTS_DIR}/step_completed_all_berghia_refs_iqtree.txt" ]; then
     cat "${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa" "${RESULTS_DIR}/reference_sequences/all_references.fa" > "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.fa"
+
+    # Check resource requirements for alignment and tree building
+    log "Checking resource requirements for phylogenetic analysis..."
+    get_dataset_stats "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.fa"
+    check_resource_requirements "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.fa" alignment || \
+        log --level=WARN "Proceeding despite alignment resource warning"
+
     run_command "all_berghia_refs_mafft" ${MAFFT} --auto --thread "${CPUS}" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.fa" > "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa"
     check_alignment "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" || { log "Error: Alignment quality check failed"; exit 1; }
     run_command "all_berghia_refs_clipkit" ${CLIPKIT} smart-gap -i "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" -o "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa"
@@ -109,6 +119,10 @@ if [ ! -f "${RESULTS_DIR}/step_completed_all_berghia_refs_iqtree.txt" ]; then
     # FastTree seed strategy: Generate approximate ML tree first to avoid local optima
     # This is important for large, divergent gene families like GPCRs
     run_command "all_berghia_refs_fasttree" ${FASTTREE} -lg -gamma "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa" > "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_fasttree.tre"
+
+    # Check resource requirements for IQ-TREE (more memory-intensive than FastTree)
+    check_resource_requirements "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa" iqtree || \
+        log --level=WARN "Proceeding despite IQ-TREE resource warning"
 
     # Use FastTree result as starting tree for IQ-TREE (-t option)
     run_command "all_berghia_refs_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa" -m "${IQTREE_MODEL}" -B "${IQTREE_BOOTSTRAP}" -nt "${CPUS}" -t "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_fasttree.tre" -pre "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs"

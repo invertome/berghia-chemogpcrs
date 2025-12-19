@@ -64,6 +64,18 @@ export DEFAULT_MEM="64G"
 export SLURM_EMAIL="your.email@example.com"
 export GPU_ENABLED=false
 
+# --- Memory Estimation Profiles ---
+# These multipliers are used by functions.sh to estimate memory requirements
+# for large datasets. Values are bytes per unit (empirically calibrated).
+# Override these if you find estimation is too conservative or aggressive.
+export MEM_MULT_IQTREE=100       # bytes per site per taxon (ML tree inference)
+export MEM_MULT_ORTHOFINDER=50   # bytes per sequence pair (all-vs-all DIAMOND)
+export MEM_MULT_MAFFT=20         # bytes per residue pair (multiple alignment)
+export MEM_MULT_HYPHY=200        # bytes per site per branch (aBSREL)
+export MEM_MULT_FASTTREE=50      # bytes per site per taxon (approximate ML)
+export MEM_BASE_GB=4             # base memory overhead in GB
+export MEM_MAX_GB=128            # maximum memory to request via SLURM
+
 # --- Tool-Specific Parameters ---
 export HMM_EVALUE="1e-5"
 export HHBLITS_EVALUE="1e-5"

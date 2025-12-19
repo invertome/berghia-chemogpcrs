@@ -50,8 +50,9 @@ fi
 [ -z "$og" ] || [ ! -f "$og" ] && { log "Skipping missing orthogroup"; exit 0; }
 
 base=$(basename "$og" .fa)
-taxids=$(grep "^>" "$og" | sed 's/>//' | cut -d'_' -f1 | sort -u)
-taxa_count=$(echo "$taxids" | wc -l)
+# Use centralized metadata lookup to get taxids (excludes references)
+taxids=$(get_taxids_from_fasta "$og" --exclude-refs)
+taxa_count=$(echo "$taxids" | wc -w)
 
 # --- Helper function to find nucleotide sequences for an orthogroup ---
 find_nucleotide_sequences() {
@@ -63,27 +64,41 @@ find_nucleotide_sequences() {
     # Extract sequence IDs from protein alignment
     while IFS= read -r header; do
         seq_id=$(echo "$header" | sed 's/>//')
-        taxid_sample=$(echo "$seq_id" | cut -d'_' -f1,2)
-        protein_id=$(echo "$seq_id" | cut -d'_' -f3-)
+
+        # Use metadata lookup to get taxid (with fallback to header parsing)
+        taxid=$(get_taxid_for_seq "$seq_id")
+
+        # Extract protein ID portion (after taxid prefix)
+        # For ref_TAXID_N format: protein_id is N
+        # For TAXID_N format: protein_id is N
+        if [[ "$seq_id" == ref_* ]]; then
+            protein_id=$(echo "$seq_id" | cut -d'_' -f3-)
+        else
+            protein_id=$(echo "$seq_id" | cut -d'_' -f2-)
+        fi
 
         # Try to find nucleotide sequence in multiple locations
         found=false
         for ext in mrna cds fna fa; do
-            nuc_file="${TRANSCRIPTOME_DIR}/${taxid_sample}.${ext}"
-            if [ -f "$nuc_file" ]; then
-                # Extract the corresponding nucleotide sequence
-                # Try exact match first, then partial match
-                if grep -q "^>${seq_id}" "$nuc_file"; then
-                    grep -A1 "^>${seq_id}" "$nuc_file" | head -2 >> "$output_file"
-                    found=true
-                    break
-                elif grep -q "^>${protein_id}" "$nuc_file"; then
-                    # Rename header to match protein
-                    grep -A1 "^>${protein_id}" "$nuc_file" | head -2 | sed "1s/.*/>$seq_id/" >> "$output_file"
-                    found=true
-                    break
+            # Try different naming conventions for nucleotide files
+            for nuc_file in "${TRANSCRIPTOME_DIR}/${taxid}.${ext}" \
+                           "${TRANSCRIPTOME_DIR}/taxid_${taxid}.${ext}" \
+                           "${TRANSCRIPTOME_DIR}/${taxid}_${taxid}.${ext}"; do
+                if [ -f "$nuc_file" ]; then
+                    # Extract the corresponding nucleotide sequence
+                    # Try exact match first, then partial match
+                    if grep -q "^>${seq_id}" "$nuc_file"; then
+                        grep -A1 "^>${seq_id}" "$nuc_file" | head -2 >> "$output_file"
+                        found=true
+                        break 2
+                    elif grep -q "^>${protein_id}" "$nuc_file"; then
+                        # Rename header to match protein
+                        grep -A1 "^>${protein_id}" "$nuc_file" | head -2 | sed "1s/.*/>$seq_id/" >> "$output_file"
+                        found=true
+                        break 2
+                    fi
                 fi
-            fi
+            done
         done
 
         if [ "$found" = false ]; then

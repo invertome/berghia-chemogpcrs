@@ -39,18 +39,11 @@ for og in "${RESULTS_DIR}/orthogroups/OrthoFinder/Results"*/Orthogroups/OG*.fa; 
     [ -e "$og" ] || continue
 
     base=$(basename "$og" .fa)
-    # Extract taxids from headers, handling reference sequences specially
-    # Reference headers are formatted as: ref_TAXID_ID (taxid is in field 2)
-    # Non-reference headers are formatted as: TAXID_... (taxid is in field 1)
-    taxids=$(grep "^>" "$og" | sed 's/>//' | while read -r header; do
-        if [[ "$header" == ref_* ]]; then
-            # Reference sequence: extract taxid from second field
-            echo "$header" | cut -d'_' -f2
-        else
-            # Non-reference: extract taxid from first field
-            echo "$header" | cut -d'_' -f1
-        fi
-    done | sort -u | tr '\n' ' ' | tr -s ' ' | sed 's/^ //;s/ $//')
+
+    # Extract taxids using centralized metadata lookup (excludes references)
+    # This uses get_taxids_from_fasta from functions.sh which queries the metadata CSV
+    # Fallback to header parsing is built into the function if CSV doesn't exist
+    taxids=$(get_taxids_from_fasta "$og" --exclude-refs)
 
     # Check against each LSE level
     for level in "${!lse_taxids[@]}"; do
