@@ -438,6 +438,156 @@ validate_memory_profiles() {
     fi
 }
 
+validate_reference_structure() {
+    print_header "Validating Reference File Structure"
+
+    # Check for nath_et_al directory structure
+    local nath_et_al_dir="${REFERENCE_DIR}/nath_et_al"
+
+    if [ -d "$nath_et_al_dir" ]; then
+        print_ok "Detected nath_et_al reference structure"
+
+        # Check for expected subdirectories
+        if [ -d "${nath_et_al_dir}/lse" ]; then
+            local lse_count=$(find "${nath_et_al_dir}/lse" -name "*.faa" 2>/dev/null | wc -l)
+            print_ok "LSE references: $lse_count files"
+        else
+            print_warning "nath_et_al/lse directory not found"
+        fi
+
+        if [ -d "${nath_et_al_dir}/one_to_one_ortholog" ]; then
+            local conserved_count=$(find "${nath_et_al_dir}/one_to_one_ortholog" -name "*.faa" 2>/dev/null | wc -l)
+            print_ok "Conserved references: $conserved_count files"
+        else
+            print_warning "nath_et_al/one_to_one_ortholog directory not found"
+        fi
+
+        # Check if files have taxid prefixes
+        local has_taxid_prefix=$(find "${nath_et_al_dir}" -name "*.faa" 2>/dev/null | head -1 | xargs basename 2>/dev/null | grep -E "^[0-9]+_" || true)
+        if [ -n "$has_taxid_prefix" ]; then
+            print_ok "Reference files have taxid prefixes"
+        else
+            print_warning "Reference files may need taxid prefixes"
+            print_fix "Run: python3 scripts/rename_references_with_taxid.py ${nath_et_al_dir} --dry-run"
+        fi
+    else
+        # Check for legacy structure
+        local legacy_count=$(find "${REFERENCE_DIR}" -maxdepth 1 -name "*_refs.aa" 2>/dev/null | wc -l)
+        if [ "$legacy_count" -gt 0 ]; then
+            print_ok "Using legacy reference structure ($legacy_count files)"
+        else
+            print_warning "No reference files found in ${REFERENCE_DIR}"
+        fi
+    fi
+}
+
+validate_api_credentials() {
+    print_header "Validating API Credentials"
+
+    # Check for .env file
+    local env_file="${SCRIPT_DIR}/.env"
+
+    if [ -f "$env_file" ]; then
+        print_ok "Found .env file"
+
+        # Check for NCBI_API_KEY (without revealing the value)
+        if grep -q "^NCBI_API_KEY=" "$env_file" && ! grep -q "^NCBI_API_KEY=$" "$env_file"; then
+            local key_length=$(grep "^NCBI_API_KEY=" "$env_file" | cut -d'=' -f2 | tr -d '\n' | wc -c)
+            if [ "$key_length" -gt 10 ]; then
+                print_ok "NCBI_API_KEY is set (${key_length} characters)"
+            else
+                print_warning "NCBI_API_KEY appears too short"
+            fi
+        else
+            print_warning "NCBI_API_KEY not set in .env file"
+            print_fix "Add NCBI_API_KEY=your_key to .env (get key at https://www.ncbi.nlm.nih.gov/account/settings/)"
+        fi
+
+        # Check for NCBI_EMAIL
+        if grep -q "^NCBI_EMAIL=" "$env_file"; then
+            local email=$(grep "^NCBI_EMAIL=" "$env_file" | cut -d'=' -f2)
+            if [[ "$email" == *"@"* ]]; then
+                print_ok "NCBI_EMAIL is set"
+            else
+                print_warning "NCBI_EMAIL may be invalid: $email"
+            fi
+        else
+            print_warning "NCBI_EMAIL not set in .env file"
+            print_fix "Add NCBI_EMAIL=your.email@example.com to .env"
+        fi
+    else
+        print_warning ".env file not found"
+        print_fix "Create .env file with NCBI_API_KEY and NCBI_EMAIL for faster API access"
+    fi
+}
+
+validate_python_dependencies() {
+    print_header "Validating Python Dependencies"
+
+    local required_modules=("Bio" "ete3" "pandas" "numpy")
+    local optional_modules=("dotenv" "requests" "matplotlib" "seaborn")
+
+    for module in "${required_modules[@]}"; do
+        if python3 -c "import $module" 2>/dev/null; then
+            if [ "$VERBOSE" = true ]; then
+                print_ok "Python module '$module' is available"
+            fi
+        else
+            print_error "Required Python module '$module' is not installed"
+            print_fix "Run: pip install $module"
+        fi
+    done
+
+    for module in "${optional_modules[@]}"; do
+        if python3 -c "import $module" 2>/dev/null; then
+            if [ "$VERBOSE" = true ]; then
+                print_ok "Python module '$module' is available"
+            fi
+        else
+            print_warning "Optional Python module '$module' is not installed"
+        fi
+    done
+
+    # Verify critical packages
+    if python3 -c "import Bio; import ete3; import pandas" 2>/dev/null; then
+        print_ok "Core Python dependencies available (Bio, ete3, pandas)"
+    fi
+}
+
+validate_lse_taxonomy() {
+    print_header "Validating LSE Taxonomy Configuration"
+
+    # Check if LSE taxonomy IDs are valid
+    local lse_taxids=("$LSE_AEOLID_TAXID" "$LSE_NUDIBRANCH_TAXID" "$LSE_GASTROPOD_TAXID")
+    local lse_names=("Aeolidida" "Nudibranchia" "Gastropoda")
+
+    for i in "${!lse_taxids[@]}"; do
+        local taxid="${lse_taxids[$i]}"
+        local name="${lse_names[$i]}"
+
+        if [ -n "$taxid" ] && [ "$taxid" -gt 0 ] 2>/dev/null; then
+            print_ok "LSE_${name^^}_TAXID = $taxid"
+        else
+            print_warning "LSE_${name^^}_TAXID not set or invalid"
+        fi
+    done
+
+    # Check if USE_PYTHON_LSE is set
+    if [ "${USE_PYTHON_LSE:-true}" = true ]; then
+        print_ok "Python-based LSE classification enabled (recommended)"
+
+        # Check if ete3 taxonomy database is available
+        if [ -n "${LOCAL_DB_DIR}" ] && [ -f "${LOCAL_DB_DIR}/taxa.sqlite" ]; then
+            print_ok "Local NCBI taxonomy database available for LSE classification"
+        else
+            print_warning "Local NCBI taxonomy database not found"
+            print_fix "Run: python3 setup_databases.py to download taxonomy database"
+        fi
+    else
+        print_ok "Using legacy bash-based LSE classification"
+    fi
+}
+
 validate_metadata_utilities() {
     print_header "Validating Metadata Utilities"
 
@@ -493,10 +643,14 @@ echo ""
 validate_directories
 validate_taxa
 validate_lse_levels
+validate_lse_taxonomy
 validate_reference_files
+validate_reference_structure
 validate_input_files
 validate_local_databases
+validate_api_credentials
 validate_tools
+validate_python_dependencies
 check_case_sensitivity
 validate_parameter_ranges
 validate_memory_profiles
