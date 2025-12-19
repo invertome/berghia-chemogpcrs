@@ -39,8 +39,18 @@ for og in "${RESULTS_DIR}/orthogroups/OrthoFinder/Results"*/Orthogroups/OG*.fa; 
     [ -e "$og" ] || continue
 
     base=$(basename "$og" .fa)
-    # Extract taxids from headers (before first '_'), normalize whitespace
-    taxids=$(grep "^>" "$og" | sed 's/>//' | cut -d'_' -f1 | sort -u | tr '\n' ' ' | tr -s ' ' | sed 's/^ //;s/ $//')
+    # Extract taxids from headers, handling reference sequences specially
+    # Reference headers are formatted as: ref_TAXID_ID (taxid is in field 2)
+    # Non-reference headers are formatted as: TAXID_... (taxid is in field 1)
+    taxids=$(grep "^>" "$og" | sed 's/>//' | while read -r header; do
+        if [[ "$header" == ref_* ]]; then
+            # Reference sequence: extract taxid from second field
+            echo "$header" | cut -d'_' -f2
+        else
+            # Non-reference: extract taxid from first field
+            echo "$header" | cut -d'_' -f1
+        fi
+    done | sort -u | tr '\n' ' ' | tr -s ' ' | sed 's/^ //;s/ $//')
 
     # Check against each LSE level
     for level in "${!lse_taxids[@]}"; do

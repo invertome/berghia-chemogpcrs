@@ -332,6 +332,7 @@ berghia-chemogpcrs/
 ├── config.sh                    # Global configuration
 ├── functions.sh                 # Shared bash functions (with checkpointing)
 ├── setup_conda_env.sh           # Conda environment setup script
+├── validate_config.sh           # Configuration validator [NEW]
 ├── environment.yml              # Conda environment specification
 │
 ├── 01_reference_processing.sh   # Step 01: HMM building
@@ -512,9 +513,36 @@ export CHEMOSENSORY_TISSUES="rhinophore,oral_veil,tentacle,cephalic"
 
 ## Running the Pipeline
 
+### Validate Configuration First
+
+Before running the pipeline, validate your configuration to catch errors early:
+
+```bash
+# Basic validation
+./validate_config.sh
+
+# With suggested fixes for any issues
+./validate_config.sh --fix
+
+# Verbose output showing all checks
+./validate_config.sh --verbose
+```
+
+The validator checks:
+- **Directory existence** - All required directories exist
+- **Taxa consistency** - TAXA array matches actual transcriptome files
+- **LSE levels** - LSE_LEVELS taxids are all in TAXA array
+- **Case sensitivity** - No case mismatches between config and files
+- **Tool availability** - Required tools are in PATH
+- **Parameter ranges** - Settings are within expected ranges
+- **Local databases** - LOCAL_DB_DIR is properly set up (if used)
+
 ### Full Pipeline with New Steps
 
 ```bash
+# Validate configuration first
+./validate_config.sh
+
 # Source configuration
 source config.sh
 source functions.sh
