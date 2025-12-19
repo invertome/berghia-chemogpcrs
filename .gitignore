@@ -11,6 +11,17 @@ IMPLEMENTATION_PLAN.md
 # Local databases (large files, user-specific)
 databases/
 
+# Reference sequences (large, user-provided)
+references/
+
+# Transcriptomes and genomes (large, user-provided)
+transcriptomes/
+genomes/
+
+# Expression data (user-provided)
+expression_data/
+expression_data.csv
+
 # Results directory (generated outputs)
 results/
 
@@ -25,4 +36,15 @@ __pycache__/
 # IDE files
 .vscode/
 .idea/
+
+# Environment files with secrets
+.env
+.env.local
+*.env
+
+# API keys and credentials
+credentials/
+secrets/
+
+# Review files
 PIPELINE_VALIDITY_ASSESSMENT.md

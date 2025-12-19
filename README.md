@@ -305,11 +305,35 @@ conda install -y \
     r-ape=5.7
 
 # Install Python packages
-pip install biopython ete3 pandas numpy matplotlib seaborn scipy requests
+pip install biopython ete3 pandas numpy matplotlib seaborn scipy requests python-dotenv
 
 # Install CAFE5
 conda install -c bioconda cafe=5.0.0
 ```
+
+### Environment Variables (.env file)
+
+Create a `.env` file for API credentials (gitignored by default):
+
+```bash
+# Create .env file with your NCBI API key
+cat > .env << 'EOF'
+# NCBI Entrez API Key
+# Get your key at: https://www.ncbi.nlm.nih.gov/account/settings/
+# Increases rate limit from 3 to 10 requests/second
+NCBI_API_KEY=your_api_key_here
+
+# Email for NCBI Entrez (required)
+NCBI_EMAIL=your.email@example.com
+EOF
+```
+
+The `.env` file is automatically loaded by Python scripts and used for:
+- CDS retrieval from NCBI (`fetch_reference_cds.py`)
+- Taxonomy lookups (`rename_references_with_taxid.py`)
+- Any Biopython Entrez operations
+
+**Security Note:** Never commit your `.env` file to version control.
 
 ### API-Independent Mode (Recommended)
 
@@ -352,6 +376,9 @@ berghia-chemogpcrs/
 ├── 09_report_generation.sh      # Step 09: Report
 │
 ├── scripts/                     # Python/R utility scripts
+│   ├── rename_references_with_taxid.py  # Add taxid prefix to reference files [NEW]
+│   ├── fetch_reference_cds.py   # Fetch CDS for reference proteins [NEW]
+│   ├── get_metadata.py          # Centralized metadata lookups [NEW]
 │   ├── expression_analysis.py   # Salmon TPM parsing [NEW]
 │   ├── divergence_dating.py     # Molecular clock dating [NEW]
 │   ├── convergent_evolution.py  # Convergent substitution detection [NEW]
@@ -456,6 +483,82 @@ wget "https://rest.uniprot.org/uniprotkb/stream?query=family:olfactory+AND+revie
 - **Conserved (`_conserved_refs.aa`)**: Broadly conserved GPCRs found across taxa (e.g., rhodopsin, adrenergic receptors). Used to identify canonical GPCR domains.
 
 - **LSE (`_lse_refs.aa`)**: Lineage-specific expansions unique to certain clades (e.g., mollusk-specific chemoreceptors). Used to identify novel, clade-specific expansions.
+
+#### Alternative: nath_et_al Directory Structure
+
+The pipeline also supports an alternative reference structure organized by taxonomic groups, useful for large reference sets from published datasets:
+
+```
+references/
+└── nath_et_al/
+    ├── lse/                          # Lineage-specific expansion references
+    │   ├── annelida/
+    │   │   ├── Capitella_teleta.faa
+    │   │   └── ...
+    │   ├── gastropoda/
+    │   │   ├── Aplysia_californica.faa
+    │   │   ├── Biomphalaria_glabrata.faa
+    │   │   └── ...
+    │   └── bivalvia/
+    │       └── ...
+    └── one_to_one_ortholog/          # Conserved (1:1 ortholog) references
+        ├── annelida/
+        ├── gastropoda/
+        └── ...
+```
+
+**File Naming:**
+- Files named as `Species_name.faa` (genus and species with underscore)
+- Pipeline automatically extracts species names for taxonomy lookups
+
+**Header Format:**
+Headers should contain accession IDs between underscores:
+```fasta
+>alvmar_JABMCL010001063.1_3302
+MKTIIALSYIFCLVFAQDASGRTIFDAVANTSIYTDNPSSSTSREYFTPVVEGINFDVCCF...
+>aplcal_XP_005089002.1
+MVTELQNNPYPVFQNLMYGIFIYALVFLLGNSVVIAISIDPHLHTPMYFFLANLSLADACF...
+```
+
+The accession ID (middle portion) is used for:
+- CDS retrieval from NCBI/ENA/UniProt/DDBJ
+- Taxonomy lookups when species name fails
+
+**Processing nath_et_al References:**
+
+1. **Rename files with taxonomy IDs:**
+   ```bash
+   python scripts/rename_references_with_taxid.py references/nath_et_al \
+       --output-map results/reference_sequences/taxid_rename_map.csv
+   ```
+
+2. **Fetch CDS sequences for dN/dS analysis:**
+   ```bash
+   python scripts/fetch_reference_cds.py references/nath_et_al \
+       -o results/reference_sequences/cds \
+       --log-failed results/reference_sequences/failed_cds_accessions.csv
+   ```
+
+3. **Run 01_reference_processing.sh** - It will automatically detect the nath_et_al structure and process accordingly.
+
+**CDS Fetching Notes:**
+- Requires NCBI API key in `.env` file for faster downloads (10 req/sec vs 3 req/sec)
+- Some accessions may not have CDS available (logged to failed_cds_accessions.csv)
+- Supports NCBI RefSeq (XP_, NP_), TSA contigs, GenBank, ENA/DDBJ, and UniProt accessions
+
+**Reference Weighting:**
+
+When using general GPCR references (not just chemoreceptors), adjust the ranking weights in `config.sh`:
+
+```bash
+# For chemoreceptor-focused analysis (default):
+export CHEMORECEPTOR_REF_WEIGHT=2.0
+export OTHER_GPCR_REF_WEIGHT=1.0
+
+# For unbiased analysis of all GPCRs:
+export CHEMORECEPTOR_REF_WEIGHT=1.0
+export OTHER_GPCR_REF_WEIGHT=1.0
+```
 
 ### 2. Transcriptomes (Required)
 

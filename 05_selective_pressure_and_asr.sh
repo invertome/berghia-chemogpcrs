@@ -54,16 +54,26 @@ base=$(basename "$og" .fa)
 taxids=$(get_taxids_from_fasta "$og" --exclude-refs)
 taxa_count=$(echo "$taxids" | wc -w)
 
+# --- Define reference CDS file location ---
+REFERENCE_CDS_FILE="${RESULTS_DIR}/reference_sequences/cds/all_references_cds.fna"
+
 # --- Helper function to find nucleotide sequences for an orthogroup ---
+# Searches both transcriptome directory (for target species) and reference CDS
 find_nucleotide_sequences() {
     local protein_file="$1"
     local output_file="$2"
 
     > "$output_file"
+    local found_count=0
+    local missing_count=0
+    local ref_count=0
 
     # Extract sequence IDs from protein alignment
     while IFS= read -r header; do
         seq_id=$(echo "$header" | sed 's/>//')
+
+        # Check if this is a reference sequence
+        is_ref=$(is_reference_seq "$seq_id" && echo "yes" || echo "no")
 
         # Use metadata lookup to get taxid (with fallback to header parsing)
         taxid=$(get_taxid_for_seq "$seq_id")
@@ -77,37 +87,83 @@ find_nucleotide_sequences() {
             protein_id=$(echo "$seq_id" | cut -d'_' -f2-)
         fi
 
-        # Try to find nucleotide sequence in multiple locations
         found=false
-        for ext in mrna cds fna fa; do
-            # Try different naming conventions for nucleotide files
-            for nuc_file in "${TRANSCRIPTOME_DIR}/${taxid}.${ext}" \
-                           "${TRANSCRIPTOME_DIR}/taxid_${taxid}.${ext}" \
-                           "${TRANSCRIPTOME_DIR}/${taxid}_${taxid}.${ext}"; do
-                if [ -f "$nuc_file" ]; then
-                    # Extract the corresponding nucleotide sequence
-                    # Try exact match first, then partial match
-                    if grep -q "^>${seq_id}" "$nuc_file"; then
-                        grep -A1 "^>${seq_id}" "$nuc_file" | head -2 >> "$output_file"
-                        found=true
-                        break 2
-                    elif grep -q "^>${protein_id}" "$nuc_file"; then
-                        # Rename header to match protein
-                        grep -A1 "^>${protein_id}" "$nuc_file" | head -2 | sed "1s/.*/>$seq_id/" >> "$output_file"
-                        found=true
-                        break 2
-                    fi
-                fi
-            done
-        done
 
+        # --- Check reference CDS file first for reference sequences ---
+        if [ "$is_ref" = "yes" ] && [ -f "$REFERENCE_CDS_FILE" ]; then
+            # Try exact match with the seq_id
+            if grep -q "^>${seq_id}" "$REFERENCE_CDS_FILE"; then
+                # Extract sequence (handle multi-line FASTA)
+                awk -v id="$seq_id" '
+                    /^>/ { if (match($0, "^>" id "($|[[:space:]])")) { print; found=1; next } else { found=0 } }
+                    found { print }
+                ' "$REFERENCE_CDS_FILE" >> "$output_file"
+                found=true
+                ((ref_count++))
+            fi
+        fi
+
+        # --- Search transcriptome directory for non-reference sequences ---
         if [ "$found" = false ]; then
+            for ext in mrna cds fna fa; do
+                # Try different naming conventions for nucleotide files
+                for nuc_file in "${TRANSCRIPTOME_DIR}/${taxid}.${ext}" \
+                               "${TRANSCRIPTOME_DIR}/taxid_${taxid}.${ext}" \
+                               "${TRANSCRIPTOME_DIR}/${taxid}_${taxid}.${ext}"; do
+                    if [ -f "$nuc_file" ]; then
+                        # Extract the corresponding nucleotide sequence
+                        # Try exact match first, then partial match
+                        if grep -q "^>${seq_id}" "$nuc_file"; then
+                            # Handle multi-line FASTA
+                            awk -v id="$seq_id" '
+                                /^>/ { if (match($0, "^>" id "($|[[:space:]])")) { print; found=1; next } else { found=0 } }
+                                found { print }
+                            ' "$nuc_file" >> "$output_file"
+                            found=true
+                            break 2
+                        elif grep -q "^>${protein_id}" "$nuc_file"; then
+                            # Extract and rename header to match protein
+                            awk -v id="$protein_id" -v new_id="$seq_id" '
+                                /^>/ { if (match($0, "^>" id "($|[[:space:]])")) { print ">" new_id; found=1; next } else { found=0 } }
+                                found { print }
+                            ' "$nuc_file" >> "$output_file"
+                            found=true
+                            break 2
+                        fi
+                    fi
+                done
+            done
+        fi
+
+        # --- Fallback: check all reference CDS for non-reference sequences too ---
+        if [ "$found" = false ] && [ -f "$REFERENCE_CDS_FILE" ]; then
+            if grep -q "^>${seq_id}" "$REFERENCE_CDS_FILE"; then
+                awk -v id="$seq_id" '
+                    /^>/ { if (match($0, "^>" id "($|[[:space:]])")) { print; found=1; next } else { found=0 } }
+                    found { print }
+                ' "$REFERENCE_CDS_FILE" >> "$output_file"
+                found=true
+            fi
+        fi
+
+        if [ "$found" = true ]; then
+            ((found_count++))
+        else
+            ((missing_count++))
             log "Warning: No nucleotide sequence found for ${seq_id}"
         fi
     done < <(grep "^>" "$protein_file")
 
-    # Return success if we found at least some sequences
-    [ -s "$output_file" ]
+    # Log summary
+    log "Nucleotide lookup: found=${found_count} (${ref_count} from refs), missing=${missing_count}"
+
+    # Return success if we found at least some sequences (majority required for meaningful analysis)
+    local total=$((found_count + missing_count))
+    if [ "$found_count" -gt 0 ] && [ "$found_count" -ge $((total / 2)) ]; then
+        return 0
+    else
+        return 1
+    fi
 }
 
 # --- Selective Pressure with aBSREL ---

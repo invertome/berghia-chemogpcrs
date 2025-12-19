@@ -127,6 +127,14 @@ export EXPR_WEIGHT=1
 export LSE_DEPTH_WEIGHT=1
 
 # --- Reference Weighting (for phylogenetic distance) ---
+# These weights control how references affect candidate ranking in rank_candidates.py.
+# Higher weight = stronger influence on the phylogenetic score component.
+#
+# If your references are:
+#   - Chemoreceptor-focused: Keep CHEMORECEPTOR_REF_WEIGHT > OTHER_GPCR_REF_WEIGHT (default)
+#   - General GPCRs: Set both weights equal (e.g., both 1.0) for unbiased ranking
+#   - Other focus: Adjust weights according to your biological question
+#
 export CHEMORECEPTOR_REF_WEIGHT=2.0   # Weight for known chemoreceptor references
 export OTHER_GPCR_REF_WEIGHT=1.0      # Weight for other GPCR references
 
