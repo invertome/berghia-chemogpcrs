@@ -29,14 +29,21 @@ This pipeline integrates multiple computational approaches to discover and chara
 
 - **Sequence-based identification** using HMM profiles and HHblits
 - **Transmembrane domain filtering** with DeepTMHMM
+- **Redundancy reduction** via CD-HIT clustering
+- **GPCR classification** with InterProScan domain annotation
 - **Orthology clustering** via OrthoFinder
-- **Lineage-specific expansion (LSE) detection** with NCBI Taxonomy integration
+- **Lineage-specific expansion (LSE) detection** with CAFE5 birth-death models
+- **Gene tree reconciliation** using NOTUNG
 - **Phylogenetic analysis** using IQ-TREE, Phyloformer, and optional MrBayes
 - **Selective pressure analysis** with HyPhy aBSREL
 - **Ancestral sequence reconstruction** using FastML
+- **Divergence dating** with molecular clock methods
+- **Convergent evolution detection** across lineages
 - **Synteny conservation** via MCScanX
 - **Structural prediction** with AlphaFold
-- **Integrated candidate ranking** combining all evidence types
+- **Binding site prediction** from 3D structures
+- **Conservation mapping** with per-residue analysis
+- **Integrated candidate ranking** with sensitivity analysis
 
 ---
 
@@ -61,10 +68,23 @@ Step 02: ChemoGPCR Identification
          └── HMMSEARCH (optional)
          │
          ▼
+Step 02a: Sequence Clustering [NEW]
+         │
+         └── CD-HIT (98% identity)
+         │
+         ▼
+Step 02b: GPCR Classification [NEW]
+         │
+         ├── InterProScan domain annotation
+         └── Sub-family classification
+         │
+         ▼
 Step 03: Orthology & LSE Classification
          │
          ├── 03a: BUSCO species tree
          ├── 03b: LSE classification (NCBI Taxonomy)
+         ├── 03c: CAFE5 analysis (birth-death models) [NEW]
+         ├── 03d: NOTUNG reconciliation [NEW]
          └── OrthoFinder clustering
          │
          ▼
@@ -94,19 +114,20 @@ Step 06: Synteny & Mapping
          ▼
 Step 07: Candidate Ranking
          │
-         ├── Weighted phylogenetic proximity (chemoreceptor refs prioritized)
+         ├── Weighted phylogenetic proximity
          ├── Separate purifying/positive selection scores
-         ├── Quantitative synteny scoring (anchor counts)
-         ├── Expression score
-         ├── LSE depth score
-         ├── Benjamini-Hochberg FDR correction
-         └── Evidence completeness tracking
+         ├── Quantitative synteny scoring
+         ├── Expression analysis (Salmon TPM) [NEW]
+         ├── Sensitivity analysis [NEW]
+         ├── Cross-validation [NEW]
+         └── Confidence tier assignment
          │
          ▼
 Step 08: Structural Analysis
          │
          ├── AlphaFold predictions
-         ├── GPCRdb reference structures
+         ├── Binding site prediction [NEW]
+         ├── Conservation mapping [NEW]
          └── FoldTree (structural phylogeny)
          │
          ▼
@@ -124,6 +145,7 @@ Step 09: Report Generation
 | Software | Version | Purpose |
 |----------|---------|---------|
 | Python | ≥3.8 | Pipeline scripts |
+| R | ≥4.0 | Ultrametric tree generation |
 | HMMER | ≥3.3 | HMM building and searching |
 | HH-suite | ≥3.3 | HHblits/HHsearch |
 | MAFFT | ≥7.0 | Multiple sequence alignment |
@@ -131,7 +153,9 @@ Step 09: Report Generation
 | FastTree | ≥2.1 | Approximate ML trees |
 | TrimAl | ≥1.4 | Alignment trimming |
 | ClipKit | ≥1.3 | Smart alignment trimming |
+| CD-HIT | ≥4.8 | Sequence clustering |
 | OrthoFinder | ≥2.5 | Orthology inference |
+| CAFE5 | ≥5.0 | Gene family evolution |
 | HyPhy | ≥2.5 | Selective pressure analysis |
 | FastML | ≥3.1 | Ancestral sequence reconstruction |
 | pal2nal | ≥14.0 | Codon alignment |
@@ -140,6 +164,7 @@ Step 09: Report Generation
 | BLAST+ | ≥2.12 | Sequence similarity search |
 | MCScanX | ≥1.0 | Synteny detection |
 | DeepTMHMM | ≥1.0 | Transmembrane prediction |
+| InterProScan | ≥5.0 | Domain annotation (optional) |
 | AlphaFold | ≥2.3 | Structure prediction |
 | FoldTree | ≥1.0 | Structural phylogeny |
 | TMalign | ≥20190822 | Structure alignment |
@@ -148,6 +173,7 @@ Step 09: Report Generation
 | Phyloformer | ≥1.0 | Deep learning phylogeny |
 | ASTRAL | ≥5.7 | Species tree estimation |
 | MrBayes | ≥3.2 | Bayesian phylogeny (optional) |
+| NOTUNG | ≥2.9 | Gene tree reconciliation (optional) |
 | pdfLaTeX | any | Report generation |
 
 ### Python Dependencies
@@ -158,24 +184,103 @@ ete3>=3.1.2
 pandas>=1.3.0
 numpy>=1.21.0
 matplotlib>=3.4.0
+seaborn>=0.11.0
 scipy>=1.7.0
 requests>=2.26.0
+```
+
+### R Dependencies
+
+```r
+ape>=5.7
 ```
 
 ---
 
 ## Installation
 
-### Option 1: Conda Environment (Recommended)
+### Option 1: Automated Setup (Recommended)
 
-Create a complete conda environment with all dependencies:
+Use the provided setup script to create a complete conda environment:
+
+```bash
+# Run the setup script (full installation)
+./setup_conda_env.sh
+
+# Activate the environment
+conda activate berghia-gpcr
+
+# Verify installation
+./setup_conda_env.sh --verify
+```
+
+#### Setup Script Options
+
+| Option | Description |
+|--------|-------------|
+| `./setup_conda_env.sh` | Full installation with all tools (default) |
+| `./setup_conda_env.sh --minimal` | Core tools only (faster, smaller) |
+| `./setup_conda_env.sh --full` | Complete installation with optional tools |
+| `./setup_conda_env.sh --verify` | Check all tools are correctly installed |
+| `./setup_conda_env.sh --external` | Instructions for external tools (DeepTMHMM, NOTUNG, etc.) |
+| `./setup_conda_env.sh --help` | Show all options |
+
+#### What Gets Installed
+
+**Core Tools (always installed):**
+- HMMER, HH-suite, MAFFT, IQ-TREE, FastTree, TrimAl, ClipKit
+- CD-HIT, OrthoFinder, HyPhy, minimap2, samtools, BLAST+
+- BUSCO, seqtk, R with ape package
+
+**Python Packages:**
+- biopython, ete3, pandas, numpy, matplotlib, seaborn, scipy, requests
+
+**Optional Tools (--full only):**
+- CAFE5, MrBayes
+
+**External Tools (manual installation):**
+The script provides instructions for tools that require manual setup:
+- DeepTMHMM (requires DTU registration)
+- NOTUNG (Java-based, download JAR)
+- MCScanX (compiled from source automatically)
+- pal2nal (downloaded automatically to `tools/`)
+- InterProScan (large download)
+- AlphaFold (complex setup)
+
+#### Verification Output
+
+The `--verify` option checks each tool and shows status:
+
+```
+✓ HMMER (hmmbuild)
+✓ HH-suite (hhblits)
+✓ MAFFT (mafft)
+✓ IQ-TREE (iqtree2)
+...
+✓ biopython
+✓ ete3
+...
+⚠ InterProScan (interproscan.sh) - not installed [optional]
+```
+
+### Option 2: Manual Conda Environment
+
+```bash
+# Create environment from YAML file
+conda env create -f environment.yml
+
+# Activate
+conda activate berghia-gpcr
+```
+
+### Option 3: Step-by-Step Installation
 
 ```bash
 # Create the environment
 conda create -n berghia-gpcr python=3.10 -y
 conda activate berghia-gpcr
 
-# Install bioconda and conda-forge channels
+# Add channels
 conda config --add channels bioconda
 conda config --add channels conda-forge
 conda config --set channel_priority strict
@@ -189,119 +294,34 @@ conda install -y \
     fasttree=2.1.11 \
     trimal=1.4.1 \
     clipkit=1.3.0 \
+    cd-hit=4.8.1 \
     orthofinder=2.5.5 \
     hyphy=2.5.51 \
     minimap2=2.26 \
     samtools=1.17 \
     blast=2.14.0 \
     seqtk=1.4 \
-    busco=5.4.7
+    busco=5.4.7 \
+    r-ape=5.7
 
 # Install Python packages
-pip install biopython ete3 pandas numpy matplotlib scipy requests
+pip install biopython ete3 pandas numpy matplotlib seaborn scipy requests
 
-# Install MCScanX (from source)
-git clone https://github.com/wyp1125/MCScanX.git
-cd MCScanX && make && cd ..
-export PATH=$PATH:$(pwd)/MCScanX
-
-# Install DeepTMHMM (requires registration at DTU)
-# Download from: https://services.healthtech.dtu.dk/software.php
-# Follow installation instructions in the downloaded package
-
-# Install pal2nal
-wget http://www.bork.embl.de/pal2nal/distribution/pal2nal.v14.tar.gz
-tar -xzf pal2nal.v14.tar.gz
-export PATH=$PATH:$(pwd)/pal2nal.v14
-
-# Install FastML
-conda install -c bioconda fastml
-
-# Optional: Install AlphaFold (requires significant setup)
-# See: https://github.com/deepmind/alphafold
-# Or use ColabFold for easier setup:
-pip install colabfold
-
-# Optional: Install Phyloformer
-pip install phyloformer
-
-# Optional: Install MrBayes
-conda install -y mrbayes=3.2.7
-
-# Install FoldTree and TMalign
-pip install foldtree
-conda install -y tmalign
-
-# Verify installations
-which hmmbuild hhblits mafft iqtree2 FastTree trimal orthofinder hyphy
-python -c "from Bio import SeqIO; from ete3 import Tree; print('Python packages OK')"
-```
-
-### Option 2: Manual Installation
-
-If you prefer manual installation or need specific versions:
-
-```bash
-# Create base directory
-mkdir -p ~/tools/berghia-gpcr
-cd ~/tools/berghia-gpcr
-
-# Download and install each tool following their respective documentation
-# Set PATH variables accordingly in your ~/.bashrc or ~/.zshrc
-```
-
-### Verify Installation
-
-Run the verification script:
-
-```bash
-./verify_installation.sh
-```
-
-Or manually check:
-
-```bash
-# Check all required tools
-for tool in hmmbuild hmmsearch hhmake hhblits mafft iqtree2 FastTree trimal \
-            clipkit orthofinder hyphy minimap2 samtools blastp seqtk busco; do
-    which $tool && echo "✓ $tool found" || echo "✗ $tool NOT FOUND"
-done
-
-# Check Python dependencies
-python3 -c "
-import sys
-packages = ['Bio', 'ete3', 'pandas', 'numpy', 'matplotlib', 'scipy', 'requests']
-for pkg in packages:
-    try:
-        __import__(pkg)
-        print(f'✓ {pkg} installed')
-    except ImportError:
-        print(f'✗ {pkg} NOT FOUND')
-"
+# Install CAFE5
+conda install -c bioconda cafe=5.0.0
 ```
 
 ### API-Independent Mode (Recommended)
 
-The pipeline can run completely offline by pre-downloading required databases:
+Pre-download required databases for offline operation:
 
 ```bash
 # Download NCBI Taxonomy and GPCRdb data locally
 python3 setup_databases.py --db-dir databases
 
-# Optional: also download PDB structure files
-python3 setup_databases.py --db-dir databases --download-structures --max-structures 200
-
 # Verify setup
 python3 setup_databases.py --db-dir databases --verify-only
 ```
-
-This creates:
-- `databases/taxa.sqlite` - Local NCBI Taxonomy database
-- `databases/gpcrdb/receptors.json` - GPCRdb receptor data
-- `databases/gpcrdb/structures.json` - Structure metadata
-- `databases/gpcrdb/reference_categories.json` - Chemoreceptor vs other GPCR classification
-
-The pipeline automatically uses local databases when `LOCAL_DB_DIR` is set in `config.sh`.
 
 ---
 
@@ -310,13 +330,19 @@ The pipeline automatically uses local databases when `LOCAL_DB_DIR` is set in `c
 ```
 berghia-chemogpcrs/
 ├── config.sh                    # Global configuration
-├── functions.sh                 # Shared bash functions
+├── functions.sh                 # Shared bash functions (with checkpointing)
+├── setup_conda_env.sh           # Conda environment setup script
+├── environment.yml              # Conda environment specification
 │
 ├── 01_reference_processing.sh   # Step 01: HMM building
 ├── 02_chemogpcrs_identification.sh # Step 02: GPCR identification
+├── 02a_cluster_sequences.sh     # Step 02a: CD-HIT clustering [NEW]
+├── 02b_classify_gpcrs.sh        # Step 02b: InterPro classification [NEW]
 ├── 03_orthology_clustering.sh   # Step 03: OrthoFinder
 ├── 03a_busco_species_tree.sh    # Step 03a: Species tree
 ├── 03b_lse_classification.sh    # Step 03b: LSE detection
+├── 03c_cafe_analysis.sh         # Step 03c: CAFE5 analysis [NEW]
+├── 03d_notung_reconciliation.sh # Step 03d: Gene tree reconciliation [NEW]
 ├── 04_phylogenetic_analysis.sh  # Step 04: Phylogenetics
 ├── 05_selective_pressure_and_asr.sh # Step 05: dN/dS & ASR
 ├── 06_synteny_and_mapping.sh    # Step 06: Synteny
@@ -324,40 +350,32 @@ berghia-chemogpcrs/
 ├── 08_structural_analysis.sh    # Step 08: AlphaFold
 ├── 09_report_generation.sh      # Step 09: Report
 │
-├── *.py                         # Python utility scripts
+├── scripts/                     # Python/R utility scripts
+│   ├── expression_analysis.py   # Salmon TPM parsing [NEW]
+│   ├── divergence_dating.py     # Molecular clock dating [NEW]
+│   ├── convergent_evolution.py  # Convergent substitution detection [NEW]
+│   ├── binding_site_prediction.py # Binding pocket prediction [NEW]
+│   ├── conservation_mapping.py  # Per-residue conservation [NEW]
+│   └── generate_ultrametric.R   # Ultrametric tree conversion [NEW]
+│
+├── *.py                         # Core Python scripts
 │
 ├── references/                  # Reference sequences
-│   ├── taxid1_conserved_refs.aa
-│   ├── taxid1_lse_refs.aa
-│   └── ...
-│
 ├── transcriptomes/              # Input transcriptomes
-│   ├── taxid_berghia_berghia.aa
-│   └── ...
-│
 ├── genomes/                     # Optional genome assemblies
-│   ├── taxid_berghia_berghia.fasta
-│   └── ...
-│
-├── custom_hmms/                 # Optional custom HMMs
-│   ├── conserved.hmm
-│   └── lse.hmm
+├── databases/                   # Local databases (API-independent mode)
 │
 └── results/                     # Pipeline outputs
-    ├── reference_sequences/
-    ├── hmms/
-    ├── chemogpcrs/
-    ├── orthogroups/
-    ├── lse_classification/
-    ├── busco/
+    ├── clustering/              # CD-HIT results [NEW]
+    ├── classification/          # GPCR classification [NEW]
+    ├── cafe/                    # CAFE5 results [NEW]
+    ├── notung/                  # Gene tree reconciliation [NEW]
     ├── phylogenies/
     ├── selective_pressure/
-    ├── asr/
-    ├── synteny/
-    ├── mapping/
     ├── ranking/
+    │   ├── sensitivity_analysis.csv   # Ranking stability [NEW]
+    │   └── weight_importance.json     # Weight analysis [NEW]
     ├── structural_analysis/
-    ├── report/
     └── logs/
 ```
 
@@ -365,586 +383,234 @@ berghia-chemogpcrs/
 
 ## Configuration
 
-Edit `config.sh` to customize the pipeline:
+Edit `config.sh` to customize the pipeline. Key new parameters:
 
-### Base Directories
+### CD-HIT Clustering Parameters
 
 ```bash
-export BASE_DIR=$(realpath "$(dirname "$0")")
-export RESULTS_DIR="${BASE_DIR}/results"
-export SCRIPTS_DIR="${BASE_DIR}/scripts"
-export REFERENCE_DIR="${BASE_DIR}/references"
-export TRANSCRIPTOME_DIR="${BASE_DIR}/transcriptomes"
-export GENOME_DIR="${BASE_DIR}/genomes"
-export LOGS_DIR="${RESULTS_DIR}/logs"
+export CDHIT_IDENTITY=0.98       # 98% identity threshold
+export CDHIT_WORDSIZE=5          # Word size for comparison
+export CDHIT_MEMORY=16000        # Memory limit in MB
 ```
 
-### Input Files
+### CAFE5 Parameters
 
 ```bash
-export TRANSCRIPTOME="${TRANSCRIPTOME_DIR}/taxid_berghia_berghia.aa"
-export CONSERVED_HMM="${BASE_DIR}/custom_hmms/conserved.hmm"  # Optional
-export LSE_HMM="${BASE_DIR}/custom_hmms/lse.hmm"              # Optional
-export EXPRESSION_DATA="${BASE_DIR}/expression_data.csv"
-export GENOME="${GENOME_DIR}/taxid_berghia_berghia.fasta"
+export CAFE_LAMBDA_SEARCH=true   # Search for optimal lambda
+export CAFE_PVALUE_THRESHOLD=0.05 # Significance threshold
 ```
 
-### Pipeline Parameters
+### Sensitivity Analysis Parameters
 
 ```bash
-# Taxa to include in analysis
-export TAXA=("taxid1" "taxid2" "taxid_berghia")
-export BERGHIA_TAXID="taxid_berghia"
-
-# Computational resources
-export CPUS=16
-export DEFAULT_TIME="24:00:00"
-export DEFAULT_MEM="64G"
-export GPU_ENABLED=false
-
-# Tool-specific parameters
-export HMM_EVALUE="1e-5"           # HMMSEARCH E-value threshold
-export HHBLITS_EVALUE="1e-5"       # HHblits E-value threshold
-export MIN_TM_REGIONS=6            # Minimum transmembrane domains
-export MIN_SEQ_LENGTH=100          # Minimum sequence length
-export MAX_GAP_PERCENT=50          # Maximum alignment gap percentage
-export IQTREE_MODEL="TEST"         # IQ-TREE model selection
-export IQTREE_BOOTSTRAP=1000       # Bootstrap replicates
-export ORTHOFINDER_INFLATION=1.5   # MCL inflation parameter
-export MIN_ASR_DISTANCE=0.5        # Minimum branch length for ASR
-export NUM_STRUCTURAL_CANDIDATES=10 # Candidates for AlphaFold
+export RUN_SENSITIVITY=true              # Run Monte Carlo analysis
+export SENSITIVITY_PERTURBATION=0.5      # Weight variation (+/- 50%)
+export SENSITIVITY_ITERATIONS=100        # Number of iterations
 ```
 
-### Ranking Weights
+### Cross-Validation Parameters
 
 ```bash
-# Adjust weights to prioritize different evidence types
-export PHYLO_WEIGHT=2           # Phylogenetic proximity to references
-export PURIFYING_WEIGHT=1       # Weight for purifying selection (omega < 1)
-export POSITIVE_WEIGHT=1        # Weight for positive selection (omega > 1)
-export SYNTENY_WEIGHT=3         # Synteny conservation
-export EXPR_WEIGHT=1            # Expression level
-export LSE_DEPTH_WEIGHT=1       # LSE clade depth
-
-# Reference weighting (chemoreceptors prioritized over other GPCRs)
-export CHEMORECEPTOR_REF_WEIGHT=2.0   # Weight for known chemoreceptor references
-export OTHER_GPCR_REF_WEIGHT=1.0      # Weight for other GPCR references
+export RUN_CROSSVAL=false                # Run k-fold CV
+export CROSSVAL_FOLDS=5                  # Number of folds
 ```
 
-### Statistical Thresholds
+### Expression Analysis Parameters
 
 ```bash
-export ABSREL_FDR_THRESHOLD=0.05      # FDR threshold for significant selection
-export BOOTSTRAP_THRESHOLD=70         # Minimum bootstrap support for confident nodes
-export LSE_DEPTH_PERCENTILE=75        # Percentile for "deep" LSE classification
-```
-
-### Local Database Directory
-
-```bash
-# For API-independent mode (run setup_databases.py first)
-export LOCAL_DB_DIR="${BASE_DIR}/databases"
-```
-
-### NCBI Taxonomy IDs for LSE Classification
-
-```bash
-# Customize for your taxonomic groups
-export LSE_AEOLID_TAXID=54397      # Aeolidida
-export LSE_NUDIBRANCH_TAXID=13843  # Nudibranchia
-export LSE_GASTROPOD_TAXID=644     # Gastropoda
-```
-
-### GPCRdb Parameters
-
-```bash
-export GPCRDB_SEARCH_TERMS="chemoreceptor,invertebrate"
-export GPCRDB_SPECIES="Aplysia,Lottia"
-export GPCRDB_FAMILIES="all"  # Or: "Class_A,Class_B1,Class_C,Adhesion,Frizzled"
+export SALMON_QUANT_DIR="${BASE_DIR}/expression_data"
+export MIN_TPM_THRESHOLD=1.0             # Minimum TPM for "expressed"
+export TAU_THRESHOLD=0.8                 # Tissue specificity threshold
+export CHEMOSENSORY_TISSUES="rhinophore,oral_veil,tentacle,cephalic"
 ```
 
 ---
 
 ## Pipeline Steps
 
-### Step 01: Reference Processing (`01_reference_processing.sh`)
+### New Steps
 
-**Purpose:** Process reference FASTA files and build HMM profiles.
+#### Step 02a: Sequence Clustering (`02a_cluster_sequences.sh`)
 
-**Inputs:**
-- Reference sequences in `${REFERENCE_DIR}/`: `{taxid}_conserved_refs.aa`, `{taxid}_lse_refs.aa`
-- Optional custom HMMs in `${BASE_DIR}/custom_hmms/`
+**Purpose:** Remove redundant sequences (splice variants, alleles) using CD-HIT.
 
 **Outputs:**
-- `${RESULTS_DIR}/hmms/conserved.hmm` - Combined conserved GPCR HMM
-- `${RESULTS_DIR}/hmms/lse.hmm` - Combined LSE GPCR HMM
-- `${RESULTS_DIR}/reference_sequences/all_references.fa` - Combined references
-- `${ID_MAP}` - ID mapping CSV (original_id, short_id, taxid)
+- `results/clustering/candidates_nr098.fa` - Non-redundant sequences
+- `results/clustering/cluster_mapping.tsv` - Cluster membership
+- `results/clustering/cluster_summary.tsv` - Cluster statistics
+
+#### Step 02b: GPCR Classification (`02b_classify_gpcrs.sh`)
+
+**Purpose:** Classify GPCRs using InterProScan domains and sub-family assignment.
+
+**Outputs:**
+- `results/classification/gpcr_classifications.tsv` - Class and sub-family assignments
+- `results/classification/putative_chemoreceptors.txt` - Likely chemosensory candidates
+- `results/classification/classification_summary.json` - Distribution statistics
+
+#### Step 03c: CAFE5 Analysis (`03c_cafe_analysis.sh`)
+
+**Purpose:** Formal LSE detection using birth-death models.
 
 **Process:**
-1. Checks for custom HMMs; if absent, builds HMMs from reference sequences using `hmmbuild`
-2. Combines all reference sequences into a single FASTA
-3. Updates headers with short IDs (`ref_TAXID_N` format) using Biopython
-4. Generates ID mapping file for downstream analysis
-
----
-
-### Step 02: ChemoGPCR Identification (`02_chemogpcrs_identification.sh`)
-
-**Purpose:** Identify chemoreceptive GPCRs using sequence homology and transmembrane filtering.
-
-**Inputs:**
-- Transcriptome files: `${TRANSCRIPTOME_DIR}/*.aa`
-- HMMs from Step 01
-- Reference sequences from Step 01
+1. Generates ultrametric species tree using chronos (R/ape)
+2. Prepares gene family count matrix from OrthoFinder
+3. Runs CAFE5 with lambda estimation
+4. Identifies significant expansions/contractions
 
 **Outputs:**
-- `${RESULTS_DIR}/chemogpcrs/chemogpcrs_{taxid}.fa` - GPCR candidates per taxon
-- `${RESULTS_DIR}/chemogpcrs/deeptmhmm_{taxid}/` - TM predictions
+- `results/cafe/species_tree_ultrametric.tre` - Dated species tree
+- `results/cafe/significant_expansions.tsv` - Significant gene family changes
+- `results/cafe/cafe_summary.json` - Analysis summary
 
-**Process:**
-1. **DeepTMHMM filtering:** Predicts transmembrane topology; retains sequences with ≥6 TM regions
-2. **HHblits search:** Searches candidates against reference HMM database
-3. **HMMSEARCH (optional):** Searches with conserved and LSE HMMs if provided
-4. **Combination:** Merges hits from all methods, removes duplicates
+#### Step 03d: NOTUNG Reconciliation (`03d_notung_reconciliation.sh`)
 
----
-
-### Step 03: Orthology Clustering (`03_orthology_clustering.sh`)
-
-**Purpose:** Cluster orthologous groups across species.
-
-**Inputs:**
-- GPCR FASTAs from Step 02
-- Reference sequences from Step 01
+**Purpose:** Reconcile gene trees with species tree to infer duplication/loss events.
 
 **Outputs:**
-- `${RESULTS_DIR}/orthogroups/OrthoFinder/Results*/` - OrthoFinder results
-- Orthogroup FASTA files
-
-**Process:**
-1. Prepares one FASTA per species
-2. Runs OrthoFinder with DIAMOND for fast homology search
-3. Uses MAFFT for alignment and FastTree for gene trees
-
----
-
-### Step 03a: BUSCO Species Tree (`03a_busco_species_tree.sh`)
-
-**Purpose:** Generate species tree from conserved orthologs.
-
-**Inputs:**
-- Transcriptomes
-
-**Outputs:**
-- `${RESULTS_DIR}/busco/busco_species_tree.tre`
-
-**Process:**
-1. Runs BUSCO to identify conserved single-copy orthologs
-2. Concatenates orthologs and builds species tree
-
----
-
-### Step 03b: LSE Classification (`03b_lse_classification.sh`)
-
-**Purpose:** Classify GPCRs into lineage-specific expansion categories.
-
-**Inputs:**
-- GPCR candidates from Step 02
-- Reference sequences from Step 01
-
-**Outputs:**
-- `${RESULTS_DIR}/lse_classification/lse_{level}.fa` - LSEs at each taxonomic level
-- Classification summary
-
-**Process:**
-1. Uses NCBI Taxonomy API to determine taxonomic lineages
-2. Caches lineage queries for performance
-3. Classifies expansions as Aeolid-specific, Nudibranch-specific, or Gastropod-wide
-
----
-
-### Step 04: Phylogenetic Analysis (`04_phylogenetic_analysis.sh`)
-
-**Purpose:** Construct phylogenetic trees using multiple methods.
-
-**Inputs:**
-- GPCR sequences from Step 02
-- Reference sequences from Step 01
-- LSE FASTAs from Step 03b
-
-**Outputs:**
-- `${RESULTS_DIR}/phylogenies/protein/*.treefile` - IQ-TREE results
-- `${RESULTS_DIR}/phylogenies/visualizations/` - Tree images (PNG, PDF, SVG)
-
-**Process:**
-1. **Alignment:** MAFFT with `--auto` mode
-2. **Quality check:** Validates alignment length and gap percentage
-3. **Trimming:** ClipKit smart-gap or TrimAl automated1
-4. **FastTree seed:** Generates approximate ML tree to avoid local optima
-5. **IQ-TREE:** Maximum likelihood with ModelFinder and 1000 ultrafast bootstrap
-6. **Phyloformer:** Deep learning-based tree inference
-7. **MrBayes (optional):** Bayesian phylogenetic inference
-8. **Visualization:** Multi-format output (PNG, PDF, SVG) with taxonomic coloring
-
-**Key features:**
-- Uses tree `format=1` for IQ-TREE output with support values
-- FastTree seed strategy improves convergence on large, divergent gene families
-
----
-
-### Step 05: Selective Pressure & ASR (`05_selective_pressure_and_asr.sh`)
-
-**Purpose:** Analyze selective pressure and reconstruct ancestral sequences.
-
-**Inputs:**
-- Protein alignments from Step 04
-- Nucleotide sequences (`.mrna`, `.cds`, `.fna`, `.fa`)
-- Phylogenetic trees from Step 04
-
-**Outputs:**
-- `${RESULTS_DIR}/selective_pressure/absrel_results.csv` - dN/dS results
-- `${RESULTS_DIR}/asr/*_asr.fa` - Ancestral sequences
-
-**Process:**
-1. **Codon alignment:** pal2nal converts protein alignment + nucleotides to codon alignment
-2. **aBSREL analysis:** Detects episodic diversifying selection on branches
-3. **Deep node selection:** Identifies ancestral nodes at top 10% tree depth
-4. **FastML reconstruction:** Infers ancestral sequences at selected nodes
-
----
-
-### Step 06: Synteny & Mapping (`06_synteny_and_mapping.sh`)
-
-**Purpose:** Analyze synteny conservation across genomes.
-
-**Inputs:**
-- Genome assemblies: `${GENOME_DIR}/*.fasta`
-- Nucleotide transcriptomes
-- Protein annotations
-
-**Outputs:**
-- `${RESULTS_DIR}/synteny/synteny_ids.txt` - Synteny-conserved gene IDs
-- `${RESULTS_DIR}/synteny/*.collinearity` - MCScanX collinear blocks
-- `${RESULTS_DIR}/mapping/*.bam` - Transcript mappings
-
-**Process:**
-1. **Transcript mapping:** minimap2 splice-aware alignment
-2. **BLAST databases:** Creates protein databases per genome
-3. **All-vs-all BLASTP:** Pairwise homology detection
-4. **MCScanX:** Identifies collinear synteny blocks
-5. **Visualization:** Synteny dot plots and karyotype views
-
----
-
-### Step 07: Candidate Ranking (`07_candidate_ranking.sh`)
-
-**Purpose:** Integrate all evidence to rank GPCR candidates using an improved multi-evidence algorithm.
-
-**Inputs:**
-- Candidate IDs from Step 02
-- Expression data
-- Phylogenetic trees from Step 04
-- dN/dS results from Step 05
-- Synteny directory from Step 06
-- Reference categories (from local database)
-
-**Outputs:**
-- `${RESULTS_DIR}/ranking/ranked_candidates_sorted.csv`
-- Ranking visualization plots
-
-**Improved Scoring Algorithm:**
-
-| Score | Description | Calculation |
-|-------|-------------|-------------|
-| `phylo_score` | Weighted phylogenetic proximity | `Σ(ref_weight / distance)` where chemoreceptor refs weighted 2× |
-| `purifying_score` | Purifying selection strength | `|log(omega)|` when omega < 1, boosted 1.5× if FDR-significant |
-| `positive_score` | Positive selection strength | `log(omega)` when omega > 1, boosted 1.5× if FDR-significant |
-| `synteny_score` | Quantitative synteny | `anchor_count / max_anchors` (0.0 to 1.0) |
-| `expression_score` | Expression level | From expression data file |
-| `lse_depth_score` | LSE clade depth | Tree depth if > 75th percentile |
-
-**Statistical Corrections:**
-- Benjamini-Hochberg FDR correction applied to all aBSREL p-values
-- Only branches with corrected p < 0.05 marked as significant
-
-**Evidence Completeness:**
-- Each candidate tracked for available evidence types
-- `evidence_completeness` score (0.0 to 1.0) indicates data availability
-- Confidence tiers assigned: High, Medium, Low
-
-**Final rank score:**
-```
-rank_score = (phylo_score × PHYLO_WEIGHT) +
-             (purifying_score × PURIFYING_WEIGHT) +
-             (positive_score × POSITIVE_WEIGHT) +
-             (synteny_score × SYNTENY_WEIGHT) +
-             (expression_score × EXPR_WEIGHT) +
-             (lse_depth_score × LSE_DEPTH_WEIGHT)
-```
-
-**Output columns:**
-- `id`, `rank_score`, `confidence_tier`, `evidence_completeness`
-- `phylo_score`, `purifying_score`, `positive_score`, `selection_significant`
-- `synteny_score`, `expression_score`, `has_expression_data`
-- `lse_depth_score`, `raw_tree_depth`
-
----
-
-### Step 08: Structural Analysis (`08_structural_analysis.sh`)
-
-**Purpose:** Predict structures and build structural phylogenies.
-
-**Inputs:**
-- Top-ranked candidates from Step 07
-- ASR sequences from Step 05
-
-**Outputs:**
-- `${RESULTS_DIR}/structural_analysis/alphafold/*.pdb` - Predicted structures
-- `${RESULTS_DIR}/structural_analysis/foldtree.tre` - Structural phylogeny
-- Structural vs. sequence tree comparison plots
-
-**Process:**
-1. **Diverse selection:** Selects phylogenetically diverse top candidates
-2. **AlphaFold:** Predicts 3D structures (GPU recommended)
-3. **GPCRdb references:** Fetches reference structures with retry logic
-4. **FoldTree:** Builds structural phylogeny using TMalign distances
-5. **Comparison:** Tanglegram of structural vs. sequence trees
-
----
-
-### Step 09: Report Generation (`09_report_generation.sh`)
-
-**Purpose:** Generate comprehensive PDF report.
-
-**Inputs:**
-- All results from previous steps
-- Visualization images
-
-**Outputs:**
-- `${RESULTS_DIR}/pipeline_report.pdf`
-
-**Process:**
-1. Dynamically finds available visualizations
-2. Generates LaTeX document with figures and methods summary
-3. Compiles to PDF with pdfLaTeX
+- `results/notung/reconciliation_summary.tsv` - Duplication/loss counts
+- `results/notung/expanded_orthogroups.txt` - Orthogroups with expansions
+- `results/notung/events_summary.json` - Per-species event counts
 
 ---
 
 ## Python Utilities
 
-### Core Scripts
+### New Analysis Scripts
 
 | Script | Purpose | Usage |
 |--------|---------|-------|
-| `setup_databases.py` | Download local databases for API-independent mode | `python3 setup_databases.py --db-dir databases` |
-| `rank_candidates.py` | Integrate evidence and rank candidates (improved) | `python3 rank_candidates.py <candidates> <expression> <phylo_dir> <selective_dir> <synteny_dir> <output>` |
-| `lse_refine.py` | Classify LSEs with NCBI Taxonomy (local DB support) | `python3 lse_refine.py <fasta> <tree> <output_prefix>` |
-| `select_deep_nodes.py` | Select deep ancestral nodes for ASR | `python3 select_deep_nodes.py <tree> <taxid> <min_distance>` |
-| `update_headers.py` | Standardize FASTA headers (Biopython) | `python3 update_headers.py <fasta> <id_map_output>` |
-| `parse_hhr.py` | Parse HHblits/HHsearch results | `python3 parse_hhr.py <input.hhr> <evalue> [output.txt]` |
-| `parse_absrel.py` | Parse HyPhy aBSREL JSON output | `python3 parse_absrel.py <input.json> <output.csv>` |
-| `fetch_ligands.py` | Fetch GPCRdb structures (local fallback) | `python3 fetch_ligands.py <output_dir> <ligand_csv> <terms> <species>` |
+| `scripts/expression_analysis.py` | Parse Salmon quant.sf, calculate tau index | `python3 expression_analysis.py <quant_dir> <candidates> <output_prefix>` |
+| `scripts/divergence_dating.py` | Estimate divergence times with calibrations | `python3 divergence_dating.py <tree> <output_prefix> [calibrations]` |
+| `scripts/convergent_evolution.py` | Detect convergent amino acid substitutions | `python3 convergent_evolution.py <alignment> <tree> <output_prefix>` |
+| `scripts/binding_site_prediction.py` | Predict ligand binding residues from structures | `python3 binding_site_prediction.py <pdb_dir> <sequences> <output_prefix>` |
+| `scripts/conservation_mapping.py` | Per-residue conservation with motif detection | `python3 conservation_mapping.py <alignment> <output_prefix> [pdb_dir]` |
+| `scripts/generate_ultrametric.R` | Convert ML tree to ultrametric using chronos | `Rscript generate_ultrametric.R <tree> <output> [model]` |
 
-### Visualization Scripts
+### Enhanced Scripts
 
-| Script | Purpose | Outputs |
-|--------|---------|---------|
-| `visualize_tree.py` | Tree visualization with coloring | PNG, PDF, SVG (basic, colored, circular) |
-| `plot_asr.py` | ASR sequences on tree | PNG with sequence length annotations |
-| `plot_synteny.py` | Synteny conservation plots | Dot plots, karyotype views |
-| `plot_ranking.py` | Candidate ranking barplots | Score breakdown visualization |
-| `plot_selective_pressure.py` | dN/dS distribution plots | Branch-wise selection visualization |
-| `plot_struct_vs_seq.py` | Tree comparison tanglegrams | Structural vs. sequence phylogeny |
-| `plot_phyloformer_iqtree.py` | Method comparison | Phyloformer vs. IQ-TREE trees |
-| `plot_heatmap.py` | Expression heatmaps | Clustered expression patterns |
-| `plot_pca.py` | PCA of sequence features | Dimensionality reduction plots |
-
-### Analysis Scripts
-
-| Script | Purpose |
-|--------|---------|
-| `select_diverse_candidates.py` | Select phylogenetically diverse candidates for structural analysis |
-| `cluster_structures.py` | Cluster predicted structures by similarity |
-| `test_phyloformer_models.py` | Evaluate Phyloformer model performance |
-| `compute_lrt.py` | Likelihood ratio tests for model comparison |
-| `prune_alignment.py` | Remove problematic sequences from alignments |
+| Script | New Features |
+|--------|--------------|
+| `rank_candidates.py` | Sensitivity analysis, cross-validation, rank stability metrics |
+| `functions.sh` | Checkpointing, provenance tracking, adaptive resource detection |
 
 ---
 
 ## Output Files
 
-### Key Results
+### New Key Results
 
 | File | Description |
 |------|-------------|
-| `results/ranking/ranked_candidates_sorted.csv` | **Primary output:** Ranked GPCR candidates |
-| `results/phylogenies/protein/all_berghia_refs.treefile` | Main phylogenetic tree |
-| `results/selective_pressure/absrel_results.csv` | dN/dS analysis results |
-| `results/synteny/synteny_ids.txt` | Synteny-conserved genes |
-| `results/asr/*_asr.fa` | Reconstructed ancestral sequences |
-| `results/structural_analysis/alphafold/*.pdb` | Predicted 3D structures |
-| `results/pipeline_report.pdf` | Comprehensive analysis report |
-
-### Intermediate Files
-
-| Directory | Contents |
-|-----------|----------|
-| `results/reference_sequences/` | Processed reference sequences and ID mappings |
-| `results/hmms/` | HMM profiles |
-| `results/chemogpcrs/` | Identified GPCR sequences and DeepTMHMM results |
-| `results/orthogroups/` | OrthoFinder clustering results |
-| `results/lse_classification/` | LSE categories |
-| `results/phylogenies/` | Trees, alignments, visualizations |
-| `results/selective_pressure/` | aBSREL results, codon alignments |
-| `results/mapping/` | BAM files from transcript mapping |
-| `results/logs/` | Execution logs and error files |
+| `results/ranking/sensitivity_analysis.csv` | Rank stability across weight perturbations |
+| `results/ranking/weight_importance.json` | Relative importance of each scoring component |
+| `results/classification/gpcr_classifications.tsv` | GPCR class and sub-family assignments |
+| `results/cafe/significant_expansions.tsv` | Statistically significant gene family changes |
+| `results/clustering/cluster_mapping.tsv` | Representative-to-cluster member mapping |
 
 ---
 
 ## Running the Pipeline
 
-### Local Execution
-
-Run steps sequentially:
+### Full Pipeline with New Steps
 
 ```bash
 # Source configuration
 source config.sh
 source functions.sh
 
-# Run each step
+# Core identification
 ./01_reference_processing.sh
 ./02_chemogpcrs_identification.sh
+./02a_cluster_sequences.sh        # NEW: Remove redundancy
+./02b_classify_gpcrs.sh           # NEW: Classify GPCRs
+
+# Orthology and evolution
 ./03_orthology_clustering.sh
 ./03a_busco_species_tree.sh
 ./03b_lse_classification.sh
+./03c_cafe_analysis.sh            # NEW: CAFE5 analysis
+./03d_notung_reconciliation.sh    # NEW: Gene tree reconciliation
+
+# Phylogenetics and selection
 ./04_phylogenetic_analysis.sh
 ./05_selective_pressure_and_asr.sh
 ./06_synteny_and_mapping.sh
+
+# Ranking and structure
 ./07_candidate_ranking.sh
 ./08_structural_analysis.sh
 ./09_report_generation.sh
 ```
 
-### SLURM Cluster Execution
+### Resume from Checkpoint
 
-Submit jobs with dependencies:
-
-```bash
-# Submit step 01
-jid1=$(sbatch --parsable 01_reference_processing.sh)
-
-# Submit step 02 (depends on 01)
-jid2=$(sbatch --parsable --dependency=afterok:$jid1 02_chemogpcrs_identification.sh)
-
-# Submit step 03 (depends on 02)
-jid3=$(sbatch --parsable --dependency=afterok:$jid2 03_orthology_clustering.sh)
-
-# Continue with remaining steps...
-```
-
-### Partial Execution
-
-Resume from a specific step using completion flags:
+The pipeline now includes checkpointing for automatic resume:
 
 ```bash
 # Check completed steps
-ls results/step_completed_*.txt
+ls results/checkpoints/
 
-# The pipeline automatically skips completed steps
-./04_phylogenetic_analysis.sh  # Will skip if already done
+# Resume automatically - completed steps are skipped
+./04_phylogenetic_analysis.sh
+
+# Force re-run of a step
+./04_phylogenetic_analysis.sh --force
+```
+
+### Run Mode Selection
+
+```bash
+# Run locally (no SLURM)
+export RUN_MODE=local
+./07_candidate_ranking.sh
+
+# Run with SLURM
+export RUN_MODE=slurm
+sbatch 07_candidate_ranking.sh
 ```
 
 ---
 
 ## Troubleshooting
 
-### Common Issues
+### New Common Issues
 
-**1. DeepTMHMM not found**
+**1. CD-HIT memory issues**
 ```
-Error: deeptmhmm: command not found
+Error: Not enough memory
 ```
-Solution: Download from DTU and add to PATH, or use Docker:
+Solution: Adjust memory limit:
 ```bash
-docker run --rm -v $(pwd):/data dtubioinformatics/deeptmhmm -f /data/input.fa
+export CDHIT_MEMORY=32000  # Increase to 32GB
 ```
 
-**2. Tree format errors**
+**2. CAFE5 ultrametric tree error**
 ```
-Error: Cannot parse tree file
+Error: Tree is not ultrametric
 ```
-Solution: Ensure IQ-TREE output with `format=1`:
-```python
-t = Tree(tree_file, format=1)  # For IQ-TREE with support values
-```
-
-**3. NCBI Taxonomy API rate limiting**
-```
-Warning: HTTPError 429 Too Many Requests
-```
-Solution: The pipeline uses lineage caching. For large datasets, consider pre-downloading taxonomy database.
-
-**4. AlphaFold memory issues**
-```
-Error: CUDA out of memory
-```
-Solution: Reduce batch size or use CPU mode:
+Solution: The pipeline uses chronos to convert trees. Check R installation:
 ```bash
-export GPU_ENABLED=false
+Rscript -e "library(ape); print('OK')"
 ```
 
-**5. MCScanX no collinear blocks**
+**3. InterProScan not found**
 ```
-Warning: No synteny blocks found
+Warning: InterProScan not available
 ```
-Solution: Ensure GFF files have correct format and genomes are from related species.
-
-### Validation Checks
-
-Run the validation suite:
-
+Solution: Install InterProScan or skip classification:
 ```bash
-# Check Python dependencies
-python3 -c "
-from Bio import SeqIO
-from ete3 import Tree
-import pandas as pd
-import numpy as np
-print('All Python dependencies OK')
-"
-
-# Verify tree loading
-python3 -c "
-from ete3 import Tree
-t = Tree('(A:0.1,B:0.2):0.3;')
-print(f'Tree has {len(t)} leaves')
-"
-
-# Test Biopython FASTA parsing
-python3 -c "
-from Bio import SeqIO
-import io
-fasta = '>test\nACGT'
-for r in SeqIO.parse(io.StringIO(fasta), 'fasta'):
-    print(f'Parsed: {r.id}, length {len(r.seq)}')
-"
+conda install -c bioconda interproscan
+# Or: pipeline falls back to domain-based classification
 ```
 
-### Log Files
-
-Check logs for detailed error messages:
-
+**4. Sensitivity analysis slow**
+```
+Sensitivity analysis taking too long
+```
+Solution: Reduce iterations:
 ```bash
-# View main pipeline log
-tail -f results/logs/pipeline.log
-
-# Check specific step errors
-cat results/logs/hmmsearch_conserved_berghia.err
-
-# Find all errors
-grep -r "Error" results/logs/
+export SENSITIVITY_ITERATIONS=50
 ```
 
 ---
@@ -963,7 +629,9 @@ And the underlying tools:
 - HH-suite: Steinegger et al. (2019) BMC Bioinformatics 20:473
 - IQ-TREE: Minh et al. (2020) Mol Biol Evol 37:1530-1534
 - OrthoFinder: Emms & Kelly (2019) Genome Biol 20:238
+- CAFE5: Mendes et al. (2020) Bioinformatics 36:5516-5518
 - HyPhy: Kosakovsky Pond et al. (2020) Mol Biol Evol 37:295-299
+- CD-HIT: Li & Godzik (2006) Bioinformatics 22:1658-1659
 - AlphaFold: Jumper et al. (2021) Nature 596:583-589
 
 ---

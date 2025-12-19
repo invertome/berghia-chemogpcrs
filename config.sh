@@ -49,6 +49,11 @@ export CDHIT="cd-hit"
 export CAFE="cafe5"
 export NOTUNG="java -jar ${BASE_DIR}/tools/Notung-2.9.jar"
 export RSCRIPT="Rscript"
+export INTERPROSCAN="interproscan.sh"
+
+# --- NOTUNG Parameters ---
+export NOTUNG_JAR="${BASE_DIR}/tools/Notung-2.9.jar"
+export NOTUNG_THRESHOLD=90  # Bootstrap threshold for rearrangement
 
 # --- Pipeline Parameters ---
 export TAXA=("taxid1" "taxid2" "taxid_berghia")

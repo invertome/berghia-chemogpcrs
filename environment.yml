@@ -1,0 +1,54 @@
+name: berghia-gpcr
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+
+dependencies:
+  # Core
+  - python=3.10
+  - pip
+
+  # Bioinformatics tools
+  - hmmer=3.3.2
+  - hhsuite=3.3.0
+  - mafft=7.520
+  - iqtree=2.2.2
+  - fasttree=2.1.11
+  - trimal=1.4.1
+  - clipkit=1.3.0
+  - cd-hit=4.8.1
+  - orthofinder=2.5.5
+  - hyphy=2.5.51
+  - minimap2=2.26
+  - samtools=1.17
+  - blast=2.14.0
+  - seqtk=1.4
+  - busco=5.4.7
+  - diamond=2.1.8
+
+  # R and packages
+  - r-base=4.3
+  - r-ape=5.7
+
+  # Optional tools (uncomment if needed)
+  # - mrbayes=3.2.7
+  # - raxml-ng=1.2.0
+  # - cafe=5.0.0
+  # - tmalign
+
+  # Build tools
+  - make
+  - gcc
+  - openjdk=11
+
+  # Python packages via pip
+  - pip:
+    - biopython>=1.79
+    - ete3>=3.1.2
+    - pandas>=1.5.0
+    - numpy>=1.21.0
+    - matplotlib>=3.6.0
+    - seaborn>=0.12.0
+    - scipy>=1.9.0
+    - requests>=2.28.0
