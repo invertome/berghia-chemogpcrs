@@ -144,7 +144,7 @@ def lookup_taxid_api(species_name: str, entrez) -> Optional[int]:
         Taxonomy ID or None if not found
     """
     try:
-        # Search taxonomy database
+        # Try exact scientific name match first
         handle = entrez.esearch(db="taxonomy", term=f'"{species_name}"[Scientific Name]')
         record = entrez.read(handle)
         handle.close()
@@ -152,11 +152,19 @@ def lookup_taxid_api(species_name: str, entrez) -> Optional[int]:
         if record["IdList"]:
             return int(record["IdList"][0])
 
-        # Try without quotes for partial matches
+        # Try without [Scientific Name] qualifier (catches synonyms and common names)
+        handle = entrez.esearch(db="taxonomy", term=f'"{species_name}"')
+        record = entrez.read(handle)
+        handle.close()
+
+        if record["IdList"]:
+            return int(record["IdList"][0])
+
+        # Try binomial only (genus + species, no subspecies)
         parts = species_name.split()
         if len(parts) >= 2:
             binomial = f"{parts[0]} {parts[1]}"
-            handle = entrez.esearch(db="taxonomy", term=f'{binomial}[Scientific Name]')
+            handle = entrez.esearch(db="taxonomy", term=binomial)
             record = entrez.read(handle)
             handle.close()
 
