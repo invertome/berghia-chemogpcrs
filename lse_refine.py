@@ -320,6 +320,7 @@ if __name__ == '__main__':
     # Support both old positional args and new argparse style
     if len(sys.argv) >= 7 and not sys.argv[1].startswith('-'):
         # Legacy mode: positional arguments
+        # Args: og_file id_map_file species_tree_file gene_tree_file synteny_file output_dir
         og_file = sys.argv[1]
         id_map_file = sys.argv[2]
         species_tree_file = sys.argv[3]
@@ -327,16 +328,22 @@ if __name__ == '__main__':
         synteny_file = sys.argv[5]
         output_dir = sys.argv[6]
 
-        # Convert to argparse-style call
-        sys.argv = [
-            sys.argv[0],
-            og_file,
-            '--id-map', id_map_file,
-            '--species-tree', species_tree_file,
-            '--gene-tree', gene_tree_file,
-            '--synteny-ids', synteny_file,
-            '--output-dir', output_dir,
-            '--exclude-refs'
-        ]
+        # Convert to argparse-style call, only adding args for non-empty file paths
+        new_argv = [sys.argv[0], og_file]
+
+        if id_map_file and os.path.exists(id_map_file):
+            new_argv.extend(['--id-map', id_map_file])
+        if species_tree_file and os.path.exists(species_tree_file):
+            new_argv.extend(['--species-tree', species_tree_file])
+        if gene_tree_file and os.path.exists(gene_tree_file):
+            new_argv.extend(['--gene-tree', gene_tree_file])
+        if synteny_file and os.path.exists(synteny_file):
+            new_argv.extend(['--synteny-ids', synteny_file])
+
+        new_argv.extend(['--output-dir', output_dir])
+        # Note: --exclude-refs is typically desired for LSE classification
+        new_argv.append('--exclude-refs')
+
+        sys.argv = new_argv
 
     main()

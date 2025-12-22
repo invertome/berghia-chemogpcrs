@@ -146,6 +146,14 @@ fi
 python3 "${SCRIPTS_DIR}/visualize_tree.py" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.treefile" "${RESULTS_DIR}/phylogenies/visualizations/all_berghia_refs"
 
 # --- LSE Trees ---
+# Parse LSE levels from config (same format as 03b_lse_classification.sh)
+declare -A lse_taxids
+for level in "${LSE_LEVELS[@]}"; do
+    level_name=$(echo "$level" | cut -d':' -f1)
+    taxids=$(echo "$level" | cut -d':' -f2 | tr ',' ' ')
+    lse_taxids["$level_name"]="$taxids"
+done
+
 for level in "${!lse_taxids[@]}"; do
     if [ -f "${RESULTS_DIR}/lse_classification/lse_${level}.fa" ] && [ ! -f "${RESULTS_DIR}/step_completed_lse_${level}_iqtree.txt" ]; then
         mkdir -p "${RESULTS_DIR}/phylogenies/protein/lse_${level}"
@@ -162,30 +170,47 @@ for level in "${!lse_taxids[@]}"; do
 done
 
 # --- Orthogroup Trees ---
-ORTHOGROUPS=("${RESULTS_DIR}/orthogroups/OrthoFinder/Results"*/Orthogroups/OG*.fa)
+# Use manifest if available, otherwise fall back to globbing
+MANIFEST_FILE="${RESULTS_DIR}/orthogroup_manifest.tsv"
+OG_COUNT=$(get_orthogroup_count "$MANIFEST_FILE")
 
-# Handle case where no orthogroups exist
-if [ ${#ORTHOGROUPS[@]} -eq 0 ] || [ ! -f "${ORTHOGROUPS[0]}" ]; then
+if [ "$OG_COUNT" -eq 0 ]; then
     log "Warning: No orthogroups found for phylogenetic analysis"
+    # Still create completion flag since main tree may have been built
+    if [ -f "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.treefile" ]; then
+        touch "${RESULTS_DIR}/step_completed_04.txt"
+    fi
     exit 0
 fi
 
-# Handle SLURM array indexing - skip if index exceeds available orthogroups
+# Handle SLURM array indexing using new helper
 if [ -n "$SLURM_ARRAY_TASK_ID" ]; then
-    if [ "$SLURM_ARRAY_TASK_ID" -ge ${#ORTHOGROUPS[@]} ]; then
-        log "Skipping: Array index ${SLURM_ARRAY_TASK_ID} exceeds available orthogroups (${#ORTHOGROUPS[@]})"
-        exit 0
+    validate_array_index "$SLURM_ARRAY_TASK_ID" "$OG_COUNT"
+
+    # Get orthogroup name from manifest
+    if [ -f "$MANIFEST_FILE" ]; then
+        base=$(get_orthogroup_by_index "$SLURM_ARRAY_TASK_ID" "$MANIFEST_FILE")
+    else
+        # Fallback to globbing
+        ORTHOGROUPS=("${RESULTS_DIR}/orthogroups/OrthoFinder/Results"*/Orthogroups/OG*.fa)
+        og="${ORTHOGROUPS[$SLURM_ARRAY_TASK_ID]}"
+        base=$(basename "$og" .fa)
     fi
-    og="${ORTHOGROUPS[$SLURM_ARRAY_TASK_ID]}"
 else
-    # Non-array mode: process all orthogroups sequentially (for testing)
+    # Non-array mode: process first orthogroup only (for testing)
     log "Running in non-array mode, processing first orthogroup only"
-    og="${ORTHOGROUPS[0]}"
+    if [ -f "$MANIFEST_FILE" ]; then
+        base=$(get_orthogroup_by_index 0 "$MANIFEST_FILE")
+    else
+        ORTHOGROUPS=("${RESULTS_DIR}/orthogroups/OrthoFinder/Results"*/Orthogroups/OG*.fa)
+        base=$(basename "${ORTHOGROUPS[0]}" .fa)
+    fi
 fi
 
-[ -z "$og" ] || [ ! -f "$og" ] && { log "Skipping missing orthogroup"; exit 0; }
+# Find the orthogroup FASTA file
+og=$(find "${RESULTS_DIR}/orthogroups" -name "${base}.fa" -type f 2>/dev/null | head -1)
+[ -z "$og" ] || [ ! -f "$og" ] && { log "Skipping missing orthogroup: ${base}"; exit 0; }
 
-base=$(basename "$og" .fa)
 if [ ! -f "${RESULTS_DIR}/step_completed_${base}_iqtree.txt" ]; then
     run_command "${base}_mafft" ${MAFFT} --auto --thread "${CPUS}" "$og" > "${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa"
     check_alignment "${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" || { log "Error: Alignment quality check failed for ${base}"; exit 1; }
@@ -194,8 +219,21 @@ if [ ! -f "${RESULTS_DIR}/step_completed_${base}_iqtree.txt" ]; then
     # FastTree seed strategy for orthogroup trees
     run_command "${base}_fasttree" ${FASTTREE} -lg -gamma "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa" > "${RESULTS_DIR}/phylogenies/protein/${base}_fasttree.tre"
     run_command "${base}_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa" -m "${IQTREE_MODEL}" -B "${IQTREE_BOOTSTRAP}" -nt "${CPUS}" -t "${RESULTS_DIR}/phylogenies/protein/${base}_fasttree.tre" -pre "${RESULTS_DIR}/phylogenies/protein/${base}"
+
+    # Create per-orthogroup completion flag
+    touch "${RESULTS_DIR}/step_completed_${base}_iqtree.txt"
+
+    # Also create array checkpoint for resume capability
+    [ -n "$SLURM_ARRAY_TASK_ID" ] && create_array_checkpoint "04_phylo" "$SLURM_ARRAY_TASK_ID"
 fi
 
 python3 "${SCRIPTS_DIR}/visualize_tree.py" "${RESULTS_DIR}/phylogenies/protein/${base}.treefile" "${RESULTS_DIR}/phylogenies/visualizations/${base}"
 
 log "Phylogenetic analysis completed for ${base}."
+
+# Create overall completion flag when main tree is built (checked by downstream steps)
+# Note: This flag is created even if not all array tasks are complete, since downstream
+# steps only require the main all_berghia_refs tree
+if [ -f "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.treefile" ]; then
+    touch "${RESULTS_DIR}/step_completed_04.txt"
+fi

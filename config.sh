@@ -119,12 +119,16 @@ export CHEMOSENSORY_TISSUES="rhinophore,oral_veil,tentacle,cephalic"  # Tissues 
 export RUN_MODE="${RUN_MODE:-slurm}"
 
 # --- Ranking Weights ---
-export PHYLO_WEIGHT=2
+# These weights control how different evidence types contribute to candidate ranking.
+# Higher weights give more importance to that criterion.
+export PHYLO_WEIGHT=2           # Weight for phylogenetic distance to references
 export PURIFYING_WEIGHT=1       # Weight for purifying selection (omega < 1)
 export POSITIVE_WEIGHT=1        # Weight for positive selection (omega > 1)
-export SYNTENY_WEIGHT=3
-export EXPR_WEIGHT=1
-export LSE_DEPTH_WEIGHT=1
+export SYNTENY_WEIGHT=3         # Weight for synteny conservation
+                                # NOTE: Set to 0 if you don't have multiple genomes for synteny analysis.
+                                # Synteny analysis requires genome assemblies + annotations for comparison species.
+export EXPR_WEIGHT=1            # Weight for expression data (tissue-specific enrichment)
+export LSE_DEPTH_WEIGHT=1       # Weight for lineage-specific expansion depth
 
 # --- Reference Weighting (for phylogenetic distance) ---
 # These weights control how references affect candidate ranking in rank_candidates.py.

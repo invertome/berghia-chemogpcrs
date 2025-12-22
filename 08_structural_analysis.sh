@@ -10,7 +10,8 @@
 #SBATCH --error=${LOGS_DIR}/08_structural_analysis_%j.err
 #SBATCH --time=${DEFAULT_TIME}
 #SBATCH $(scale_resources)
-[ "$GPU_ENABLED" = true ] && echo "#SBATCH --gres=gpu:1"
+# Note: To enable GPU, uncomment the line below or submit with: sbatch --gres=gpu:1 08_structural_analysis.sh
+##SBATCH --gres=gpu:1
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=${SLURM_EMAIL}
 
@@ -20,8 +21,8 @@ source functions.sh
 # Create output directories
 mkdir -p "${RESULTS_DIR}/structural_analysis/alphafold" "${RESULTS_DIR}/structural_analysis/references" "${RESULTS_DIR}/structural_analysis/all_pdb" "${LOGS_DIR}" || { log "Error: Cannot create directories"; exit 1; }
 
-# Check dependency
-check_file "${RESULTS_DIR}/step_completed_rank_candidates.txt"
+# Check dependency (step 07 creates step_completed_07.txt)
+check_file "${RESULTS_DIR}/step_completed_07.txt"
 
 log "Starting structural analysis."
 

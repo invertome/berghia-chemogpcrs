@@ -40,4 +40,6 @@ run_command "rank_candidates" python3 "${SCRIPTS_DIR}/rank_candidates.py" \
 # Generate plots
 python3 "${SCRIPTS_DIR}/plot_ranking.py" "${RESULTS_DIR}/ranking/ranked_candidates_sorted.csv" "${RESULTS_DIR}/ranking/ranking_plot" || log "Warning: Ranking plot failed"
 
+# Create completion flag
+touch "${RESULTS_DIR}/step_completed_07.txt"
 log "Candidate ranking completed."

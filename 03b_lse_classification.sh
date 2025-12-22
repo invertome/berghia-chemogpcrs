@@ -20,8 +20,8 @@ source functions.sh
 # Create output directory
 mkdir -p "${RESULTS_DIR}/lse_classification" "${LOGS_DIR}" || { log "Error: Cannot create directories"; exit 1; }
 
-# Check dependencies
-check_file "${RESULTS_DIR}/step_completed_orthofinder.txt"
+# Check dependencies (step 03 creates step_completed_03.txt)
+check_file "${RESULTS_DIR}/step_completed_03.txt"
 
 log "Starting LSE classification."
 

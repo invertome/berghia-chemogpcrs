@@ -385,6 +385,17 @@ validate_parameter_ranges() {
         print_error "Ranking weights sum to 0 - no scoring will occur"
     fi
 
+    # Check synteny weight vs genome availability
+    if [ "${SYNTENY_WEIGHT:-0}" -gt 0 ]; then
+        local genome_count=$(find "${GENOME_DIR}" -name "*.fasta" -o -name "*.fa" 2>/dev/null | wc -l)
+        if [ "$genome_count" -lt 2 ]; then
+            print_warning "SYNTENY_WEIGHT=${SYNTENY_WEIGHT} but found only ${genome_count} genome(s)"
+            print_fix "Synteny analysis requires multiple genomes. Set SYNTENY_WEIGHT=0 if you don't have comparison genomes"
+        else
+            print_ok "SYNTENY_WEIGHT=${SYNTENY_WEIGHT} with ${genome_count} genomes available"
+        fi
+    fi
+
     # Check CPU count
     if [ -n "${CPUS}" ]; then
         local available_cpus=$(nproc 2>/dev/null || echo 1)

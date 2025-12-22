@@ -41,12 +41,24 @@ def extract_lnL(filepath):
 try:
     lnL_null = extract_lnL(null_file)
     lnL_alt = extract_lnL(alt_file)
+except FileNotFoundError as e:
+    print(f"Error: File not found for {base}: {e}", file=sys.stderr)
+    sys.exit(1)
+except ValueError as e:
+    print(f"Error: Could not parse lnL for {base}: {e}", file=sys.stderr)
+    sys.exit(1)
 except Exception as e:
     print(f"Error processing {base}: {e}", file=sys.stderr)
-    lnL_null, lnL_alt = 0, 0
+    sys.exit(1)
 
 # Compute LRT statistic and p-value
 chi2_stat = 2 * (lnL_alt - lnL_null)
+
+# Validate the chi2 statistic (should be non-negative for valid comparison)
+if chi2_stat < 0:
+    print(f"Warning: Negative chi2 statistic for {base} (lnL_null={lnL_null}, lnL_alt={lnL_alt})", file=sys.stderr)
+    print(f"This may indicate model fitting issues or swapped null/alt files", file=sys.stderr)
+
 p_value = chi2.sf(chi2_stat, 1) if chi2_stat > 0 else 1.0
 
 # Append results to CSV

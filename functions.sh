@@ -774,3 +774,344 @@ get_dataset_stats() {
         echo "Total sequences: $total_seqs"
     fi
 }
+
+# =============================================================================
+# STEP INITIALIZATION AND VALIDATION
+# =============================================================================
+# These functions reduce boilerplate in pipeline step scripts.
+
+# --- Initialize Pipeline Step ---
+# Arguments: $1 - Step number (e.g., "01", "03b")
+#            $2 - Step name (e.g., "reference_processing")
+#            $3+ - Prerequisite step numbers (e.g., "01" "02")
+# Creates output directories, checks prerequisites, and sets up logging.
+# Usage: init_step "04" "phylogenetic_analysis" "03"
+init_step() {
+    local step_num="$1"
+    local step_name="$2"
+    shift 2
+    local prereqs=("$@")
+
+    # Export step info for use by other functions
+    export CURRENT_STEP_NUM="$step_num"
+    export CURRENT_STEP_NAME="$step_name"
+
+    # Create required directories
+    mkdir -p "${LOGS_DIR}" "${RESULTS_DIR}" || {
+        echo "Error: Cannot create directories" >&2
+        exit 1
+    }
+
+    # Initialize pipeline if not already done
+    [ -z "$PIPELINE_RUN_ID" ] && init_pipeline
+
+    log "=== Step ${step_num}: ${step_name} ==="
+
+    # Check prerequisites
+    for prereq in "${prereqs[@]}"; do
+        local prereq_file="${RESULTS_DIR}/step_completed_${prereq}.txt"
+        if [ ! -f "$prereq_file" ]; then
+            log --level=ERROR "Prerequisite not met: step ${prereq} has not completed"
+            log --level=ERROR "Expected file: ${prereq_file}"
+            exit 1
+        fi
+    done
+
+    # Detect available resources
+    detect_resources
+
+    log "Starting ${step_name} (step ${step_num})"
+}
+
+# --- Complete Pipeline Step ---
+# Arguments: $1 - Step number (optional, uses CURRENT_STEP_NUM if not provided)
+# Creates completion flag and logs success.
+complete_step() {
+    local step_num="${1:-$CURRENT_STEP_NUM}"
+    local step_name="${CURRENT_STEP_NAME:-unknown}"
+
+    touch "${RESULTS_DIR}/step_completed_${step_num}.txt"
+    log "Step ${step_num} (${step_name}) completed successfully."
+}
+
+# --- Validate Output Files ---
+# Arguments: $1+ - Expected output files
+# Options: --warn-only (don't exit on missing files)
+# Returns: 0 if all files exist, 1 otherwise (exits unless --warn-only)
+validate_outputs() {
+    local warn_only=false
+    local files=()
+
+    # Parse arguments
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --warn-only) warn_only=true; shift ;;
+            *) files+=("$1"); shift ;;
+        esac
+    done
+
+    local missing=()
+    local empty=()
+
+    for file in "${files[@]}"; do
+        if [ ! -e "$file" ]; then
+            missing+=("$file")
+        elif [ -f "$file" ] && [ ! -s "$file" ]; then
+            empty+=("$file")
+        fi
+    done
+
+    if [ ${#missing[@]} -gt 0 ] || [ ${#empty[@]} -gt 0 ]; then
+        if [ ${#missing[@]} -gt 0 ]; then
+            log --level=ERROR "Missing output files:"
+            for f in "${missing[@]}"; do
+                log --level=ERROR "  - $f"
+            done
+        fi
+        if [ ${#empty[@]} -gt 0 ]; then
+            log --level=WARN "Empty output files:"
+            for f in "${empty[@]}"; do
+                log --level=WARN "  - $f"
+            done
+        fi
+
+        if [ "$warn_only" = true ]; then
+            return 1
+        else
+            exit 1
+        fi
+    fi
+
+    return 0
+}
+
+# --- Validate Directory with Expected Files ---
+# Arguments: $1 - Directory path
+#            $2 - Minimum file count (default: 1)
+#            $3 - File pattern (default: "*")
+# Returns: 0 if valid, 1 otherwise
+validate_output_dir() {
+    local dir="$1"
+    local min_count="${2:-1}"
+    local pattern="${3:-*}"
+
+    if [ ! -d "$dir" ]; then
+        log --level=ERROR "Output directory does not exist: $dir"
+        return 1
+    fi
+
+    local count=$(find "$dir" -maxdepth 1 -name "$pattern" -type f | wc -l)
+    if [ "$count" -lt "$min_count" ]; then
+        log --level=ERROR "Output directory has insufficient files: $dir"
+        log --level=ERROR "  Expected at least $min_count files matching '$pattern', found $count"
+        return 1
+    fi
+
+    return 0
+}
+
+# =============================================================================
+# ORTHOGROUP MANIFEST FUNCTIONS
+# =============================================================================
+# These functions create and read manifest files for orthogroup tracking.
+
+# --- Create Orthogroup Manifest ---
+# Arguments: $1 - OrthoFinder results directory
+#            $2 - Output manifest file (default: orthogroup_manifest.tsv)
+# Creates a TSV with orthogroup metadata for array job coordination.
+create_orthogroup_manifest() {
+    local orthofinder_dir="$1"
+    local manifest_file="${2:-${RESULTS_DIR}/orthogroup_manifest.tsv}"
+
+    # Find the latest OrthoFinder results
+    local results_dir=$(find "$orthofinder_dir" -maxdepth 2 -type d -name "Results_*" | sort -r | head -1)
+    if [ -z "$results_dir" ]; then
+        log --level=ERROR "No OrthoFinder Results directory found in $orthofinder_dir"
+        return 1
+    fi
+
+    local orthogroups_file="${results_dir}/Orthogroups/Orthogroups.tsv"
+    if [ ! -f "$orthogroups_file" ]; then
+        log --level=ERROR "Orthogroups.tsv not found: $orthogroups_file"
+        return 1
+    fi
+
+    # Create manifest header
+    echo -e "index\torthogroup\tnum_seqs\thas_berghia\thas_reference" > "$manifest_file"
+
+    # Parse orthogroups and create manifest
+    local index=0
+    tail -n +2 "$orthogroups_file" | while IFS=$'\t' read -r og rest; do
+        # Count sequences (tab-separated columns after OG name)
+        local num_seqs=$(echo "$rest" | tr '\t' '\n' | grep -v "^$" | wc -l)
+
+        # Check for Berghia and reference sequences
+        local has_berghia="false"
+        local has_reference="false"
+
+        if echo "$rest" | grep -qi "berghia\|${BERGHIA_TAXID:-taxid_berghia}"; then
+            has_berghia="true"
+        fi
+
+        if echo "$rest" | grep -q "ref_"; then
+            has_reference="true"
+        fi
+
+        echo -e "${index}\t${og}\t${num_seqs}\t${has_berghia}\t${has_reference}" >> "$manifest_file"
+        index=$((index + 1))
+    done
+
+    local total_ogs=$(tail -n +2 "$manifest_file" | wc -l)
+    log "Created orthogroup manifest: $manifest_file ($total_ogs orthogroups)"
+    echo "$manifest_file"
+}
+
+# --- Get Orthogroup Count from Manifest ---
+# Arguments: $1 - Manifest file (optional, uses default location)
+# Returns: Number of orthogroups
+get_orthogroup_count() {
+    local manifest_file="${1:-${RESULTS_DIR}/orthogroup_manifest.tsv}"
+
+    if [ ! -f "$manifest_file" ]; then
+        # Fall back to counting directories
+        local og_dirs=$(find "${RESULTS_DIR}/phylogenies" -maxdepth 1 -type d -name "OG*" 2>/dev/null | wc -l)
+        echo "$og_dirs"
+        return
+    fi
+
+    tail -n +2 "$manifest_file" | wc -l
+}
+
+# --- Get Orthogroup by Index ---
+# Arguments: $1 - Index (0-based)
+#            $2 - Manifest file (optional)
+# Returns: Orthogroup name (e.g., "OG0000001")
+get_orthogroup_by_index() {
+    local index="$1"
+    local manifest_file="${2:-${RESULTS_DIR}/orthogroup_manifest.tsv}"
+
+    if [ ! -f "$manifest_file" ]; then
+        log --level=ERROR "Manifest file not found: $manifest_file"
+        return 1
+    fi
+
+    # Add 2 to skip header (awk is 1-based, header is line 1)
+    local line_num=$((index + 2))
+    awk -F'\t' "NR==$line_num {print \$2}" "$manifest_file"
+}
+
+# --- Filter Orthogroups for Processing ---
+# Arguments: $1 - Manifest file
+#            $2+ - Filter options
+# Options: --with-berghia (only OGs containing Berghia)
+#          --with-reference (only OGs containing references)
+#          --min-seqs=N (minimum sequence count)
+# Returns: Space-separated list of orthogroup names
+filter_orthogroups() {
+    local manifest_file="$1"
+    shift
+
+    local with_berghia=false
+    local with_reference=false
+    local min_seqs=0
+
+    # Parse options
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --with-berghia) with_berghia=true; shift ;;
+            --with-reference) with_reference=true; shift ;;
+            --min-seqs=*) min_seqs="${1#--min-seqs=}"; shift ;;
+            *) shift ;;
+        esac
+    done
+
+    awk -F'\t' -v berghia="$with_berghia" -v ref="$with_reference" -v min="$min_seqs" '
+        NR > 1 {
+            if ($3 >= min) {
+                if (berghia == "true" && $4 != "true") next
+                if (ref == "true" && $5 != "true") next
+                print $2
+            }
+        }
+    ' "$manifest_file" | tr '\n' ' ' | sed 's/ $//'
+}
+
+# =============================================================================
+# ARRAY JOB HELPERS
+# =============================================================================
+# Functions to help with SLURM array job coordination.
+
+# --- Validate Array Index ---
+# Arguments: $1 - Array task ID (SLURM_ARRAY_TASK_ID)
+#            $2 - Maximum valid index
+# Returns: 0 if valid, exits with error if invalid
+validate_array_index() {
+    local task_id="$1"
+    local max_index="$2"
+
+    if [ -z "$task_id" ]; then
+        log --level=ERROR "SLURM_ARRAY_TASK_ID is not set"
+        exit 1
+    fi
+
+    if [ "$task_id" -ge "$max_index" ]; then
+        log "Array task $task_id exceeds orthogroup count ($max_index). Exiting gracefully."
+        exit 0
+    fi
+}
+
+# --- Create Array Job Checkpoint ---
+# Arguments: $1 - Step name
+#            $2 - Array task ID
+# Creates a per-task checkpoint for resume capability
+create_array_checkpoint() {
+    local step_name="$1"
+    local task_id="$2"
+    local checkpoint_dir="${RESULTS_DIR}/checkpoints/${step_name}"
+
+    mkdir -p "$checkpoint_dir"
+    touch "${checkpoint_dir}/task_${task_id}.done"
+}
+
+# --- Check Array Job Completion ---
+# Arguments: $1 - Step name
+#            $2 - Expected task count
+# Returns: 0 if all tasks completed, 1 otherwise
+check_array_completion() {
+    local step_name="$1"
+    local expected_count="$2"
+    local checkpoint_dir="${RESULTS_DIR}/checkpoints/${step_name}"
+
+    if [ ! -d "$checkpoint_dir" ]; then
+        return 1
+    fi
+
+    local completed=$(find "$checkpoint_dir" -name "task_*.done" | wc -l)
+    if [ "$completed" -ge "$expected_count" ]; then
+        return 0
+    fi
+
+    log "Array job ${step_name}: $completed / $expected_count tasks completed"
+    return 1
+}
+
+# --- Get Incomplete Array Tasks ---
+# Arguments: $1 - Step name
+#            $2 - Total task count
+# Returns: Comma-separated list of incomplete task IDs (for --array resubmission)
+get_incomplete_tasks() {
+    local step_name="$1"
+    local total_count="$2"
+    local checkpoint_dir="${RESULTS_DIR}/checkpoints/${step_name}"
+
+    local incomplete=()
+    for i in $(seq 0 $((total_count - 1))); do
+        if [ ! -f "${checkpoint_dir}/task_${i}.done" ]; then
+            incomplete+=("$i")
+        fi
+    done
+
+    # Output as comma-separated for SLURM --array format
+    IFS=','
+    echo "${incomplete[*]}"
+}

@@ -8,8 +8,10 @@
 
 import sys
 from ete3 import Tree
+import numpy as np
 import pandas as pd
 from scipy.cluster.hierarchy import linkage, fcluster
+from scipy.spatial.distance import squareform
 
 tree_file = sys.argv[1]
 ranking_file = sys.argv[2]
@@ -25,18 +27,20 @@ if len(candidates_in_tree) <= num_candidates:
     selected_ids = candidates_in_tree
 else:
     # Compute distance matrix from tree
-    dist_matrix = []
-    for i in range(len(candidates_in_tree)):
-        row = []
-        for j in range(len(candidates_in_tree)):
-            if i == j:
-                row.append(0)
-            else:
-                row.append(t.get_distance(candidates_in_tree[i], candidates_in_tree[j]))
-        dist_matrix.append(row)
-    
+    n = len(candidates_in_tree)
+    dist_matrix = np.zeros((n, n))
+    for i in range(n):
+        for j in range(i + 1, n):
+            dist = t.get_distance(candidates_in_tree[i], candidates_in_tree[j])
+            dist_matrix[i, j] = dist
+            dist_matrix[j, i] = dist
+
+    # Convert to condensed distance matrix for scipy linkage
+    # linkage() expects a 1D condensed distance matrix, not a 2D square matrix
+    condensed_dist = squareform(dist_matrix)
+
     # Perform hierarchical clustering
-    linkage_matrix = linkage(dist_matrix, method='average')
+    linkage_matrix = linkage(condensed_dist, method='average')
     clusters = fcluster(linkage_matrix, t=num_candidates, criterion='maxclust')
     
     # Select highest-ranked candidate per cluster

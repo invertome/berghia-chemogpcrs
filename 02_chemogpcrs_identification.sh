@@ -19,8 +19,8 @@ source functions.sh
 # Create output directories
 mkdir -p "${RESULTS_DIR}/chemogpcrs" "${RESULTS_DIR}/hhdb" "${LOGS_DIR}" || { log "Error: Cannot create directories"; exit 1; }
 
-# Check dependency
-check_file "${RESULTS_DIR}/step_completed_ref_id_map.txt"
+# Check dependency (step 01 creates step_completed_01.txt)
+check_file "${RESULTS_DIR}/step_completed_01.txt"
 
 log "Starting chemoreceptive GPCR identification."
 

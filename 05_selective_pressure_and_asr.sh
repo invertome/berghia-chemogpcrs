@@ -26,30 +26,40 @@ check_file "${RESULTS_DIR}/step_completed_lse_classification.txt"
 
 log "Starting selective pressure and ASR analysis."
 
-# Get orthogroups
-ORTHOGROUPS=("${RESULTS_DIR}/orthogroups/OrthoFinder/Results"*/Orthogroups/OG*.fa)
+# Get orthogroup count using manifest (preferred) or fallback to globbing
+MANIFEST_FILE="${RESULTS_DIR}/orthogroup_manifest.tsv"
+OG_COUNT=$(get_orthogroup_count "$MANIFEST_FILE")
 
-# Handle case where no orthogroups exist
-if [ ${#ORTHOGROUPS[@]} -eq 0 ] || [ ! -f "${ORTHOGROUPS[0]}" ]; then
+if [ "$OG_COUNT" -eq 0 ]; then
     log "Error: No orthogroups found"
     exit 1
 fi
 
-# Handle SLURM array indexing - skip if index exceeds available orthogroups
+# Handle SLURM array indexing using helper function
 if [ -n "$SLURM_ARRAY_TASK_ID" ]; then
-    if [ "$SLURM_ARRAY_TASK_ID" -ge ${#ORTHOGROUPS[@]} ]; then
-        log "Skipping: Array index ${SLURM_ARRAY_TASK_ID} exceeds available orthogroups (${#ORTHOGROUPS[@]})"
-        exit 0
+    validate_array_index "$SLURM_ARRAY_TASK_ID" "$OG_COUNT"
+
+    # Get orthogroup name from manifest or fallback to globbing
+    if [ -f "$MANIFEST_FILE" ]; then
+        base=$(get_orthogroup_by_index "$SLURM_ARRAY_TASK_ID" "$MANIFEST_FILE")
+    else
+        ORTHOGROUPS=("${RESULTS_DIR}/orthogroups/OrthoFinder/Results"*/Orthogroups/OG*.fa)
+        og="${ORTHOGROUPS[$SLURM_ARRAY_TASK_ID]}"
+        base=$(basename "$og" .fa)
     fi
-    og="${ORTHOGROUPS[$SLURM_ARRAY_TASK_ID]}"
 else
     # Non-array mode: process first orthogroup (for testing)
-    og="${ORTHOGROUPS[0]}"
+    if [ -f "$MANIFEST_FILE" ]; then
+        base=$(get_orthogroup_by_index 0 "$MANIFEST_FILE")
+    else
+        ORTHOGROUPS=("${RESULTS_DIR}/orthogroups/OrthoFinder/Results"*/Orthogroups/OG*.fa)
+        base=$(basename "${ORTHOGROUPS[0]}" .fa)
+    fi
 fi
 
-[ -z "$og" ] || [ ! -f "$og" ] && { log "Skipping missing orthogroup"; exit 0; }
-
-base=$(basename "$og" .fa)
+# Find the orthogroup FASTA file
+og=$(find "${RESULTS_DIR}/orthogroups" -name "${base}.fa" -type f 2>/dev/null | head -1)
+[ -z "$og" ] || [ ! -f "$og" ] && { log "Skipping missing orthogroup: ${base}"; exit 0; }
 # Use centralized metadata lookup to get taxids (excludes references)
 taxids=$(get_taxids_from_fasta "$og" --exclude-refs)
 taxa_count=$(echo "$taxids" | wc -w)
@@ -254,9 +264,12 @@ fi
 # Create completion flag for this orthogroup
 touch "${RESULTS_DIR}/selective_pressure/step_completed_${base}.txt"
 
+# Create array checkpoint for resume capability
+[ -n "$SLURM_ARRAY_TASK_ID" ] && create_array_checkpoint "05_selective" "$SLURM_ARRAY_TASK_ID"
+
 log "Selective pressure and ASR completed for ${base}."
 
-# If this is the last array job, create overall completion flag
-if [ -n "$SLURM_ARRAY_TASK_ID" ] && [ "$SLURM_ARRAY_TASK_ID" -eq $((${#ORTHOGROUPS[@]} - 1)) ]; then
-    touch "${RESULTS_DIR}/step_completed_selective_pressure.txt"
-fi
+# Create overall step completion flag
+# Note: We create this flag after each task completes, since downstream steps
+# can start processing as results become available
+touch "${RESULTS_DIR}/step_completed_05.txt"

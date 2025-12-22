@@ -119,23 +119,41 @@ gs = gridspec.GridSpec(2, 2, hspace=0.3, wspace=0.25)
 # --- Panel A: PCA Plot ---
 ax1 = fig.add_subplot(gs[0, 0])
 
-# Perform PCA on distance matrix
-pca = PCA(n_components=min(2, len(distance_matrix)))
-pca_result = pca.fit_transform(distance_matrix)
+# Check if we have enough data for 2D PCA
+n_samples = len(distance_matrix)
+if n_samples < 2:
+    ax1.text(0.5, 0.5, f"Insufficient data for PCA\n(n={n_samples})",
+             ha='center', va='center', fontsize=12, transform=ax1.transAxes)
+    ax1.set_title('A. PCA of Structural Similarity', fontsize=12, fontweight='bold', loc='left')
+    pca_result = None
+    var_explained = [0, 0]
+else:
+    # Perform PCA on distance matrix
+    n_components = min(2, n_samples)
+    pca = PCA(n_components=n_components)
+    pca_result = pca.fit_transform(distance_matrix)
 
-# Plot by sequence type
-for seq_type, color in TYPE_COLORS.items():
-    mask = [seq_types[seq_id] == seq_type for seq_id in distance_matrix.index]
-    if any(mask):
-        indices = [i for i, m in enumerate(mask) if m]
-        ax1.scatter(pca_result[indices, 0], pca_result[indices, 1],
-                   c=color, label=f'{seq_type} (n={sum(mask)})',
-                   s=60, alpha=0.7, edgecolors='white', linewidths=0.5)
+    # Handle case where we only have 1 component
+    if pca_result.shape[1] == 1:
+        # Add a zero column for the second dimension
+        pca_result = np.column_stack([pca_result, np.zeros(pca_result.shape[0])])
 
-# Add explained variance
-var_explained = pca.explained_variance_ratio_
+    # Plot by sequence type
+    for seq_type, color in TYPE_COLORS.items():
+        mask = [seq_types[seq_id] == seq_type for seq_id in distance_matrix.index]
+        if any(mask):
+            indices = [i for i, m in enumerate(mask) if m]
+            ax1.scatter(pca_result[indices, 0], pca_result[indices, 1],
+                       c=color, label=f'{seq_type} (n={sum(mask)})',
+                       s=60, alpha=0.7, edgecolors='white', linewidths=0.5)
+
+    # Add explained variance
+    var_explained = list(pca.explained_variance_ratio_)
+    if len(var_explained) < 2:
+        var_explained.append(0)
+
 ax1.set_xlabel(f'PC1 ({var_explained[0]*100:.1f}% variance)', fontsize=11)
-ax1.set_ylabel(f'PC2 ({var_explained[1]*100:.1f}% variance)' if len(var_explained) > 1 else 'PC2', fontsize=11)
+ax1.set_ylabel(f'PC2 ({var_explained[1]*100:.1f}% variance)' if var_explained[1] > 0 else 'PC2', fontsize=11)
 ax1.set_title('A. PCA of Structural Similarity', fontsize=12, fontweight='bold', loc='left')
 ax1.legend(loc='best', fontsize=9, framealpha=0.9)
 ax1.spines['top'].set_visible(False)

@@ -19,8 +19,8 @@ source functions.sh
 # Create output directory
 mkdir -p "${RESULTS_DIR}/orthogroups/input" "${LOGS_DIR}" || { log "Error: Cannot create directories"; exit 1; }
 
-# Check dependency
-check_file "${RESULTS_DIR}/step_completed_extract_berghia.txt"
+# Check dependency (step 02 creates step_completed_02.txt)
+check_file "${RESULTS_DIR}/step_completed_02.txt"
 
 log "Starting orthology clustering."
 
@@ -40,7 +40,14 @@ done
 # Group references by their taxid prefix
 for taxid in "${TAXA[@]}"; do
     # Match references that contain the taxid in their ID (format: ref_TAXID_N)
-    grep -A1 "^>ref_${taxid}_" "${RESULTS_DIR}/reference_sequences/all_references.fa" | sed '/^--$/d' > "${RESULTS_DIR}/orthogroups/input/ref_${taxid}.fa" 2>/dev/null
+    # Use awk to properly handle multi-line FASTA sequences (grep -A1 would truncate them)
+    awk -v pattern="^>ref_${taxid}_" '
+        /^>/ {
+            if (match($0, pattern)) { print_seq = 1 }
+            else { print_seq = 0 }
+        }
+        print_seq { print }
+    ' "${RESULTS_DIR}/reference_sequences/all_references.fa" > "${RESULTS_DIR}/orthogroups/input/ref_${taxid}.fa" 2>/dev/null
 
     # If no matches, try alternate format or include all refs
     if [ ! -s "${RESULTS_DIR}/orthogroups/input/ref_${taxid}.fa" ]; then
@@ -74,9 +81,21 @@ fi
 run_command "orthofinder" ${ORTHOFINDER} -f "${RESULTS_DIR}/orthogroups/input" -t "${CPUS}" -a "${CPUS}" -I "${ORTHOFINDER_INFLATION}" -S diamond -A mafft -T fasttree
 
 # Verify output
-if [ ! -d "${RESULTS_DIR}/orthogroups/OrthoFinder/Results"* ]; then
+ORTHOFINDER_RESULTS=$(find "${RESULTS_DIR}/orthogroups" -maxdepth 2 -type d -name "Results_*" 2>/dev/null | sort -r | head -1)
+if [ -z "$ORTHOFINDER_RESULTS" ] || [ ! -d "$ORTHOFINDER_RESULTS" ]; then
     log "Error: OrthoFinder failed to produce results"
     exit 1
 fi
 
+# Create orthogroup manifest for downstream array jobs
+log "Creating orthogroup manifest..."
+create_orthogroup_manifest "${RESULTS_DIR}/orthogroups" "${RESULTS_DIR}/orthogroup_manifest.tsv"
+
+# Validate outputs
+validate_outputs --warn-only \
+    "${ORTHOFINDER_RESULTS}/Orthogroups/Orthogroups.tsv" \
+    "${RESULTS_DIR}/orthogroup_manifest.tsv"
+
+# Create completion flag for downstream steps
+touch "${RESULTS_DIR}/step_completed_03.txt"
 log "Orthology clustering completed."

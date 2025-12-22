@@ -53,8 +53,9 @@ def parse_collinearity_file(filepath):
                     blocks.append(current_block)
 
                 # Parse header: ## Alignment N: score=X e_value=Y N=Z chr1&chr2 orientation
+                # Note: Using [\d.eE+\-]+ for scientific notation (e.g., 1.5e-10)
                 header_match = re.match(
-                    r'## Alignment (\d+): score=([\d.e+-]+) e_value=([\d.e+-]+) N=(\d+)\s+(\S+)&(\S+)\s+(\w+)',
+                    r'## Alignment (\d+): score=([\d.eE+\-]+) e_value=([\d.eE+\-]+) N=(\d+)\s+(\S+)&(\S+)\s+(\S+)',
                     line
                 )
                 if header_match:
