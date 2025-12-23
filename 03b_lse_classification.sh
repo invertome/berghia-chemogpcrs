@@ -81,7 +81,8 @@ if [ "$USE_PYTHON_LSE" = true ]; then
         fi
 
         # Run lse_refine.py for this orthogroup
-        python3 lse_refine.py "$og" \
+        # Use absolute path to ensure it works in SLURM jobs
+        python3 "${BASE_DIR}/lse_refine.py" "$og" \
             ${ID_MAP_ARG} \
             ${GENE_TREE_ARG} \
             ${SYNTENY_ARG} \

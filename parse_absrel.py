@@ -52,11 +52,20 @@ def parse_absrel_json(json_file, output_csv):
                 omega = branch_data.get('omega', branch_data.get('Omega', 1.0))
 
             # Get p-value for positive selection
-            p_value = branch_data.get('Corrected P-value',
-                      branch_data.get('p-value',
-                      branch_data.get('Uncorrected P-value', 1.0)))
+            # Track whether HyPhy already provided corrected p-values
+            hyphy_corrected_p = branch_data.get('Corrected P-value')
+            raw_p_value = branch_data.get('Uncorrected P-value',
+                          branch_data.get('p-value', 1.0))
 
-            corrected_p = branch_data.get('Corrected P-value', p_value)
+            # Use corrected if available, otherwise raw
+            if hyphy_corrected_p is not None:
+                p_value = hyphy_corrected_p
+                is_already_corrected = 1
+            else:
+                p_value = raw_p_value
+                is_already_corrected = 0
+
+            corrected_p = hyphy_corrected_p if hyphy_corrected_p is not None else p_value
 
             # Determine if branch shows evidence of positive selection
             is_selected = 1 if corrected_p < 0.05 and omega > 1 else 0
@@ -64,8 +73,9 @@ def parse_absrel_json(json_file, output_csv):
             results.append({
                 'branch_id': branch_id,
                 'omega': omega,
-                'p_value': p_value,
+                'p_value': raw_p_value,  # Always store raw p-value
                 'corrected_p_value': corrected_p,
+                'is_already_corrected': is_already_corrected,  # Flag for downstream
                 'is_selected': is_selected
             })
 
@@ -74,15 +84,24 @@ def parse_absrel_json(json_file, output_csv):
     for branch_id, test_result in tested.items():
         if isinstance(test_result, dict) and branch_id not in [r['branch_id'] for r in results]:
             omega = test_result.get('omega', test_result.get('Omega', 1.0))
-            p_value = test_result.get('p', test_result.get('p-value', 1.0))
-            corrected_p = test_result.get('corrected p', p_value)
+            raw_p_value = test_result.get('p', test_result.get('p-value', 1.0))
+            hyphy_corrected_p = test_result.get('corrected p')
+
+            if hyphy_corrected_p is not None:
+                corrected_p = hyphy_corrected_p
+                is_already_corrected = 1
+            else:
+                corrected_p = raw_p_value
+                is_already_corrected = 0
+
             is_selected = 1 if corrected_p < 0.05 and omega > 1 else 0
 
             results.append({
                 'branch_id': branch_id,
                 'omega': omega,
-                'p_value': p_value,
+                'p_value': raw_p_value,
                 'corrected_p_value': corrected_p,
+                'is_already_corrected': is_already_corrected,
                 'is_selected': is_selected
             })
 
@@ -90,8 +109,9 @@ def parse_absrel_json(json_file, output_csv):
     file_exists = os.path.exists(output_csv)
     mode = 'a' if file_exists else 'w'
 
+    fieldnames = ['branch_id', 'omega', 'p_value', 'corrected_p_value', 'is_already_corrected', 'is_selected']
     with open(output_csv, mode, newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=['branch_id', 'omega', 'p_value', 'corrected_p_value', 'is_selected'])
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
         if not file_exists:
             writer.writeheader()
         writer.writerows(results)

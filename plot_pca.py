@@ -168,24 +168,29 @@ ax1.text(0.05, 0.95, f'Total variance: {total_var:.1f}%', transform=ax1.transAxe
 # --- Panel B: PCA with K-means Clustering ---
 ax2 = fig.add_subplot(gs[0, 1])
 
-# Determine optimal number of clusters (max 5)
-n_clusters = min(5, len(distance_matrix) // 3)
-if n_clusters >= 2:
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-    cluster_labels = kmeans.fit_predict(distance_matrix)
+# Guard against None pca_result (insufficient data case)
+if pca_result is not None:
+    # Determine optimal number of clusters (max 5)
+    n_clusters = min(5, len(distance_matrix) // 3)
+    if n_clusters >= 2:
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+        cluster_labels = kmeans.fit_predict(distance_matrix)
 
-    # Plot clusters
-    cluster_colors = plt.cm.Set1(np.linspace(0, 1, n_clusters))
-    for cluster_id in range(n_clusters):
-        mask = cluster_labels == cluster_id
-        ax2.scatter(pca_result[mask, 0], pca_result[mask, 1],
-                   c=[cluster_colors[cluster_id]], label=f'Cluster {cluster_id+1}',
+        # Plot clusters
+        cluster_colors = plt.cm.Set1(np.linspace(0, 1, n_clusters))
+        for cluster_id in range(n_clusters):
+            mask = cluster_labels == cluster_id
+            ax2.scatter(pca_result[mask, 0], pca_result[mask, 1],
+                       c=[cluster_colors[cluster_id]], label=f'Cluster {cluster_id+1}',
+                       s=60, alpha=0.7, edgecolors='white', linewidths=0.5)
+
+        ax2.legend(loc='best', fontsize=9, framealpha=0.9)
+    else:
+        ax2.scatter(pca_result[:, 0], pca_result[:, 1], c='steelblue',
                    s=60, alpha=0.7, edgecolors='white', linewidths=0.5)
-
-    ax2.legend(loc='best', fontsize=9, framealpha=0.9)
 else:
-    ax2.scatter(pca_result[:, 0], pca_result[:, 1], c='steelblue',
-               s=60, alpha=0.7, edgecolors='white', linewidths=0.5)
+    ax2.text(0.5, 0.5, f"Insufficient data for clustering\n(n={n_samples})",
+             ha='center', va='center', fontsize=12, transform=ax2.transAxes)
 
 ax2.set_xlabel(f'PC1 ({var_explained[0]*100:.1f}% variance)', fontsize=11)
 ax2.set_ylabel(f'PC2 ({var_explained[1]*100:.1f}% variance)' if len(var_explained) > 1 else 'PC2', fontsize=11)

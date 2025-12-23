@@ -132,6 +132,8 @@ def extract_taxid_from_header(header: str, exclude_refs: bool = False) -> Option
     else:
         # Regular format: TAXID_N or just TAXID
         parts = seq_id.split('_')
+        if not parts or not parts[0]:
+            return None
         taxid_str = parts[0]
 
     # Convert to integer

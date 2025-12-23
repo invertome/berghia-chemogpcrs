@@ -98,7 +98,12 @@ def estimate_absolute_ages(tree: Tree,
         Tuple of (dated tree, node ages dictionary)
     """
     # Get tree height (root to tips in relative units)
-    tree_height = max(tree.get_distance(leaf) for leaf in tree)
+    # Guard against empty tree
+    leaves = list(tree.iter_leaves())
+    if not leaves:
+        print("Warning: Tree has no leaves, cannot estimate ages", file=sys.stderr)
+        return tree, {}
+    tree_height = max(tree.get_distance(leaf) for leaf in leaves)
 
     # Find applicable calibration points
     applied_calibrations = []
@@ -341,9 +346,9 @@ def main():
         print(f"Duplication events written to: {dup_file}", file=sys.stderr)
 
     # 4. Summary
-    # Get age range
-    leaf_ages = [info['absolute_age_ma'] for info in node_ages.values() if info['is_leaf']]
-    internal_ages = [info['absolute_age_ma'] for info in node_ages.values() if not info['is_leaf']]
+    # Get age range (with guards for empty lists)
+    leaf_ages = [info['absolute_age_ma'] for info in node_ages.values() if info.get('is_leaf', False)]
+    internal_ages = [info['absolute_age_ma'] for info in node_ages.values() if not info.get('is_leaf', True)]
 
     summary = {
         'tree_file': tree_file,

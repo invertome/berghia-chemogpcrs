@@ -59,10 +59,24 @@ export NOTUNG_THRESHOLD=90  # Bootstrap threshold for rearrangement
 export TAXA=("taxid1" "taxid2" "taxid_berghia")
 export BERGHIA_TAXID="taxid_berghia"
 export CPUS=16
+export GPU_ENABLED=false
+
+# --- SLURM Configuration ---
+# Basic job parameters
 export DEFAULT_TIME="24:00:00"
 export DEFAULT_MEM="64G"
 export SLURM_EMAIL="your.email@example.com"
-export GPU_ENABLED=false
+
+# Cluster-specific options (leave empty to omit from sbatch)
+export SLURM_PARTITION=""           # Partition/queue name, e.g., "cpu", "gpu", "highmem"
+export SLURM_ACCOUNT=""             # Account/allocation name, e.g., "katzlab", "pi_username"
+export SLURM_QOS=""                 # Quality of service, e.g., "normal", "long", "gpu"
+export SLURM_CONSTRAINT=""          # Node constraints, e.g., "skylake", "v100"
+export SLURM_RESERVATION=""         # Reservation name (if applicable)
+export SLURM_EXTRA_ARGS=""          # Any additional sbatch flags, e.g., "--exclusive --nodelist=node01"
+
+# Array job settings
+export SLURM_ARRAY_LIMIT=50         # Max concurrent array tasks (e.g., 50 means --array=0-N%50)
 
 # --- Memory Estimation Profiles ---
 # These multipliers are used by functions.sh to estimate memory requirements
@@ -80,9 +94,15 @@ export MEM_MAX_GB=128            # maximum memory to request via SLURM
 export HMM_EVALUE="1e-5"
 export HHBLITS_EVALUE="1e-5"
 export MIN_TM_REGIONS=6
+# DeepTMHMM confidence threshold (0-1): Filter predictions below this confidence
+# Recommended: 0.5-0.7 (lower = more permissive, higher = more stringent)
+export DEEPTMHMM_MIN_CONFIDENCE=0.5
 export MIN_SEQ_LENGTH=100
 export MAX_GAP_PERCENT=50
-export IQTREE_MODEL="TEST"
+# IQ-TREE model selection: Use standard amino acid models to reduce computation and overfitting
+# Options: "TEST" (all 286 models), "MFP" (ModelFinder Plus), or specific models
+# Recommended: Standard empirical AA models with gamma rate variation
+export IQTREE_MODEL="MFP -mset LG,WAG,JTT,Dayhoff,mtREV,cpREV"
 export IQTREE_BOOTSTRAP=1000
 export ORTHOFINDER_INFLATION=1.5
 export FOLDTREE_METHOD="upgma"
@@ -154,6 +174,12 @@ export GPCRDB_SPECIES="Aplysia,Lottia"
 export GPCRDB_FAMILIES="all"
 
 # --- Taxonomic Levels for LSE ---
+# Format: "LevelName:taxid1,taxid2,taxid3"
+# - LevelName: Human-readable taxonomic level name (NO special characters: avoid & | ; < > $ `)
+# - taxids: Comma-separated list of taxonomy IDs belonging to this level
+# - Order: Most specific to most general (e.g., Aeolids -> Nudibranchs -> Gastropods)
+# - Used by: 03b_lse_classification.sh to classify orthogroups by taxonomic expansion level
+# Example with real taxids: "Aeolids:1514845,285658" "Nudibranchs:6524" "Gastropods:6448"
 export LSE_LEVELS=("Aeolids:taxid_aeolid1,taxid_aeolid2" "Nudibranchs:taxid_nudi1,taxid_nudi2" "Gastropods:taxid_gastro1,taxid_gastro2")
 
 # --- NCBI Taxonomy IDs for LSE Classification ---

@@ -55,8 +55,29 @@ run_command "fetch_references" python3 "${SCRIPTS_DIR}/fetch_ligands.py" \
     "${GPCRDB_SPECIES}"
 
 # --- Combine predicted and reference PDBs for structural phylogeny ---
-cp "${RESULTS_DIR}/structural_analysis/alphafold/"*.pdb "${RESULTS_DIR}/structural_analysis/all_pdb/" || log "Warning: No AlphaFold PDBs found"
-cp "${RESULTS_DIR}/structural_analysis/references/"*.pdb "${RESULTS_DIR}/structural_analysis/all_pdb/" || log "Warning: No reference PDBs found"
+# Check for AlphaFold PDBs
+alphafold_pdb_count=$(find "${RESULTS_DIR}/structural_analysis/alphafold/" -name "*.pdb" 2>/dev/null | wc -l)
+if [ "$alphafold_pdb_count" -gt 0 ]; then
+    cp "${RESULTS_DIR}/structural_analysis/alphafold/"*.pdb "${RESULTS_DIR}/structural_analysis/all_pdb/"
+    log "Copied ${alphafold_pdb_count} AlphaFold PDB files"
+else
+    log --level=WARN "No AlphaFold PDBs found - structural phylogeny may be limited"
+fi
+
+# Check for reference PDBs
+ref_pdb_count=$(find "${RESULTS_DIR}/structural_analysis/references/" -name "*.pdb" 2>/dev/null | wc -l)
+if [ "$ref_pdb_count" -gt 0 ]; then
+    cp "${RESULTS_DIR}/structural_analysis/references/"*.pdb "${RESULTS_DIR}/structural_analysis/all_pdb/"
+    log "Copied ${ref_pdb_count} reference PDB files"
+else
+    log --level=WARN "No reference PDBs found - structural comparison may be limited"
+fi
+
+# Verify we have enough structures for phylogeny
+total_pdb_count=$(find "${RESULTS_DIR}/structural_analysis/all_pdb/" -name "*.pdb" 2>/dev/null | wc -l)
+if [ "$total_pdb_count" -lt 3 ]; then
+    log --level=WARN "Only ${total_pdb_count} PDB files available - need at least 3 for meaningful structural phylogeny"
+fi
 
 # --- Build structural phylogeny with FoldTree ---
 run_command "foldtree" ${FOLDTREE} --input_dir "${RESULTS_DIR}/structural_analysis/all_pdb" --output "${RESULTS_DIR}/structural_analysis/foldtree.tre" --method "${FOLDTREE_METHOD}"

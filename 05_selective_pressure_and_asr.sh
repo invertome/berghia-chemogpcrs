@@ -26,6 +26,23 @@ check_file "${RESULTS_DIR}/step_completed_lse_classification.txt"
 
 log "Starting selective pressure and ASR analysis."
 
+# --- Validate required tools ---
+HYPHY_AVAILABLE=true
+if ! command -v hyphy &>/dev/null; then
+    log --level=WARN "HyPhy not found - dN/dS analysis will be skipped"
+    HYPHY_AVAILABLE=false
+fi
+
+FASTML_AVAILABLE=true
+if ! command -v "${FASTML:-fastml}" &>/dev/null; then
+    log --level=WARN "FastML not found - ASR analysis will be skipped"
+    FASTML_AVAILABLE=false
+fi
+
+if [ "$HYPHY_AVAILABLE" = false ] && [ "$FASTML_AVAILABLE" = false ]; then
+    log --level=WARN "Neither HyPhy nor FastML available - step 05 will produce minimal output"
+fi
+
 # Get orthogroup count using manifest (preferred) or fallback to globbing
 MANIFEST_FILE="${RESULTS_DIR}/orthogroup_manifest.tsv"
 OG_COUNT=$(get_orthogroup_count "$MANIFEST_FILE")
@@ -176,8 +193,106 @@ find_nucleotide_sequences() {
     fi
 }
 
+# --- Codon alignment validation ---
+# Validates pal2nal output for proper PAML format and codon structure
+# Arguments: $1 - codon alignment file (PAML format)
+#            $2 - expected sequence count (optional)
+# Returns: 0 if valid, 1 if invalid
+validate_codon_alignment() {
+    local codon_file="$1"
+    local expected_count="${2:-0}"
+
+    if [ ! -f "$codon_file" ] || [ ! -s "$codon_file" ]; then
+        return 1
+    fi
+
+    # Validate PAML format using Python for robust checking
+    python3 << PYTHON_SCRIPT
+import sys
+
+codon_file = "${codon_file}"
+expected_count = ${expected_count}
+
+try:
+    with open(codon_file, 'r') as f:
+        first_line = f.readline().strip()
+        parts = first_line.split()
+
+        # PAML format: first line is "nseqs nalign"
+        if len(parts) != 2:
+            print(f"Invalid PAML header: expected 'nseqs nalign', got '{first_line}'", file=sys.stderr)
+            sys.exit(1)
+
+        try:
+            nseqs, nalign = int(parts[0]), int(parts[1])
+        except ValueError:
+            print(f"Invalid PAML header values: {parts}", file=sys.stderr)
+            sys.exit(1)
+
+        # Check alignment length is divisible by 3 (codon-based)
+        if nalign % 3 != 0:
+            print(f"Alignment length {nalign} not divisible by 3 (not codon-aligned)", file=sys.stderr)
+            sys.exit(1)
+
+        # Check expected count if provided
+        if expected_count > 0 and nseqs != expected_count:
+            print(f"Sequence count mismatch: expected {expected_count}, got {nseqs}", file=sys.stderr)
+            sys.exit(1)
+
+        # Count actual sequences and validate lengths
+        content = f.read()
+        sequences = {}
+        current_name = None
+        current_seq = []
+
+        for line in content.split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+            # In PAML, sequence name is on its own line, followed by sequence
+            if line and not current_name:
+                current_name = line
+            elif current_name:
+                current_seq.append(line.replace(' ', ''))
+                # Check if we have accumulated the full sequence
+                full_seq = ''.join(current_seq)
+                if len(full_seq) >= nalign:
+                    sequences[current_name] = full_seq[:nalign]
+                    current_name = None
+                    current_seq = []
+
+        if len(sequences) != nseqs:
+            print(f"Parsed {len(sequences)} sequences but header says {nseqs}", file=sys.stderr)
+            sys.exit(1)
+
+        # Check each sequence length
+        stop_codons = {'TAA', 'TAG', 'TGA', 'taa', 'tag', 'tga'}
+        for name, seq in sequences.items():
+            if len(seq) != nalign:
+                print(f"Sequence {name} length {len(seq)} != expected {nalign}", file=sys.stderr)
+                sys.exit(1)
+
+            # Check for internal stop codons (warning only, not failure)
+            seq_upper = seq.upper().replace('-', 'N')
+            for i in range(0, len(seq_upper) - 3, 3):  # Exclude last codon
+                codon = seq_upper[i:i+3]
+                if codon in {'TAA', 'TAG', 'TGA'}:
+                    print(f"Warning: Internal stop codon {codon} at position {i} in {name}", file=sys.stderr)
+
+        # All checks passed
+        print(f"Codon alignment valid: {nseqs} sequences, {nalign} bp ({nalign//3} codons)", file=sys.stderr)
+        sys.exit(0)
+
+except Exception as e:
+    print(f"Validation error: {e}", file=sys.stderr)
+    sys.exit(1)
+PYTHON_SCRIPT
+
+    return $?
+}
+
 # --- Selective Pressure with aBSREL ---
-if [ "$taxa_count" -gt 1 ]; then
+if [ "$taxa_count" -gt 1 ] && [ "$HYPHY_AVAILABLE" = true ]; then
     protein_align="${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa"
     tree="${RESULTS_DIR}/phylogenies/protein/${base}.treefile"
 
@@ -187,18 +302,20 @@ if [ "$taxa_count" -gt 1 ]; then
 
         if find_nucleotide_sequences "$protein_align" "$nuc_align"; then
             # Create codon alignment
-            run_command "${base}_codon" pal2nal.pl "$protein_align" "$nuc_align" -output paml > "${RESULTS_DIR}/selective_pressure/${base}_codon.phy" 2>/dev/null
+            codon_file="${RESULTS_DIR}/selective_pressure/${base}_codon.phy"
+            run_command "${base}_codon" pal2nal.pl "$protein_align" "$nuc_align" -output paml > "$codon_file" 2>/dev/null
 
-            if [ -s "${RESULTS_DIR}/selective_pressure/${base}_codon.phy" ]; then
+            # Validate codon alignment (checks PAML format, codon structure, internal stops)
+            if validate_codon_alignment "$codon_file"; then
                 # Run aBSREL
-                run_command "${base}_absrel" hyphy aBSREL --alignment "${RESULTS_DIR}/selective_pressure/${base}_codon.phy" --tree "$tree" --output "${RESULTS_DIR}/selective_pressure/${base}_absrel.json"
+                run_command "${base}_absrel" hyphy aBSREL --alignment "$codon_file" --tree "$tree" --output "${RESULTS_DIR}/selective_pressure/${base}_absrel.json"
 
                 # Parse results
                 if [ -f "${RESULTS_DIR}/selective_pressure/${base}_absrel.json" ]; then
                     python3 "${SCRIPTS_DIR}/parse_absrel.py" "${RESULTS_DIR}/selective_pressure/${base}_absrel.json" "${RESULTS_DIR}/selective_pressure/absrel_results.csv" || log "Warning: Failed to parse aBSREL for $base"
                 fi
             else
-                log "Warning: pal2nal failed for ${base}, skipping aBSREL"
+                log "Warning: pal2nal produced invalid codon alignment for ${base}, skipping aBSREL"
             fi
         else
             log "Warning: Could not find nucleotide sequences for ${base}, skipping dN/dS analysis"
@@ -233,10 +350,13 @@ if [ "$berghia_count" -gt 0 ] && [ "$seq_count" -gt 2 ]; then
                     run_command "${base}_codon_lse" pal2nal.pl "$protein_align" "$nuc_align" -output paml > "$codon_file" 2>/dev/null
                 fi
 
-                if [ -s "$codon_file" ]; then
+                # Validate codon alignment before running aBSREL
+                if validate_codon_alignment "$codon_file"; then
                     run_command "${base}_absrel_lse" hyphy aBSREL --alignment "$codon_file" --tree "$tree" --output "${RESULTS_DIR}/selective_pressure/${base}_absrel_lse.json"
                     [ -f "${RESULTS_DIR}/selective_pressure/${base}_absrel_lse.json" ] && \
                         python3 "${SCRIPTS_DIR}/parse_absrel.py" "${RESULTS_DIR}/selective_pressure/${base}_absrel_lse.json" "${RESULTS_DIR}/selective_pressure/absrel_results_lse.csv"
+                else
+                    log "Warning: Invalid codon alignment for ${base} LSE analysis"
                 fi
             fi
 

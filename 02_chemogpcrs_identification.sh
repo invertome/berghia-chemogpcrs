@@ -26,7 +26,17 @@ log "Starting chemoreceptive GPCR identification."
 
 # --- Process Berghia transcriptome ---
 run_command "deeptmhmm_berghia" ${DEEPTMHMM} -f "${TRANSCRIPTOME}" -o "${RESULTS_DIR}/chemogpcrs/deeptmhmm_berghia"
-awk -v min_tm="${MIN_TM_REGIONS}" '$5 >= min_tm {print $1}' "${RESULTS_DIR}/chemogpcrs/deeptmhmm_berghia/prediction" > "${RESULTS_DIR}/chemogpcrs/complete_ids_berghia.txt" || { log "Error: Failed to parse DeepTMHMM"; exit 1; }
+# Filter by TM region count AND confidence score
+# DeepTMHMM output format: ID, prediction_type, confidence, ..., n_tm_regions
+# Column 3 is confidence, column 5 is TM region count
+awk -v min_tm="${MIN_TM_REGIONS}" -v min_conf="${DEEPTMHMM_MIN_CONFIDENCE:-0.5}" \
+    'NF >= 5 && $5 >= min_tm && ($3 >= min_conf || $3 == "") {print $1}' \
+    "${RESULTS_DIR}/chemogpcrs/deeptmhmm_berghia/prediction" > "${RESULTS_DIR}/chemogpcrs/complete_ids_berghia.txt" || { log "Error: Failed to parse DeepTMHMM"; exit 1; }
+
+# Log filtering stats
+total_pred=$(wc -l < "${RESULTS_DIR}/chemogpcrs/deeptmhmm_berghia/prediction" 2>/dev/null || echo 0)
+passed_pred=$(wc -l < "${RESULTS_DIR}/chemogpcrs/complete_ids_berghia.txt" 2>/dev/null || echo 0)
+log "DeepTMHMM: ${passed_pred}/${total_pred} sequences passed filters (>=${MIN_TM_REGIONS} TM regions, >=${DEEPTMHMM_MIN_CONFIDENCE:-0.5} confidence)"
 run_command "seqtk_complete_berghia" ${SEQTK} subseq "${TRANSCRIPTOME}" "${RESULTS_DIR}/chemogpcrs/complete_ids_berghia.txt" > "${RESULTS_DIR}/chemogpcrs/complete_berghia.fa"
 
 # --- Build HHsuite database from references ---
@@ -78,10 +88,15 @@ run_command "extract_berghia" ${SEQTK} subseq "${RESULTS_DIR}/chemogpcrs/complet
 
 # --- Process additional transcriptomes ---
 for trans in "${TRANSCRIPTOME_DIR}"/*.aa; do
+    [ -f "$trans" ] || continue
     sample=$(basename "$trans" .aa)
     taxid_sample="${sample}"
     run_command "deeptmhmm_${taxid_sample}" ${DEEPTMHMM} -f "$trans" -o "${RESULTS_DIR}/chemogpcrs/deeptmhmm_${taxid_sample}"
-    awk -v min_tm="${MIN_TM_REGIONS}" '$5 >= min_tm {print $1}' "${RESULTS_DIR}/chemogpcrs/deeptmhmm_${taxid_sample}/prediction" > "${RESULTS_DIR}/chemogpcrs/complete_ids_${taxid_sample}.txt"
+    # Filter by TM region count AND confidence score
+    awk -v min_tm="${MIN_TM_REGIONS}" -v min_conf="${DEEPTMHMM_MIN_CONFIDENCE:-0.5}" \
+        'NF >= 5 && $5 >= min_tm && ($3 >= min_conf || $3 == "") {print $1}' \
+        "${RESULTS_DIR}/chemogpcrs/deeptmhmm_${taxid_sample}/prediction" > "${RESULTS_DIR}/chemogpcrs/complete_ids_${taxid_sample}.txt"
+    log "DeepTMHMM ${taxid_sample}: $(wc -l < "${RESULTS_DIR}/chemogpcrs/complete_ids_${taxid_sample}.txt") sequences passed filters"
     run_command "seqtk_complete_${taxid_sample}" ${SEQTK} subseq "$trans" "${RESULTS_DIR}/chemogpcrs/complete_ids_${taxid_sample}.txt" > "${RESULTS_DIR}/chemogpcrs/complete_${taxid_sample}.fa"
     
     run_command "hhblits_${taxid_sample}" ${HHBLITS} -i "${RESULTS_DIR}/chemogpcrs/complete_${taxid_sample}.fa" -d "${RESULTS_DIR}/hhdb/references.hhm" -o "${RESULTS_DIR}/chemogpcrs/hhblits_${taxid_sample}.hhr" -e "${HHBLITS_EVALUE}" -cpu "${CPUS}"
@@ -123,4 +138,7 @@ with open('${RESULTS_DIR}/chemogpcrs/hhblits_${taxid_sample}.hhr') as f:
 done
 
 touch "${RESULTS_DIR}/step_completed_extract_berghia.txt"
+
+# Create main step completion flag for downstream dependencies
+touch "${RESULTS_DIR}/step_completed_02.txt"
 log "Chemoreceptive GPCR identification completed."

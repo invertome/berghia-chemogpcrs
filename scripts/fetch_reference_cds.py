@@ -34,7 +34,7 @@ import argparse
 import json
 import csv
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Set
+from typing import Any, Dict, List, Optional, Tuple, Set
 from dataclasses import dataclass
 from collections import defaultdict
 from dotenv import load_dotenv
@@ -500,7 +500,7 @@ def fetch_cds_for_accession(info: AccessionInfo, entrez) -> AccessionInfo:
 
 def process_fasta_file(fasta_file: Path, output_dir: Path, entrez,
                        rate_limit: float = 0.15,
-                       verbose: bool = True) -> Dict[str, any]:
+                       verbose: bool = True) -> Dict[str, Any]:
     """
     Process a single FASTA file and generate corresponding CDS file.
 

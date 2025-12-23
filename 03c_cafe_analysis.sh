@@ -38,7 +38,8 @@ fi
 log "Starting CAFE5 gene family evolution analysis"
 
 # --- Check Dependencies ---
-check_file "${RESULTS_DIR}/step_completed_orthology_clustering.txt"
+# Step 03 creates step_completed_03.txt
+check_file "${RESULTS_DIR}/step_completed_03.txt"
 check_file "${RESULTS_DIR}/step_completed_busco_species_tree.txt"
 
 # Find OrthoFinder results

@@ -1091,6 +1091,89 @@ export RUN_MODE=slurm
 sbatch 07_candidate_ranking.sh
 ```
 
+### SLURM Configuration
+
+The pipeline includes a wrapper script (`run_pipeline.sh`) for easy SLURM job submission with proper configuration.
+
+#### Configuration Variables (config.sh)
+
+```bash
+# --- SLURM Configuration ---
+export DEFAULT_TIME="24:00:00"          # Wall time limit
+export DEFAULT_MEM="64G"                # Memory per job
+export SLURM_EMAIL="you@example.com"    # Notification email
+
+# Cluster-specific options (leave empty to omit)
+export SLURM_PARTITION="cpu"            # Partition/queue name
+export SLURM_ACCOUNT="katzlab"          # Account/allocation
+export SLURM_QOS="normal"               # Quality of service
+export SLURM_CONSTRAINT=""              # Node constraints (e.g., "skylake")
+export SLURM_RESERVATION=""             # Reservation name
+export SLURM_EXTRA_ARGS=""              # Additional sbatch flags
+
+# Array job settings
+export SLURM_ARRAY_LIMIT=50             # Max concurrent array tasks
+```
+
+#### Using the Wrapper Script
+
+```bash
+# Submit a single step
+./run_pipeline.sh 02
+
+# Submit multiple steps
+./run_pipeline.sh 02 03 04
+
+# Submit a range of steps
+./run_pipeline.sh 02-05
+
+# Submit all steps sequentially
+./run_pipeline.sh all
+
+# Wait for each job to complete before submitting next
+./run_pipeline.sh --wait 04 05
+
+# Run locally (no SLURM)
+./run_pipeline.sh --local 07
+
+# Dry run (show commands without executing)
+./run_pipeline.sh --dry-run all
+
+# Verbose output showing SLURM settings
+./run_pipeline.sh --verbose 02
+```
+
+#### Direct sbatch Submission
+
+You can also submit scripts directly with custom options:
+
+```bash
+# Override partition and account
+sbatch --partition=gpu --account=mylab 08_structural_analysis.sh
+
+# Add job dependency
+sbatch --dependency=afterok:12345 05_selective_pressure_and_asr.sh
+
+# Request GPU resources
+sbatch --gres=gpu:1 --partition=gpu 08_structural_analysis.sh
+```
+
+#### Monitoring Jobs
+
+```bash
+# Check your jobs
+squeue -u $USER
+
+# Check specific job
+scontrol show job <job_id>
+
+# Cancel a job
+scancel <job_id>
+
+# View job output in real-time
+tail -f results/logs/02_chemogpcrs_id_<job_id>.out
+```
+
 ---
 
 ## Troubleshooting

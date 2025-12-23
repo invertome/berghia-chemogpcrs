@@ -38,7 +38,8 @@ fi
 log "Starting NOTUNG gene tree reconciliation"
 
 # --- Check Dependencies ---
-check_file "${RESULTS_DIR}/step_completed_phylogenetic_analysis.txt"
+# Step 04 creates step_completed_04.txt
+check_file "${RESULTS_DIR}/step_completed_04.txt"
 check_file "${RESULTS_DIR}/step_completed_busco_species_tree.txt"
 
 # Find species tree

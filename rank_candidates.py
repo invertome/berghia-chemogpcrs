@@ -139,14 +139,16 @@ def categorize_reference(ref_name):
 def load_absrel_with_fdr(selective_dir):
     """
     Load aBSREL results and apply Benjamini-Hochberg FDR correction.
+    Only applies correction to p-values that aren't already corrected by HyPhy.
 
     Returns dict: branch_id -> {omega, p_value, corrected_p, significant}
     """
     dnds_data = {}
     absrel_files = ['absrel_results.csv', 'absrel_results_lse.csv']
 
-    all_pvalues = []
-    all_entries = []
+    # Separate entries by whether they need FDR correction
+    needs_correction = []  # (p_value, entry) pairs for uncorrected p-values
+    already_corrected = []  # entries with HyPhy-corrected p-values
 
     for absrel_file in absrel_files:
         absrel_path = os.path.join(selective_dir, absrel_file)
@@ -157,25 +159,39 @@ def load_absrel_with_fdr(selective_dir):
                     branch_id = row.get('branch_id', row.get('id', ''))
                     omega = row.get('omega', row.get('dnds', row.get('dN/dS', None)))
                     p_value = row.get('p_value', row.get('pvalue', row.get('p-value', 1.0)))
+                    is_already_corrected = row.get('is_already_corrected', 0)
+                    corrected_p_from_hyphy = row.get('corrected_p_value')
 
                     if pd.notna(omega) and branch_id:
-                        all_pvalues.append(float(p_value) if pd.notna(p_value) else 1.0)
-                        all_entries.append({
+                        entry = {
                             'branch_id': str(branch_id),
                             'omega': float(omega),
                             'p_value': float(p_value) if pd.notna(p_value) else 1.0
-                        })
+                        }
+
+                        # Check if HyPhy already provided corrected p-value
+                        if is_already_corrected == 1 and pd.notna(corrected_p_from_hyphy):
+                            entry['corrected_p'] = float(corrected_p_from_hyphy)
+                            entry['significant'] = entry['corrected_p'] < ABSREL_FDR_THRESHOLD
+                            already_corrected.append(entry)
+                        else:
+                            needs_correction.append((entry['p_value'], entry))
             except Exception as e:
                 print(f"Warning: Could not parse {absrel_path}: {e}", file=sys.stderr)
 
-    # Apply Benjamini-Hochberg FDR correction
-    if all_pvalues:
-        corrected_pvalues = benjamini_hochberg(all_pvalues)
+    # Apply Benjamini-Hochberg FDR correction only to uncorrected p-values
+    if needs_correction:
+        pvalues = [p for p, _ in needs_correction]
+        corrected_pvalues = benjamini_hochberg(pvalues)
 
-        for entry, corrected_p in zip(all_entries, corrected_pvalues):
+        for (_, entry), corrected_p in zip(needs_correction, corrected_pvalues):
             entry['corrected_p'] = corrected_p
             entry['significant'] = corrected_p < ABSREL_FDR_THRESHOLD
             dnds_data[entry['branch_id']] = entry
+
+    # Add already-corrected entries
+    for entry in already_corrected:
+        dnds_data[entry['branch_id']] = entry
 
     return dnds_data
 
@@ -578,12 +594,27 @@ def run_leave_one_out_crossval(df, tree, ref_ids, base_weights, n_folds=5):
 # --- Calculate Scores for All Candidates ---
 
 # First pass: collect all depths for percentile calculation
+# Only include nodes on paths with sufficient bootstrap support (H12 fix)
 all_depths = []
 for cand_id in candidates['id']:
     try:
         nodes = t.search_nodes(name=cand_id)
         if nodes:
-            all_depths.append(nodes[0].get_distance(t))
+            node = nodes[0]
+            # Check if the path to root has sufficient bootstrap support
+            # Walk up the tree and verify bootstrap values
+            has_good_support = True
+            current = node
+            while current.up:
+                # IQ-TREE stores bootstrap as support attribute
+                support = getattr(current.up, 'support', None)
+                if support is not None and support < BOOTSTRAP_THRESHOLD:
+                    has_good_support = False
+                    break
+                current = current.up
+
+            if has_good_support:
+                all_depths.append(node.get_distance(t))
     except Exception:
         pass
 
@@ -822,5 +853,50 @@ if sensitivity_results:
 
 if cv_results:
     print(f"Cross-validation results written to: {output_dir}/crossval_results.csv", file=sys.stderr)
+
+# --- Score Component Correlation Analysis (M27) ---
+# Analyze correlations between score components to detect redundancy or unexpected relationships
+score_cols_for_corr = ['phylo_score', 'purifying_score', 'positive_score',
+                       'synteny_score', 'expression_score', 'lse_depth_score']
+available_cols = [col for col in score_cols_for_corr if col in df.columns]
+
+if len(available_cols) >= 2:
+    from scipy.stats import spearmanr
+    import numpy as np
+
+    output_dir = Path(output_file).parent
+    corr_file = output_dir / 'score_correlations.csv'
+
+    # Compute Spearman correlations between all score pairs
+    corr_data = []
+    for i, col1 in enumerate(available_cols):
+        for col2 in available_cols[i+1:]:
+            # Get non-null pairs
+            mask = df[col1].notna() & df[col2].notna()
+            if mask.sum() >= 5:  # Need at least 5 pairs for meaningful correlation
+                rho, p_value = spearmanr(df.loc[mask, col1], df.loc[mask, col2])
+                corr_data.append({
+                    'component_1': col1.replace('_score', ''),
+                    'component_2': col2.replace('_score', ''),
+                    'spearman_rho': round(rho, 4),
+                    'p_value': round(p_value, 6),
+                    'n_pairs': int(mask.sum()),
+                    'significant': p_value < 0.05
+                })
+
+    if corr_data:
+        corr_df = pd.DataFrame(corr_data)
+        corr_df.to_csv(corr_file, index=False)
+
+        # Flag highly correlated pairs (potential redundancy)
+        high_corr = corr_df[(corr_df['spearman_rho'].abs() > 0.7) & corr_df['significant']]
+        if len(high_corr) > 0:
+            print(f"\nWarning: Highly correlated score components detected:", file=sys.stderr)
+            for _, row in high_corr.iterrows():
+                print(f"  {row['component_1']} <-> {row['component_2']}: rho={row['spearman_rho']:.2f}",
+                      file=sys.stderr)
+            print("  Consider adjusting weights if this represents redundant information.", file=sys.stderr)
+
+        print(f"Score correlations written to: {corr_file}", file=sys.stderr)
 
 print(f"\nOutput written to: {output_file}", file=sys.stderr)

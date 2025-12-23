@@ -6,8 +6,10 @@
 # Author: Jorge L. Perez-Moreno, Ph.D., Katz Lab, University of Massachusetts, Amherst.
 
 import pandas as pd
+import numpy as np
 import sys
 from scipy.cluster.hierarchy import linkage, to_tree
+from scipy.spatial.distance import squareform
 from ete3 import Tree
 
 # Command-line arguments
@@ -22,14 +24,25 @@ scores['id2'] = scores['file'].apply(lambda x: '_'.join(x.split('tmalign_')[1].s
 # Get unique IDs and create distance matrix
 ids = list(set(scores['id1']).union(scores['id2']))
 n = len(ids)
+
+# Guard against insufficient data
+if n < 2:
+    print(f"Error: Need at least 2 structures for clustering, got {n}", file=sys.stderr)
+    # Write single-node tree if only one structure
+    if n == 1:
+        Tree(f"{ids[0]};").write(outfile=output_tree_file)
+    sys.exit(0)
+
 dist_matrix = pd.DataFrame(1.0, index=ids, columns=ids)
 for _, row in scores.iterrows():
     dist_matrix.loc[row['id1'], row['id2']] = 1 - row['tm_score']
     dist_matrix.loc[row['id2'], row['id1']] = 1 - row['tm_score']
-dist_matrix.values[[range(n)]*2] = 0  # Diagonal set to 0
+np.fill_diagonal(dist_matrix.values, 0)  # Diagonal set to 0
 
 # Perform UPGMA clustering
-linkage_matrix = linkage(dist_matrix.values, method='average')
+# Convert square matrix to condensed form (1D) for scipy linkage
+condensed_dist = squareform(dist_matrix.values, checks=False)
+linkage_matrix = linkage(condensed_dist, method='average')
 tree = to_tree(linkage_matrix)
 
 # Convert to Newick format and save

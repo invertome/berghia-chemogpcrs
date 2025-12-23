@@ -103,7 +103,8 @@ def parse_pdb_structure(pdb_file: str) -> Optional[Dict]:
             try:
                 ca = res['CA']
                 plddt_scores.append(ca.get_bfactor())
-            except:
+            except KeyError:
+                # Residue doesn't have a CA atom (e.g., glycine or incomplete residue)
                 continue
 
         return {
@@ -206,8 +207,13 @@ def predict_binding_pocket(structure_info: Dict,
 
         # Estimate side chain orientation (simplified)
         # Residues closer to center are more likely to face the binding pocket
-        is_pocket_facing = dist_to_center < np.percentile([np.linalg.norm(np.array(r['ca_coord']) - centroid)
-                                                          for r in residues if tm_assignments.get(r['position'], 0) > 0], 50)
+        tm_distances = [np.linalg.norm(np.array(r['ca_coord']) - centroid)
+                       for r in residues if tm_assignments.get(r['position'], 0) > 0]
+        # Need at least 2 residues for meaningful percentile calculation
+        if len(tm_distances) >= 2:
+            is_pocket_facing = dist_to_center < np.percentile(tm_distances, 50)
+        else:
+            is_pocket_facing = True  # Default to pocket-facing if insufficient data
 
         # Check if in binding pocket region based on TM position
         pocket_probability = 0.0

@@ -27,7 +27,7 @@ TAU_THRESHOLD = float(os.getenv('TAU_THRESHOLD', 0.8))  # Threshold for "tissue-
 CHEMOSENSORY_TISSUES = os.getenv('CHEMOSENSORY_TISSUES', 'rhinophore,oral_veil,tentacle,cephalic').split(',')
 
 
-def parse_salmon_quants(quant_dir: Path) -> pd.DataFrame:
+def parse_salmon_quants(quant_dir: Path) -> Tuple[pd.DataFrame, Dict]:
     """
     Parse all quant.sf files in a directory and return combined TPM matrix.
 
@@ -35,7 +35,9 @@ def parse_salmon_quants(quant_dir: Path) -> pd.DataFrame:
         quant_dir: Directory containing sample subdirectories with quant.sf files
 
     Returns:
-        DataFrame with genes as rows and samples as columns (TPM values)
+        Tuple of (expression_matrix, sample_stats):
+            - expression_matrix: DataFrame with genes as rows and samples as columns (TPM values)
+            - sample_stats: Dictionary with per-sample statistics
     """
     samples = []
     sample_stats = {}
@@ -49,7 +51,7 @@ def parse_salmon_quants(quant_dir: Path) -> pd.DataFrame:
 
     if not quant_files:
         print(f"Error: No quant.sf files found in {quant_dir}", file=sys.stderr)
-        return pd.DataFrame()
+        return pd.DataFrame(), {}
 
     print(f"Found {len(quant_files)} Salmon quant.sf files", file=sys.stderr)
 
@@ -79,7 +81,7 @@ def parse_salmon_quants(quant_dir: Path) -> pd.DataFrame:
             continue
 
     if not samples:
-        return pd.DataFrame()
+        return pd.DataFrame(), {}
 
     # Combine all samples into matrix
     expression_matrix = pd.concat(samples, axis=1)

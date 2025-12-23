@@ -19,8 +19,14 @@ source functions.sh
 # Create output directory
 mkdir -p "${RESULTS_DIR}/ranking" "${LOGS_DIR}" || { log "Error: Cannot create directories"; exit 1; }
 
-# Check dependencies
-check_file "${RESULTS_DIR}/step_completed_extract_berghia.txt" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.treefile" "${RESULTS_DIR}/selective_pressure/absrel_results.csv"
+# Check required dependencies
+check_file "${RESULTS_DIR}/step_completed_extract_berghia.txt" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.treefile"
+
+# Check optional dependencies (warn but don't fail)
+check_file --warn-only "${RESULTS_DIR}/selective_pressure/absrel_results.csv"
+if [ ! -f "${RESULTS_DIR}/selective_pressure/absrel_results.csv" ]; then
+    log "Note: aBSREL results not found - dN/dS scoring will be skipped"
+fi
 
 log "Starting candidate ranking."
 

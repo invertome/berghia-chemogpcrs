@@ -24,6 +24,20 @@ check_file "${RESULTS_DIR}/step_completed_extract_berghia.txt"
 
 log "Starting synteny and mapping analysis."
 
+# --- Validate genome count for synteny analysis ---
+genome_count=$(find "${GENOME_DIR}" -name "*.fasta" -type f 2>/dev/null | wc -l)
+if [ "$genome_count" -lt 2 ]; then
+    log --level=WARN "Synteny analysis requires at least 2 genomes, found ${genome_count}"
+    log --level=WARN "Skipping synteny analysis. Set SYNTENY_WEIGHT=0 in config.sh to disable synteny scoring."
+    # Create empty output files to prevent downstream failures
+    touch "${RESULTS_DIR}/synteny/synteny_ids.txt"
+    touch "${RESULTS_DIR}/step_completed_synteny.txt"
+    log "Synteny step completed (skipped due to insufficient genomes)"
+    exit 0
+fi
+
+log "Found ${genome_count} genomes for synteny analysis"
+
 # --- Optional mapping of transcriptomes to genomes ---
 # Note: minimap2 -ax splice requires NUCLEOTIDE sequences (mRNA/cDNA), not protein
 for genome in "${GENOME_DIR}"/*.fasta; do
@@ -41,6 +55,11 @@ for genome in "${GENOME_DIR}"/*.fasta; do
 
     if [ -n "$nuc_trans" ]; then
         log "Mapping ${taxid_sample} transcriptome to genome"
+        # Validate minimap2 is available before running
+        if ! command -v "${MINIMAP2}" &>/dev/null; then
+            log --level=WARN "minimap2 not found, skipping mapping for ${taxid_sample}"
+            continue
+        fi
         run_command "minimap2_${taxid_sample}" ${MINIMAP2} -ax splice -uf -k14 "$genome" "$nuc_trans" > "${RESULTS_DIR}/mapping/${taxid_sample}.sam"
         run_command "samtools_${taxid_sample}" ${SAMTOOLS} view -bS "${RESULTS_DIR}/mapping/${taxid_sample}.sam" | ${SAMTOOLS} sort -o "${RESULTS_DIR}/mapping/${taxid_sample}.bam"
         run_command "samtools_index_${taxid_sample}" ${SAMTOOLS} index "${RESULTS_DIR}/mapping/${taxid_sample}.bam"

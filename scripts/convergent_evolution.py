@@ -196,6 +196,10 @@ def identify_convergent_sites(alignment: MultipleSeqAlignment,
         # Check for convergent amino acids
         convergent_aas = focal_aas & other_aas
 
+        # Guard against empty leaf lists to prevent division by zero (H15 fix)
+        if not focal_leaves or not other_leaves:
+            continue
+
         if convergent_aas and len(focal_aas) > 0 and len(other_aas) > 0:
             # Check if this is a derived state (different from ancestral)
             root_aa = None
@@ -205,7 +209,7 @@ def identify_convergent_sites(alignment: MultipleSeqAlignment,
                     root_aa = root_seq[pos]
 
             for conv_aa in convergent_aas:
-                # Calculate frequencies
+                # Calculate frequencies (safe division - empty lists checked above)
                 focal_freq = sum(1 for l in focal_leaves
                                 if l in seq_dict and pos < len(seq_dict[l])
                                 and seq_dict[l][pos] == conv_aa) / len(focal_leaves)

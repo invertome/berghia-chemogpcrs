@@ -58,6 +58,23 @@ class MetadataLookup:
 
         with open(self.metadata_file, 'r') as f:
             reader = csv.DictReader(f)
+
+            # Validate required headers exist
+            required_headers = {'short_id'}  # Minimum required
+            optional_headers = {'original_id', 'taxid'}
+            if reader.fieldnames is None:
+                raise ValueError(f"Metadata file is empty or has no header: {self.metadata_file}")
+
+            headers = set(reader.fieldnames)
+            missing_required = required_headers - headers
+            if missing_required:
+                raise ValueError(f"Missing required headers in {self.metadata_file}: {missing_required}")
+
+            missing_optional = optional_headers - headers
+            if missing_optional:
+                import sys
+                print(f"Warning: Optional headers missing in metadata file: {missing_optional}", file=sys.stderr)
+
             for row in reader:
                 short_id = row.get('short_id', '')
                 if short_id:

@@ -38,7 +38,8 @@ fi
 log "Starting GPCR classification"
 
 # --- Check Dependencies ---
-check_file "${RESULTS_DIR}/step_completed_cluster_sequences.txt"
+# Step 02a creates step_completed_02a.txt (or checkpoint)
+check_file "${RESULTS_DIR}/step_completed_02a.txt"
 
 # Find input FASTA file (clustered candidates)
 INPUT_FASTA=""
@@ -430,6 +431,9 @@ PYTHON_SCRIPT
 
 # Mark step as completed
 create_checkpoint "classify_gpcrs"
+
+# Also create legacy completion flag for downstream steps
+touch "${RESULTS_DIR}/step_completed_02b.txt"
 
 log "GPCR classification completed"
 log "Output files:"

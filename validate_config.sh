@@ -359,12 +359,14 @@ validate_parameter_ranges() {
     print_header "Validating Parameter Ranges"
 
     # Check E-value thresholds
+    # E-values can be in scientific notation (e.g., 1e-5) and typically range from 0 to 10
     if [ -n "${HMM_EVALUE}" ]; then
-        local evalue_ok=$(echo "${HMM_EVALUE}" | awk '{if ($1 > 0 && $1 <= 1) print "ok"}')
+        # Use awk with +0 to force numeric conversion (handles scientific notation)
+        local evalue_ok=$(echo "${HMM_EVALUE}" | awk '{val=$1+0; if (val > 0 && val <= 10) print "ok"}')
         if [ "$evalue_ok" = "ok" ]; then
             print_ok "HMM_EVALUE is valid: ${HMM_EVALUE}"
         else
-            print_warning "HMM_EVALUE may be unusual: ${HMM_EVALUE}"
+            print_warning "HMM_EVALUE may be unusual: ${HMM_EVALUE} (expected 0 < E-value <= 10)"
         fi
     fi
 

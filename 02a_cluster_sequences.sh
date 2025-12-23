@@ -39,7 +39,8 @@ fi
 log "Starting sequence clustering (CD-HIT at ${CDHIT_IDENTITY} identity)"
 
 # --- Check Dependencies ---
-check_file "${RESULTS_DIR}/step_completed_chemogpcrs_identification.txt"
+# Step 02 creates step_completed_02.txt
+check_file "${RESULTS_DIR}/step_completed_02.txt"
 
 # Find input FASTA file
 INPUT_FASTA=""
@@ -205,6 +206,9 @@ EOF
 
 # Mark step as completed
 create_checkpoint "cluster_sequences"
+
+# Also create legacy completion flag for downstream steps
+touch "${RESULTS_DIR}/step_completed_02a.txt"
 
 log "Sequence clustering completed successfully"
 log "Output files:"

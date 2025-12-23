@@ -120,13 +120,19 @@ compute_checksum() {
 # --- Atomic Write Function ---
 # Arguments: $1 - Target file, $2 - Content
 # Writes content atomically (write to temp, then rename)
+# Uses SLURM job info + hostname + PID for unique temp files in array jobs
 atomic_write() {
     local target="$1"
     local content="$2"
-    local temp_file="${target}.tmp.$$"
+    # Create unique temp file name to avoid race conditions in SLURM array jobs
+    # Different nodes could have same PID, so include hostname and SLURM task ID
+    local unique_id="${SLURM_ARRAY_TASK_ID:-0}_${SLURM_JOB_ID:-local}_$(hostname -s 2>/dev/null || echo local)_$$"
+    local temp_file="${target}.tmp.${unique_id}"
 
     echo "$content" > "$temp_file"
     mv "$temp_file" "$target"
+    # Clean up any stale temp files from previous failed runs (older than 1 hour)
+    find "$(dirname "$target")" -name "$(basename "$target").tmp.*" -mmin +60 -delete 2>/dev/null || true
 }
 
 # --- Create Checkpoint ---
@@ -190,10 +196,15 @@ record_provenance() {
 
     [ -z "$PROVENANCE_FILE" ] && return
 
+    # Save IFS to restore after parsing comma-separated values
+    local OLD_IFS="$IFS"
+
     # Compute input checksums
     local input_checksums="{"
     local first=true
+    local INPUT_FILES
     IFS=',' read -ra INPUT_FILES <<< "$inputs"
+    IFS="$OLD_IFS"  # Restore IFS immediately after use
     for f in "${INPUT_FILES[@]}"; do
         f=$(echo "$f" | xargs)  # Trim whitespace
         if [ -n "$f" ]; then
@@ -207,7 +218,9 @@ record_provenance() {
     # Compute output checksums
     local output_checksums="{"
     first=true
+    local OUTPUT_FILES
     IFS=',' read -ra OUTPUT_FILES <<< "$outputs"
+    IFS="$OLD_IFS"  # Restore IFS immediately after use
     for f in "${OUTPUT_FILES[@]}"; do
         f=$(echo "$f" | xargs)
         if [ -n "$f" ]; then
@@ -382,6 +395,77 @@ scale_resources() {
     echo "--cpus-per-task=${cpus} --mem=${mem}"
 }
 
+# --- Generate Conditional SLURM Options ---
+# Returns SLURM directives for partition, account, qos, etc. only if they are set
+# Usage: In scripts, call this function and eval the output, or use in sbatch command
+get_slurm_opts() {
+    local opts=""
+
+    # Add partition if set
+    [ -n "$SLURM_PARTITION" ] && opts+=" --partition=${SLURM_PARTITION}"
+
+    # Add account if set
+    [ -n "$SLURM_ACCOUNT" ] && opts+=" --account=${SLURM_ACCOUNT}"
+
+    # Add QOS if set
+    [ -n "$SLURM_QOS" ] && opts+=" --qos=${SLURM_QOS}"
+
+    # Add constraint if set
+    [ -n "$SLURM_CONSTRAINT" ] && opts+=" --constraint=${SLURM_CONSTRAINT}"
+
+    # Add reservation if set
+    [ -n "$SLURM_RESERVATION" ] && opts+=" --reservation=${SLURM_RESERVATION}"
+
+    # Add any extra args
+    [ -n "$SLURM_EXTRA_ARGS" ] && opts+=" ${SLURM_EXTRA_ARGS}"
+
+    echo "$opts"
+}
+
+# --- Generate SBATCH Header Block ---
+# Arguments: $1 - job name, $2 - log prefix (optional, defaults to job name)
+#            $3 - array spec (optional, e.g., "0-999")
+# Prints a complete SBATCH header block for sourcing or embedding
+generate_sbatch_header() {
+    local job_name="$1"
+    local log_prefix="${2:-$1}"
+    local array_spec="$3"
+
+    echo "#!/bin/bash"
+    echo "#SBATCH --job-name=${job_name}"
+
+    # Handle array job logs differently
+    if [ -n "$array_spec" ]; then
+        echo "#SBATCH --output=${LOGS_DIR}/${log_prefix}_%j_%a.out"
+        echo "#SBATCH --error=${LOGS_DIR}/${log_prefix}_%j_%a.err"
+        echo "#SBATCH --array=${array_spec}%${SLURM_ARRAY_LIMIT:-50}"
+    else
+        echo "#SBATCH --output=${LOGS_DIR}/${log_prefix}_%j.out"
+        echo "#SBATCH --error=${LOGS_DIR}/${log_prefix}_%j.err"
+    fi
+
+    echo "#SBATCH --time=${DEFAULT_TIME}"
+    echo "#SBATCH --cpus-per-task=${CPUS}"
+    echo "#SBATCH --mem=${DEFAULT_MEM}"
+
+    # Conditional options (only if set)
+    [ -n "$SLURM_PARTITION" ] && echo "#SBATCH --partition=${SLURM_PARTITION}"
+    [ -n "$SLURM_ACCOUNT" ] && echo "#SBATCH --account=${SLURM_ACCOUNT}"
+    [ -n "$SLURM_QOS" ] && echo "#SBATCH --qos=${SLURM_QOS}"
+    [ -n "$SLURM_CONSTRAINT" ] && echo "#SBATCH --constraint=${SLURM_CONSTRAINT}"
+    [ -n "$SLURM_RESERVATION" ] && echo "#SBATCH --reservation=${SLURM_RESERVATION}"
+
+    # Mail notifications
+    [ -n "$SLURM_EMAIL" ] && echo "#SBATCH --mail-type=ALL" && echo "#SBATCH --mail-user=${SLURM_EMAIL}"
+
+    # Extra args (parse into separate lines if multiple)
+    if [ -n "$SLURM_EXTRA_ARGS" ]; then
+        for arg in $SLURM_EXTRA_ARGS; do
+            echo "#SBATCH ${arg}"
+        done
+    fi
+}
+
 # --- Check if Running in SLURM ---
 is_slurm() {
     [ -n "$SLURM_JOB_ID" ]
@@ -438,7 +522,16 @@ cleanup_temp() {
 }
 
 # --- Finalize Pipeline Run ---
+# Guard variable to prevent re-entrance
+_PIPELINE_FINALIZED=false
+
 finalize_pipeline() {
+    # Re-entrance guard: prevent multiple calls during cleanup
+    if [ "$_PIPELINE_FINALIZED" = true ]; then
+        return
+    fi
+    _PIPELINE_FINALIZED=true
+
     local exit_code="${1:-0}"
 
     if [ -n "$PROVENANCE_FILE" ] && [ -f "$PROVENANCE_FILE" ]; then
@@ -576,11 +669,26 @@ get_avg_seq_length() {
 
 # --- Get Alignment Length ---
 # Arguments: $1 - Alignment file (FASTA format)
-# Returns: Alignment length (number of columns)
+# Returns: Alignment length (number of columns), always returns "0" for empty/missing files
 get_alignment_length() {
     local aln="$1"
+
+    # Return 0 if file doesn't exist or is empty
+    if [ ! -f "$aln" ] || [ ! -s "$aln" ]; then
+        echo 0
+        return
+    fi
+
     # Get length of first sequence (all should be same length in alignment)
-    awk '/^>/{if(seq){print length(seq);exit}seq=""} !/^>/{seq=seq$0} END{if(seq)print length(seq)}' "$aln" 2>/dev/null || echo 0
+    local len
+    len=$(awk '/^>/{if(seq){print length(seq);exit}seq=""} !/^>/{seq=seq$0} END{if(seq)print length(seq)}' "$aln" 2>/dev/null)
+
+    # Ensure we always return a valid number
+    if [ -z "$len" ] || ! [[ "$len" =~ ^[0-9]+$ ]]; then
+        echo 0
+    else
+        echo "$len"
+    fi
 }
 
 # --- Estimate Memory for Alignment ---
@@ -591,13 +699,17 @@ estimate_memory_for_alignment() {
     local num_seqs=$(count_sequences "$fasta")
     local avg_len=$(get_avg_seq_length "$fasta")
 
+    # Use awk for safe arithmetic to prevent integer overflow on large datasets
     # Distance matrix: O(n^2) with ~10 bytes per cell
-    local mem_bytes=$(( num_seqs * num_seqs * 10 + num_seqs * avg_len * MEM_MULT_MAFFT ))
-    local mem_gb=$(( mem_bytes / 1073741824 + MEM_BASE_GB ))
-
-    # Cap at maximum
-    [ $mem_gb -gt $MEM_MAX_GB ] && mem_gb=$MEM_MAX_GB
-    [ $mem_gb -lt $MEM_BASE_GB ] && mem_gb=$MEM_BASE_GB
+    local mem_gb=$(awk -v n="$num_seqs" -v l="$avg_len" -v mult="$MEM_MULT_MAFFT" -v base="$MEM_BASE_GB" -v max="$MEM_MAX_GB" '
+        BEGIN {
+            mem_bytes = (n * n * 10) + (n * l * mult)
+            mem_gb = int(mem_bytes / 1073741824) + base
+            if (mem_gb > max) mem_gb = max
+            if (mem_gb < base) mem_gb = base
+            print mem_gb
+        }
+    ')
 
     echo "${mem_gb}G"
 }
@@ -610,13 +722,17 @@ estimate_memory_for_tree() {
     local num_seqs=$(count_sequences "$aln")
     local aln_len=$(get_alignment_length "$aln")
 
+    # Use awk for safe arithmetic to prevent integer overflow on large datasets
     # IQ-TREE memory: sites * taxa * multiplier
-    local mem_bytes=$(( num_seqs * aln_len * MEM_MULT_IQTREE ))
-    local mem_gb=$(( mem_bytes / 1073741824 + MEM_BASE_GB ))
-
-    # Cap at maximum
-    [ $mem_gb -gt $MEM_MAX_GB ] && mem_gb=$MEM_MAX_GB
-    [ $mem_gb -lt $MEM_BASE_GB ] && mem_gb=$MEM_BASE_GB
+    local mem_gb=$(awk -v n="$num_seqs" -v l="$aln_len" -v mult="$MEM_MULT_IQTREE" -v base="$MEM_BASE_GB" -v max="$MEM_MAX_GB" '
+        BEGIN {
+            mem_bytes = n * l * mult
+            mem_gb = int(mem_bytes / 1073741824) + base
+            if (mem_gb > max) mem_gb = max
+            if (mem_gb < base) mem_gb = base
+            print mem_gb
+        }
+    ')
 
     echo "${mem_gb}G"
 }
@@ -630,21 +746,29 @@ estimate_memory_for_orthofinder() {
 
     if [ -d "$input" ]; then
         # Count sequences across all FASTA files in directory
+        # Use nullglob to handle case where no files match
+        local old_nullglob=$(shopt -p nullglob)
+        shopt -s nullglob
         for f in "$input"/*.fa "$input"/*.faa "$input"/*.fasta; do
             [ -f "$f" ] && total_seqs=$((total_seqs + $(count_sequences "$f")))
         done
+        eval "$old_nullglob"  # Restore previous nullglob setting
     else
         # Assume input is sequence count
         total_seqs="$input"
     fi
 
+    # Use awk for safe arithmetic to prevent integer overflow on large datasets
     # OrthoFinder: O(n^2) for all-vs-all DIAMOND
-    local mem_bytes=$(( total_seqs * total_seqs * MEM_MULT_ORTHOFINDER ))
-    local mem_gb=$(( mem_bytes / 1073741824 + MEM_BASE_GB ))
-
-    # Cap at maximum
-    [ $mem_gb -gt $MEM_MAX_GB ] && mem_gb=$MEM_MAX_GB
-    [ $mem_gb -lt 8 ] && mem_gb=8  # OrthoFinder needs at least 8GB
+    local mem_gb=$(awk -v n="$total_seqs" -v mult="$MEM_MULT_ORTHOFINDER" -v base="$MEM_BASE_GB" -v max="$MEM_MAX_GB" '
+        BEGIN {
+            mem_bytes = n * n * mult
+            mem_gb = int(mem_bytes / 1073741824) + base
+            if (mem_gb > max) mem_gb = max
+            if (mem_gb < 8) mem_gb = 8  # OrthoFinder needs at least 8GB
+            print mem_gb
+        }
+    ')
 
     echo "${mem_gb}G"
 }
@@ -661,13 +785,17 @@ estimate_memory_for_hyphy() {
     # Estimate branches: 2n-2 for binary tree
     local num_branches=$((2 * num_seqs - 2))
 
+    # Use awk for safe arithmetic to prevent integer overflow on large datasets
     # HyPhy aBSREL: sites * branches * multiplier
-    local mem_bytes=$(( aln_len * num_branches * MEM_MULT_HYPHY ))
-    local mem_gb=$(( mem_bytes / 1073741824 + MEM_BASE_GB ))
-
-    # Cap at maximum
-    [ $mem_gb -gt $MEM_MAX_GB ] && mem_gb=$MEM_MAX_GB
-    [ $mem_gb -lt $MEM_BASE_GB ] && mem_gb=$MEM_BASE_GB
+    local mem_gb=$(awk -v l="$aln_len" -v b="$num_branches" -v mult="$MEM_MULT_HYPHY" -v base="$MEM_BASE_GB" -v max="$MEM_MAX_GB" '
+        BEGIN {
+            mem_bytes = l * b * mult
+            mem_gb = int(mem_bytes / 1073741824) + base
+            if (mem_gb > max) mem_gb = max
+            if (mem_gb < base) mem_gb = base
+            print mem_gb
+        }
+    ')
 
     echo "${mem_gb}G"
 }
@@ -940,8 +1068,9 @@ create_orthogroup_manifest() {
     echo -e "index\torthogroup\tnum_seqs\thas_berghia\thas_reference" > "$manifest_file"
 
     # Parse orthogroups and create manifest
+    # Note: Use process substitution to avoid subshell - variables persist correctly
     local index=0
-    tail -n +2 "$orthogroups_file" | while IFS=$'\t' read -r og rest; do
+    while IFS=$'\t' read -r og rest; do
         # Count sequences (tab-separated columns after OG name)
         local num_seqs=$(echo "$rest" | tr '\t' '\n' | grep -v "^$" | wc -l)
 
@@ -959,7 +1088,7 @@ create_orthogroup_manifest() {
 
         echo -e "${index}\t${og}\t${num_seqs}\t${has_berghia}\t${has_reference}" >> "$manifest_file"
         index=$((index + 1))
-    done
+    done < <(tail -n +2 "$orthogroups_file")
 
     local total_ogs=$(tail -n +2 "$manifest_file" | wc -l)
     log "Created orthogroup manifest: $manifest_file ($total_ogs orthogroups)"
@@ -995,9 +1124,29 @@ get_orthogroup_by_index() {
         return 1
     fi
 
+    # Validate index is a non-negative integer
+    if ! [[ "$index" =~ ^[0-9]+$ ]]; then
+        log --level=ERROR "Invalid index: $index (must be non-negative integer)"
+        return 1
+    fi
+
+    # Check bounds: count data lines (excluding header)
+    local total_count=$(tail -n +2 "$manifest_file" | wc -l)
+    if [ "$index" -ge "$total_count" ]; then
+        log --level=ERROR "Index $index out of bounds (max: $((total_count - 1)))"
+        return 1
+    fi
+
     # Add 2 to skip header (awk is 1-based, header is line 1)
     local line_num=$((index + 2))
-    awk -F'\t' "NR==$line_num {print \$2}" "$manifest_file"
+    local og_name=$(awk -F'\t' "NR==$line_num {print \$2}" "$manifest_file")
+
+    if [ -z "$og_name" ]; then
+        log --level=ERROR "No orthogroup found at index $index"
+        return 1
+    fi
+
+    echo "$og_name"
 }
 
 # --- Filter Orthogroups for Processing ---
@@ -1069,8 +1218,18 @@ create_array_checkpoint() {
     local task_id="$2"
     local checkpoint_dir="${RESULTS_DIR}/checkpoints/${step_name}"
 
-    mkdir -p "$checkpoint_dir"
-    touch "${checkpoint_dir}/task_${task_id}.done"
+    # Validate checkpoint directory can be created
+    if ! mkdir -p "$checkpoint_dir" 2>/dev/null; then
+        log --level=WARN "Could not create checkpoint directory: $checkpoint_dir"
+        return 1
+    fi
+
+    if ! touch "${checkpoint_dir}/task_${task_id}.done" 2>/dev/null; then
+        log --level=WARN "Could not create checkpoint file for task $task_id"
+        return 1
+    fi
+
+    return 0
 }
 
 # --- Check Array Job Completion ---
@@ -1112,6 +1271,6 @@ get_incomplete_tasks() {
     done
 
     # Output as comma-separated for SLURM --array format
-    IFS=','
-    echo "${incomplete[*]}"
+    # Use subshell to avoid polluting IFS in calling context
+    ( IFS=','; echo "${incomplete[*]}" )
 }
