@@ -150,22 +150,22 @@ submit_step() {
 
     if [ "$LOCAL_MODE" = true ]; then
         # Run locally
-        echo "[$step] Running locally: $description"
+        echo "[$step] Running locally: $description" >&2
         if [ "$DRY_RUN" = true ]; then
-            echo "  Would run: bash $script_path"
+            echo "  Would run: bash $script_path" >&2
         else
             bash "$script_path"
         fi
-        echo ""
+        echo "" >&2
     else
         # Submit to SLURM
-        echo "[$step] Submitting: $description"
-        [ "$VERBOSE" = true ] && echo "  Script: $script_name"
-        [ "$VERBOSE" = true ] && echo "  Options: $slurm_opts"
+        echo "[$step] Submitting: $description" >&2
+        [ "$VERBOSE" = true ] && echo "  Script: $script_name" >&2
+        [ "$VERBOSE" = true ] && echo "  Options: $slurm_opts" >&2
 
         if [ "$DRY_RUN" = true ]; then
-            echo "  Would run: sbatch${slurm_opts} $script_path"
-            echo "12345"  # Fake job ID for dry run
+            echo "  Would run: sbatch${slurm_opts} $script_path" >&2
+            echo "12345"  # Fake job ID for dry run (stdout for capture)
         else
             local output
             output=$(sbatch${slurm_opts} "$script_path" 2>&1)
@@ -173,8 +173,8 @@ submit_step() {
             job_id=$(echo "$output" | grep -oP 'Submitted batch job \K\d+' || echo "")
 
             if [ -n "$job_id" ]; then
-                echo "  Job ID: $job_id"
-                echo "$job_id"
+                echo "  Job ID: $job_id" >&2
+                echo "$job_id"  # stdout for capture
             else
                 echo "  Warning: Could not parse job ID from: $output" >&2
                 echo ""

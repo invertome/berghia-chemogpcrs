@@ -534,7 +534,7 @@ finalize_pipeline() {
 
     local exit_code="${1:-0}"
 
-    if [ -n "$PROVENANCE_FILE" ] && [ -f "$PROVENANCE_FILE" ]; then
+    if [ -n "${PROVENANCE_FILE:-}" ] && [ -f "${PROVENANCE_FILE:-}" ]; then
         # Update provenance with end time
         local end_time=$(date -Iseconds)
         # Note: In production, use jq to properly update JSON
