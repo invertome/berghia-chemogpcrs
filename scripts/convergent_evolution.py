@@ -24,7 +24,16 @@ from collections import defaultdict
 from typing import Dict, List, Set, Tuple, Optional
 from Bio import AlignIO, SeqIO
 from Bio.Align import MultipleSeqAlignment
-from ete3 import Tree
+
+# Conditional ete3 import - may fail on Python 3.13+ due to removed cgi module
+try:
+    from ete3 import Tree
+    ETE3_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: ete3 not available ({e}). Tree-based features disabled.",
+          file=sys.stderr)
+    Tree = None
+    ETE3_AVAILABLE = False
 
 # Amino acid properties for functional interpretation
 AA_PROPERTIES = {

@@ -19,8 +19,17 @@ import json
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from ete3 import Tree, TreeStyle, NodeStyle, faces
 from typing import Dict, List, Optional, Tuple
+
+# Conditional ete3 import - may fail on Python 3.13+ due to removed cgi module
+try:
+    from ete3 import Tree, TreeStyle, NodeStyle, faces
+    ETE3_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: ete3 not available ({e}). Tree visualization disabled.",
+          file=sys.stderr)
+    Tree = TreeStyle = NodeStyle = faces = None
+    ETE3_AVAILABLE = False
 
 # Geological time scale (Ma = million years ago)
 GEOLOGICAL_PERIODS = {

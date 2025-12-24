@@ -17,7 +17,16 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
-from ete3 import Tree
+
+# Conditional ete3 import - may fail on Python 3.13+ due to removed cgi module
+try:
+    from ete3 import Tree
+    ETE3_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: ete3 not available ({e}). Species tree parsing disabled.",
+          file=sys.stderr)
+    Tree = None
+    ETE3_AVAILABLE = False
 
 
 def parse_arguments():
@@ -70,8 +79,12 @@ def parse_lse_levels(lse_string: str) -> Dict[str, List[str]]:
     return levels
 
 
-def load_species_tree(tree_file: str) -> Optional[Tree]:
+def load_species_tree(tree_file: str):
     """Load species tree from Newick file."""
+    if not ETE3_AVAILABLE:
+        print("Warning: ete3 not available. Species tree features disabled.", file=sys.stderr)
+        return None
+
     if not os.path.exists(tree_file):
         print(f"Warning: Species tree not found: {tree_file}", file=sys.stderr)
         return None

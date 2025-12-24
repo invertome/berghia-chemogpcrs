@@ -27,7 +27,16 @@ import json
 import itertools
 from pathlib import Path
 from scipy import stats
-from ete3 import Tree
+
+# Conditional ete3 import - may fail on Python 3.13+ due to removed cgi module
+try:
+    from ete3 import Tree
+    ETE3_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: ete3 not available ({e}). Phylogenetic features will be limited.",
+          file=sys.stderr)
+    Tree = None
+    ETE3_AVAILABLE = False
 
 # --- Input Arguments ---
 candidates_file = sys.argv[1]
@@ -120,14 +129,24 @@ if ref_cat_path:
 
 # --- Load Phylogenetic Tree ---
 tree_file = f"{phylo_dir}/all_berghia_refs.treefile"
+t = None
+ref_ids = []
+
 if not os.path.exists(tree_file):
-    print(f"Error: Tree file not found: {tree_file}", file=sys.stderr)
-    sys.exit(1)
-
-t = Tree(tree_file, format=1)  # format=1 for IQ-TREE output with support values
-
-# Identify reference sequences and categorize them
-ref_ids = [leaf.name for leaf in t if leaf.name.startswith('ref_')]
+    print(f"Warning: Tree file not found: {tree_file}. Phylogenetic scoring disabled.",
+          file=sys.stderr)
+elif not ETE3_AVAILABLE:
+    print(f"Warning: ete3 not available. Phylogenetic scoring disabled.", file=sys.stderr)
+else:
+    try:
+        t = Tree(tree_file, format=1)  # format=1 for IQ-TREE output with support values
+        # Identify reference sequences and categorize them
+        ref_ids = [leaf.name for leaf in t if leaf.name.startswith('ref_')]
+    except Exception as e:
+        print(f"Warning: Could not load tree: {e}. Phylogenetic scoring disabled.",
+              file=sys.stderr)
+        t = None
+        ref_ids = []
 
 
 def categorize_reference(ref_name):
@@ -299,6 +318,10 @@ def weighted_distance_to_refs(node_name, tree, ref_ids):
     Chemoreceptor references are weighted higher than other GPCRs.
     Returns inverse weighted distance (higher = closer to important refs).
     """
+    # Guard for when tree is not available
+    if tree is None or not ref_ids:
+        return 0.0
+
     if node_name in ref_ids:
         return float('inf')  # Reference itself
 
@@ -883,6 +906,12 @@ def run_leave_one_out_crossval(df, tree, ref_ids, base_weights, n_folds=5):
     Returns:
         dict with cross-validation metrics
     """
+    # Guard for when tree is not available
+    if tree is None or not ref_ids:
+        print("Warning: Cross-validation requires phylogenetic tree. Skipping.",
+              file=sys.stderr)
+        return None
+
     if len(ref_ids) < n_folds:
         print(f"Warning: Not enough references ({len(ref_ids)}) for {n_folds}-fold CV",
               file=sys.stderr)
@@ -971,27 +1000,30 @@ def run_leave_one_out_crossval(df, tree, ref_ids, base_weights, n_folds=5):
 # First pass: collect all depths for percentile calculation
 # Only include nodes on paths with sufficient bootstrap support (H12 fix)
 all_depths = []
-for cand_id in candidates['id']:
-    try:
-        nodes = t.search_nodes(name=cand_id)
-        if nodes:
-            node = nodes[0]
-            # Check if the path to root has sufficient bootstrap support
-            # Walk up the tree and verify bootstrap values
-            has_good_support = True
-            current = node
-            while current.up:
-                # IQ-TREE stores bootstrap as support attribute
-                support = getattr(current.up, 'support', None)
-                if support is not None and support < BOOTSTRAP_THRESHOLD:
-                    has_good_support = False
-                    break
-                current = current.up
+if t is not None:
+    for cand_id in candidates['id']:
+        try:
+            nodes = t.search_nodes(name=cand_id)
+            if nodes:
+                node = nodes[0]
+                # Check if the path to root has sufficient bootstrap support
+                # Walk up the tree and verify bootstrap values
+                has_good_support = True
+                current = node
+                while current.up:
+                    # IQ-TREE stores bootstrap as support attribute
+                    support = getattr(current.up, 'support', None)
+                    if support is not None and support < BOOTSTRAP_THRESHOLD:
+                        has_good_support = False
+                        break
+                    current = current.up
 
-            if has_good_support:
-                all_depths.append(node.get_distance(t))
-    except Exception:
-        pass
+                if has_good_support:
+                    all_depths.append(node.get_distance(t))
+        except Exception:
+            pass
+else:
+    print("Warning: Skipping depth calculation - tree not available.", file=sys.stderr)
 
 lse_threshold = np.percentile(all_depths, LSE_DEPTH_PERCENTILE) if all_depths else 0.5
 
@@ -1341,7 +1373,12 @@ output_cols = [
     'id', 'rank_score', 'confidence_tier', 'evidence_completeness',
     'phylo_score', 'purifying_score', 'positive_score', 'selection_significant',
     'synteny_score', 'has_synteny_data', 'expression_score', 'has_expression_data',
-    'lse_depth_score', 'raw_tree_depth'
+    'lse_depth_score', 'raw_tree_depth',
+    # NEW: Phase 1-5 scores
+    'chemosensory_expr_score', 'has_chemosensory_expr_data',
+    'gprotein_coexpr_score', 'has_gprotein_data',
+    'ecl_divergence_score', 'has_ecl_data',
+    'expansion_score', 'has_expansion_data'
 ]
 
 if sensitivity_results and 'rank_stability' in df_sorted.columns:
