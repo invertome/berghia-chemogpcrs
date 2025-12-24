@@ -47,6 +47,20 @@ SYNTENY_WEIGHT = float(os.getenv('SYNTENY_WEIGHT', 3))
 EXPR_WEIGHT = float(os.getenv('EXPR_WEIGHT', 1))
 LSE_DEPTH_WEIGHT = float(os.getenv('LSE_DEPTH_WEIGHT', 1))
 
+# NEW: Phase 1 - Chemosensory expression weight
+CHEMOSENSORY_EXPR_WEIGHT = float(os.getenv('CHEMOSENSORY_EXPR_WEIGHT', 3))
+CHEMOSENSORY_HARD_FILTER = os.getenv('CHEMOSENSORY_HARD_FILTER', 'false').lower() == 'true'
+
+# NEW: Phase 2 - G-protein co-expression weight
+GPROTEIN_COEXPR_WEIGHT = float(os.getenv('GPROTEIN_COEXPR_WEIGHT', 2))
+
+# NEW: Phase 3 - ECL divergence weight
+ECL_DIVERGENCE_WEIGHT = float(os.getenv('ECL_DIVERGENCE_WEIGHT', 1.5))
+
+# NEW: Phase 5 - CAFE expansion weight
+EXPANSION_WEIGHT = float(os.getenv('EXPANSION_WEIGHT', 1.5))
+PREFERRED_EXPANSION_LEVELS = os.getenv('PREFERRED_EXPANSION_LEVELS', 'Aeolid-specific').split(',')
+
 # Reference weighting
 CHEMORECEPTOR_REF_WEIGHT = float(os.getenv('CHEMORECEPTOR_REF_WEIGHT', 2.0))  # New
 OTHER_GPCR_REF_WEIGHT = float(os.getenv('OTHER_GPCR_REF_WEIGHT', 1.0))        # New
@@ -272,6 +286,10 @@ def load_synteny_scores(synteny_dir):
 
 synteny_scores = load_synteny_scores(synteny_dir)
 
+# --- Derive results directory from phylo_dir ---
+# phylo_dir is typically {RESULTS_DIR}/phylogenies/protein
+results_dir = str(Path(phylo_dir).parent.parent)
+
 # --- Scoring Functions ---
 
 def weighted_distance_to_refs(node_name, tree, ref_ids):
@@ -386,18 +404,333 @@ def get_lse_depth_score(candidate_id, tree, threshold):
     return 0.0, 0.0
 
 
+# --- NEW: Phase 1 - Chemosensory Expression Scoring ---
+
+def load_chemosensory_expression(results_dir):
+    """
+    Load chemosensory expression summary from process_expression.py output.
+
+    Returns dict: gene_id -> {tau_index, enrichment, is_specific, has_data}
+    """
+    expr_file = os.path.join(results_dir, 'expression', 'expression_summary.csv')
+    expr_data = {}
+
+    if not os.path.exists(expr_file):
+        return expr_data
+
+    try:
+        df = pd.read_csv(expr_file)
+        for _, row in df.iterrows():
+            gene_id = str(row['gene_id'])
+            expr_data[gene_id] = {
+                'tau_index': row.get('tau_index', 0.0),
+                'chemosensory_enrichment': row.get('chemosensory_enrichment', 0.0),
+                'mean_chemosensory_tpm': row.get('mean_chemosensory_tpm', 0.0),
+                'expressed_in_chemosensory': row.get('expressed_in_chemosensory', False),
+                'is_chemosensory_specific': row.get('is_chemosensory_specific', False),
+                'has_data': True
+            }
+        print(f"Loaded chemosensory expression data for {len(expr_data)} genes", file=sys.stderr)
+    except Exception as e:
+        print(f"Warning: Could not load chemosensory expression: {e}", file=sys.stderr)
+
+    return expr_data
+
+
+def get_chemosensory_expression_score(candidate_id, chemo_expr_data):
+    """
+    Calculate chemosensory expression score.
+
+    Components:
+    1. Is expressed in any chemosensory tissue (binary bonus)
+    2. Tau index (tissue specificity)
+    3. Chemosensory enrichment (fold-change vs other tissues)
+
+    Returns: (score, has_data)
+    """
+    if candidate_id not in chemo_expr_data:
+        return 0.0, False
+
+    data = chemo_expr_data[candidate_id]
+
+    if not data.get('has_data', False):
+        return 0.0, False
+
+    score = 0.0
+
+    # Component 1: Expressed in chemosensory tissue
+    if data.get('expressed_in_chemosensory', False):
+        score += 0.3
+
+    # Component 2: Tissue specificity (tau index)
+    tau = data.get('tau_index', 0.0)
+    if pd.notna(tau):
+        score += tau * 0.3  # Max 0.3 contribution
+
+    # Component 3: Chemosensory enrichment (log fold-change, capped)
+    enrichment = data.get('chemosensory_enrichment', 0.0)
+    if enrichment > 1:
+        # Log2 fold-change, capped at 0.4 contribution
+        log_enrichment = min(np.log2(enrichment) / 5, 1.0)  # Cap at 5-fold (log2=2.32)
+        score += log_enrichment * 0.4
+
+    # Bonus for chemosensory-specific expression
+    if data.get('is_chemosensory_specific', False):
+        score *= 1.5  # 50% bonus
+
+    return score, True
+
+
+# --- NEW: Phase 2 - G-protein Co-expression Scoring ---
+
+def load_gprotein_coexpression(results_dir):
+    """
+    Load G-protein co-expression data.
+
+    Returns dict: gpcr_id -> {gprotein_class, correlation, coexpr_score, has_data}
+    """
+    coexpr_file = os.path.join(results_dir, 'gproteins', 'gprotein_coexpression.csv')
+    coexpr_data = {}
+
+    if not os.path.exists(coexpr_file):
+        return coexpr_data
+
+    try:
+        df = pd.read_csv(coexpr_file)
+        for _, row in df.iterrows():
+            gpcr_id = str(row['gpcr_id'])
+            coexpr_data[gpcr_id] = {
+                'best_gprotein': row.get('best_coexpr_gprotein', ''),
+                'gprotein_class': row.get('gprotein_class', ''),
+                'correlation': row.get('correlation', 0.0),
+                'coexpr_tissue': row.get('coexpr_tissue', ''),
+                'coexpr_score': row.get('coexpr_score', 0.0),
+                'has_data': True
+            }
+        print(f"Loaded G-protein co-expression data for {len(coexpr_data)} GPCRs", file=sys.stderr)
+    except Exception as e:
+        print(f"Warning: Could not load G-protein co-expression: {e}", file=sys.stderr)
+
+    return coexpr_data
+
+
+def get_gprotein_coexpr_score(candidate_id, coexpr_data, olfactory_classes=None):
+    """
+    Calculate G-protein co-expression score.
+
+    Prioritizes co-expression with olfactory G-proteins (Golf, Gi, Go).
+
+    Returns: (score, has_data)
+    """
+    if olfactory_classes is None:
+        olfactory_classes = ['Golf', 'Gi', 'Go']
+
+    if candidate_id not in coexpr_data:
+        return 0.0, False
+
+    data = coexpr_data[candidate_id]
+
+    if not data.get('has_data', False):
+        return 0.0, False
+
+    score = data.get('coexpr_score', 0.0)
+
+    # Bonus for olfactory G-protein class
+    gprotein_class = data.get('gprotein_class', '')
+    if gprotein_class in olfactory_classes:
+        score *= 1.5  # 50% bonus for olfactory G-proteins
+
+    return score, True
+
+
+# --- NEW: Phase 3 - ECL Divergence Scoring ---
+
+def load_ecl_divergence(results_dir):
+    """
+    Load ECL divergence analysis results.
+
+    Returns dict: gene_id -> {ecl_tm_ratio, ecl_divergence, tm_divergence, has_data}
+    """
+    ecl_file = os.path.join(results_dir, 'ecl_analysis', 'ecl_divergence.csv')
+    ecl_data = {}
+
+    if not os.path.exists(ecl_file):
+        return ecl_data
+
+    try:
+        df = pd.read_csv(ecl_file)
+        for _, row in df.iterrows():
+            gene_id = str(row['gene_id'])
+            ecl_data[gene_id] = {
+                'ecl_tm_ratio': row.get('ecl_tm_ratio', 0.0),
+                'ecl_divergence': row.get('ecl_divergence', 0.0),
+                'tm_divergence': row.get('tm_divergence', 0.0),
+                'ecl_divergence_score': row.get('ecl_divergence_score', 0.0),
+                'has_data': True
+            }
+        print(f"Loaded ECL divergence data for {len(ecl_data)} genes", file=sys.stderr)
+    except Exception as e:
+        print(f"Warning: Could not load ECL divergence: {e}", file=sys.stderr)
+
+    return ecl_data
+
+
+def get_ecl_divergence_score(candidate_id, ecl_data, ratio_threshold=2.0):
+    """
+    Calculate ECL divergence score.
+
+    High ratio (ECL divergent, TM conserved) suggests ligand-binding diversification.
+
+    Returns: (score, has_data)
+    """
+    if candidate_id not in ecl_data:
+        return 0.0, False
+
+    data = ecl_data[candidate_id]
+
+    if not data.get('has_data', False):
+        return 0.0, False
+
+    ratio = data.get('ecl_tm_ratio', 0.0)
+
+    # Score based on ratio exceeding threshold
+    if ratio >= ratio_threshold:
+        # Normalize: ratio of 2 = base score, higher = better
+        score = min(ratio / ratio_threshold, 3.0)  # Cap at 3x threshold
+    else:
+        # Below threshold, reduced score
+        score = ratio / ratio_threshold * 0.5
+
+    return score, True
+
+
+# --- NEW: Phase 5 - CAFE Expansion Scoring ---
+
+def load_cafe_expansion(results_dir):
+    """
+    Load CAFE expansion interpretation results.
+
+    Returns dict: orthogroup -> {taxonomic_level, pvalue, expansion_fold, has_data}
+    """
+    cafe_file = os.path.join(results_dir, 'cafe', 'expansion_interpretation.csv')
+    cafe_data = {}
+
+    if not os.path.exists(cafe_file):
+        return cafe_data
+
+    try:
+        df = pd.read_csv(cafe_file)
+        for _, row in df.iterrows():
+            og = str(row['orthogroup'])
+            cafe_data[og] = {
+                'taxonomic_level': row.get('taxonomic_level', ''),
+                'expansion_pvalue': row.get('expansion_pvalue', 1.0),
+                'expansion_fold': row.get('expansion_fold', 1.0),
+                'berghia_copies': row.get('berghia_copies', 0),
+                'ancestral_copies': row.get('ancestral_copies', 0),
+                'has_data': True
+            }
+        print(f"Loaded CAFE expansion data for {len(cafe_data)} orthogroups", file=sys.stderr)
+    except Exception as e:
+        print(f"Warning: Could not load CAFE expansion: {e}", file=sys.stderr)
+
+    return cafe_data
+
+
+def load_gene_to_orthogroup(results_dir):
+    """
+    Load gene to orthogroup mapping.
+
+    Returns dict: gene_id -> orthogroup
+    """
+    # Try multiple possible file locations
+    possible_files = [
+        os.path.join(results_dir, 'orthofinder', 'Orthogroups', 'Orthogroups.tsv'),
+        os.path.join(results_dir, 'orthofinder', 'Orthogroups.tsv'),
+        os.path.join(results_dir, 'orthology', 'gene_orthogroups.csv')
+    ]
+
+    gene_to_og = {}
+
+    for og_file in possible_files:
+        if os.path.exists(og_file):
+            try:
+                if og_file.endswith('.tsv'):
+                    df = pd.read_csv(og_file, sep='\t')
+                    # OrthoFinder format: Orthogroup, Species1, Species2, ...
+                    for _, row in df.iterrows():
+                        og = row.iloc[0]
+                        for col in df.columns[1:]:
+                            genes = str(row[col]).split(', ')
+                            for gene in genes:
+                                if gene and gene != 'nan':
+                                    gene_to_og[gene.strip()] = og
+                else:
+                    df = pd.read_csv(og_file)
+                    for _, row in df.iterrows():
+                        gene_to_og[str(row['gene_id'])] = str(row['orthogroup'])
+                print(f"Loaded gene-orthogroup mapping: {len(gene_to_og)} genes", file=sys.stderr)
+                break
+            except Exception as e:
+                print(f"Warning: Could not parse {og_file}: {e}", file=sys.stderr)
+
+    return gene_to_og
+
+
+def get_expansion_score(candidate_id, cafe_data, gene_to_og, preferred_levels=None):
+    """
+    Calculate CAFE expansion score.
+
+    Prioritizes expansions at preferred taxonomic levels (e.g., Aeolid-specific).
+
+    Returns: (score, has_data)
+    """
+    if preferred_levels is None:
+        preferred_levels = ['Aeolid-specific']
+
+    # Get orthogroup for this candidate
+    og = gene_to_og.get(candidate_id)
+    if not og or og not in cafe_data:
+        return 0.0, False
+
+    data = cafe_data[og]
+
+    if not data.get('has_data', False):
+        return 0.0, False
+
+    pvalue = data.get('expansion_pvalue', 1.0)
+
+    # Base score from significance (-log10 p-value)
+    if pvalue > 0 and pvalue < 1:
+        base_score = -np.log10(pvalue)
+    else:
+        base_score = 0.0
+
+    # Bonus for preferred taxonomic level
+    tax_level = data.get('taxonomic_level', '')
+    if tax_level in preferred_levels:
+        base_score *= 1.5  # 50% bonus
+
+    # Additional bonus for high expansion fold
+    fold = data.get('expansion_fold', 1.0)
+    if fold > 2:
+        base_score *= min(fold / 2, 2.0)  # Up to 2x bonus
+
+    return base_score, True
+
+
 # --- Sensitivity Analysis Functions ---
 
 def calculate_rank_score(df, weights):
     """
     Calculate rank scores with given weight parameters.
 
-    Uses fair scoring that handles missing data (synteny, expression) by
+    Uses fair scoring that handles missing data (synteny, expression, etc.) by
     normalizing per-candidate based on available evidence.
 
     Args:
         df: DataFrame with normalized score columns and has_*_data flags
-        weights: dict with keys phylo, purifying, positive, synteny, expr, lse_depth
+        weights: dict with keys for all weight parameters
 
     Returns:
         Series of rank scores
@@ -407,20 +740,37 @@ def calculate_rank_score(df, weights):
     def calc_row(row):
         # Base scores always available
         score = (
-            row['phylo_score_norm'] * weights['phylo'] +
-            row['purifying_score_norm'] * weights['purifying'] +
-            row['positive_score_norm'] * weights['positive'] +
-            row['lse_depth_score_norm'] * weights['lse_depth']
+            row['phylo_score_norm'] * weights.get('phylo', 0) +
+            row['purifying_score_norm'] * weights.get('purifying', 0) +
+            row['positive_score_norm'] * weights.get('positive', 0) +
+            row['lse_depth_score_norm'] * weights.get('lse_depth', 0)
         )
-        total_weight = weights['phylo'] + weights['purifying'] + weights['positive'] + weights['lse_depth']
+        total_weight = (
+            weights.get('phylo', 0) + weights.get('purifying', 0) +
+            weights.get('positive', 0) + weights.get('lse_depth', 0)
+        )
 
         # Conditionally add synteny and expression
         if row.get('has_synteny_data', False):
-            score += row['synteny_score_norm'] * weights['synteny']
-            total_weight += weights['synteny']
+            score += row['synteny_score_norm'] * weights.get('synteny', 0)
+            total_weight += weights.get('synteny', 0)
         if row.get('has_expression_data', False):
-            score += row['expression_score_norm'] * weights['expr']
-            total_weight += weights['expr']
+            score += row['expression_score_norm'] * weights.get('expr', 0)
+            total_weight += weights.get('expr', 0)
+
+        # NEW: Conditionally add Phase 1-5 scores
+        if row.get('has_chemosensory_expr_data', False):
+            score += row.get('chemosensory_expr_score_norm', 0) * weights.get('chemosensory_expr', 0)
+            total_weight += weights.get('chemosensory_expr', 0)
+        if row.get('has_gprotein_data', False):
+            score += row.get('gprotein_coexpr_score_norm', 0) * weights.get('gprotein_coexpr', 0)
+            total_weight += weights.get('gprotein_coexpr', 0)
+        if row.get('has_ecl_data', False):
+            score += row.get('ecl_divergence_score_norm', 0) * weights.get('ecl_divergence', 0)
+            total_weight += weights.get('ecl_divergence', 0)
+        if row.get('has_expansion_data', False):
+            score += row.get('expansion_score_norm', 0) * weights.get('expansion', 0)
+            total_weight += weights.get('expansion', 0)
 
         # Normalize to max possible
         if total_weight > 0:
@@ -645,6 +995,23 @@ for cand_id in candidates['id']:
 
 lse_threshold = np.percentile(all_depths, LSE_DEPTH_PERCENTILE) if all_depths else 0.5
 
+# --- Load NEW Data Sources (Phases 1-5) ---
+# Phase 1: Chemosensory expression data
+chemo_expr_data = load_chemosensory_expression(results_dir)
+
+# Phase 2: G-protein co-expression data
+gprotein_coexpr_data = load_gprotein_coexpression(results_dir)
+
+# Phase 3: ECL divergence data
+ecl_divergence_data = load_ecl_divergence(results_dir)
+
+# Phase 5: CAFE expansion data
+cafe_expansion_data = load_cafe_expansion(results_dir)
+gene_to_orthogroup = load_gene_to_orthogroup(results_dir)
+
+# ECL divergence threshold from environment
+ECL_RATIO_THRESHOLD = float(os.getenv('ECL_CONSERVATION_RATIO_THRESHOLD', 2.0))
+
 # Second pass: calculate all scores
 results = []
 
@@ -664,15 +1031,35 @@ for cand_id in candidates['id']:
     # LSE depth score
     lse_score, raw_depth = get_lse_depth_score(cand_id, t, lse_threshold)
 
+    # NEW: Phase 1 - Chemosensory expression score
+    chemo_expr_score, has_chemo_expr = get_chemosensory_expression_score(cand_id, chemo_expr_data)
+
+    # NEW: Phase 2 - G-protein co-expression score
+    gprotein_score, has_gprotein = get_gprotein_coexpr_score(cand_id, gprotein_coexpr_data)
+
+    # NEW: Phase 3 - ECL divergence score
+    ecl_score, has_ecl = get_ecl_divergence_score(cand_id, ecl_divergence_data, ECL_RATIO_THRESHOLD)
+
+    # NEW: Phase 5 - CAFE expansion score
+    expansion_score, has_expansion = get_expansion_score(
+        cand_id, cafe_expansion_data, gene_to_orthogroup, PREFERRED_EXPANSION_LEVELS
+    )
+
     # Track evidence completeness (based on data availability, not just score > 0)
-    evidence_count = sum([
+    # Updated to include new score sources
+    evidence_sources = [
         phylo_score > 0,
         purifying_score > 0 or positive_score > 0,
-        has_synteny,  # Data available (even if score is 0)
+        has_synteny,
         has_expression,
-        lse_score > 0
-    ])
-    evidence_completeness = evidence_count / 5.0
+        lse_score > 0,
+        has_chemo_expr,
+        has_gprotein,
+        has_ecl,
+        has_expansion
+    ]
+    evidence_count = sum(evidence_sources)
+    evidence_completeness = evidence_count / len(evidence_sources)
 
     results.append({
         'id': cand_id,
@@ -686,6 +1073,15 @@ for cand_id in candidates['id']:
         'has_expression_data': has_expression,
         'lse_depth_score': lse_score,
         'raw_tree_depth': raw_depth,
+        # NEW scores
+        'chemosensory_expr_score': chemo_expr_score,
+        'has_chemosensory_expr_data': has_chemo_expr,
+        'gprotein_coexpr_score': gprotein_score,
+        'has_gprotein_data': has_gprotein,
+        'ecl_divergence_score': ecl_score,
+        'has_ecl_data': has_ecl,
+        'expansion_score': expansion_score,
+        'has_expansion_data': has_expansion,
         'evidence_completeness': evidence_completeness
     })
 
@@ -693,7 +1089,11 @@ df = pd.DataFrame(results)
 
 # --- Normalize Scores ---
 # Normalize continuous scores to [0,1] range for fair comparison
-normalize_cols = ['phylo_score', 'purifying_score', 'positive_score', 'expression_score', 'lse_depth_score']
+normalize_cols = [
+    'phylo_score', 'purifying_score', 'positive_score', 'expression_score', 'lse_depth_score',
+    # NEW score columns
+    'chemosensory_expr_score', 'gprotein_coexpr_score', 'ecl_divergence_score', 'expansion_score'
+]
 
 for col in normalize_cols:
     col_min = df[col].min()
@@ -716,8 +1116,11 @@ def calculate_fair_rank_score(row):
     """
     Calculate rank score with per-candidate weight normalization.
 
-    Candidates missing data (synteny, expression) are scored only on available
-    evidence, then normalized to be comparable with candidates having full data.
+    Candidates missing data (synteny, expression, chemosensory, etc.) are scored
+    only on available evidence, then normalized to be comparable with candidates
+    having full data.
+
+    Updated to include all new Phase 1-5 scoring components.
     """
     # Base scores that are always available
     score = (
@@ -738,9 +1141,33 @@ def calculate_fair_rank_score(row):
         score += row['expression_score_norm'] * EXPR_WEIGHT
         total_weight += EXPR_WEIGHT
 
+    # NEW: Add chemosensory expression if data is available (Phase 1)
+    if row.get('has_chemosensory_expr_data', False):
+        score += row['chemosensory_expr_score_norm'] * CHEMOSENSORY_EXPR_WEIGHT
+        total_weight += CHEMOSENSORY_EXPR_WEIGHT
+
+    # NEW: Add G-protein co-expression if data is available (Phase 2)
+    if row.get('has_gprotein_data', False):
+        score += row['gprotein_coexpr_score_norm'] * GPROTEIN_COEXPR_WEIGHT
+        total_weight += GPROTEIN_COEXPR_WEIGHT
+
+    # NEW: Add ECL divergence if data is available (Phase 3)
+    if row.get('has_ecl_data', False):
+        score += row['ecl_divergence_score_norm'] * ECL_DIVERGENCE_WEIGHT
+        total_weight += ECL_DIVERGENCE_WEIGHT
+
+    # NEW: Add CAFE expansion if data is available (Phase 5)
+    if row.get('has_expansion_data', False):
+        score += row['expansion_score_norm'] * EXPANSION_WEIGHT
+        total_weight += EXPANSION_WEIGHT
+
     # Normalize to max possible score (as if all weights were available)
-    max_possible_weight = (PHYLO_WEIGHT + PURIFYING_WEIGHT + POSITIVE_WEIGHT +
-                           SYNTENY_WEIGHT + EXPR_WEIGHT + LSE_DEPTH_WEIGHT)
+    max_possible_weight = (
+        PHYLO_WEIGHT + PURIFYING_WEIGHT + POSITIVE_WEIGHT +
+        SYNTENY_WEIGHT + EXPR_WEIGHT + LSE_DEPTH_WEIGHT +
+        CHEMOSENSORY_EXPR_WEIGHT + GPROTEIN_COEXPR_WEIGHT +
+        ECL_DIVERGENCE_WEIGHT + EXPANSION_WEIGHT
+    )
 
     # Scale score to be comparable across candidates with different data availability
     if total_weight > 0:
@@ -766,8 +1193,12 @@ def assign_confidence_tier(row):
     completeness = row['evidence_completeness']
     score = row['rank_score']
 
-    # Normalize rank score for tier assignment
-    max_possible = PHYLO_WEIGHT + PURIFYING_WEIGHT + POSITIVE_WEIGHT + SYNTENY_WEIGHT + EXPR_WEIGHT + LSE_DEPTH_WEIGHT
+    # Normalize rank score for tier assignment (updated with new weights)
+    max_possible = (
+        PHYLO_WEIGHT + PURIFYING_WEIGHT + POSITIVE_WEIGHT + SYNTENY_WEIGHT +
+        EXPR_WEIGHT + LSE_DEPTH_WEIGHT + CHEMOSENSORY_EXPR_WEIGHT +
+        GPROTEIN_COEXPR_WEIGHT + ECL_DIVERGENCE_WEIGHT + EXPANSION_WEIGHT
+    )
     score_pct = score / max_possible if max_possible > 0 else 0
 
     if completeness >= 0.6 and score_pct >= 0.5:
@@ -780,15 +1211,30 @@ def assign_confidence_tier(row):
 
 df['confidence_tier'] = df.apply(assign_confidence_tier, axis=1)
 
+# --- Apply Hard Filter if Enabled (Phase 1) ---
+if CHEMOSENSORY_HARD_FILTER and 'has_chemosensory_expr_data' in df.columns:
+    original_count = len(df)
+    # Only keep candidates with chemosensory expression
+    df = df[df['has_chemosensory_expr_data'] & (df['chemosensory_expr_score'] > 0)]
+    filtered_count = len(df)
+    if original_count > filtered_count:
+        print(f"CHEMOSENSORY_HARD_FILTER: Removed {original_count - filtered_count} candidates "
+              f"without chemosensory expression", file=sys.stderr)
+
 # --- Sort and Save ---
 df_sorted = df.sort_values('rank_score', ascending=False)
 
-# Select columns for output
+# Select columns for output (updated with new score columns)
 output_cols = [
     'id', 'rank_score', 'confidence_tier', 'evidence_completeness',
     'phylo_score', 'purifying_score', 'positive_score', 'selection_significant',
     'synteny_score', 'has_synteny_data', 'expression_score', 'has_expression_data',
-    'lse_depth_score', 'raw_tree_depth'
+    'lse_depth_score', 'raw_tree_depth',
+    # NEW: Phase 1-5 scores
+    'chemosensory_expr_score', 'has_chemosensory_expr_data',
+    'gprotein_coexpr_score', 'has_gprotein_data',
+    'ecl_divergence_score', 'has_ecl_data',
+    'expansion_score', 'has_expansion_data'
 ]
 
 df_sorted[output_cols].to_csv(output_file, index=False)
@@ -804,7 +1250,12 @@ if RUN_SENSITIVITY:
         'positive': POSITIVE_WEIGHT,
         'synteny': SYNTENY_WEIGHT,
         'expr': EXPR_WEIGHT,
-        'lse_depth': LSE_DEPTH_WEIGHT
+        'lse_depth': LSE_DEPTH_WEIGHT,
+        # NEW: Phase 1-5 weights
+        'chemosensory_expr': CHEMOSENSORY_EXPR_WEIGHT,
+        'gprotein_coexpr': GPROTEIN_COEXPR_WEIGHT,
+        'ecl_divergence': ECL_DIVERGENCE_WEIGHT,
+        'expansion': EXPANSION_WEIGHT
     }
 
     sensitivity_results = run_sensitivity_analysis(

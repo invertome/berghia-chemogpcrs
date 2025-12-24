@@ -45,6 +45,16 @@ This pipeline integrates multiple computational approaches to discover and chara
 - **Conservation mapping** with per-residue analysis
 - **Integrated candidate ranking** with sensitivity analysis
 
+### Chemosensory-Specific Analysis (v4)
+
+The v4 update adds specialized analyses for identifying olfactory chemoreceptors in aquatic invertebrates:
+
+- **Chemosensory tissue expression** - Tau index and tissue-specific enrichment in rhinophore/oral veil
+- **G-protein co-expression** - Correlation with olfactory G-proteins (Golf, Gi, Go)
+- **ECL divergence analysis** - Extracellular loop diversification vs transmembrane conservation
+- **Binding pocket hydrophilicity** - Aquatic-adapted pocket properties for water-soluble ligands
+- **CAFE expansion interpretation** - Taxonomic context for gene family expansions (Aeolid-specific, etc.)
+
 ---
 
 ## Pipeline Architecture
@@ -117,17 +127,23 @@ Step 07: Candidate Ranking
          ├── Weighted phylogenetic proximity
          ├── Separate purifying/positive selection scores
          ├── Quantitative synteny scoring
-         ├── Expression analysis (Salmon TPM) [NEW]
-         ├── Sensitivity analysis [NEW]
-         ├── Cross-validation [NEW]
+         ├── Expression analysis (Salmon TPM)
+         ├── Chemosensory tissue specificity (tau index) [NEW v4]
+         ├── G-protein co-expression scoring [NEW v4]
+         ├── ECL divergence analysis [NEW v4]
+         ├── CAFE expansion interpretation [NEW v4]
+         ├── Sensitivity analysis
+         ├── Cross-validation
          └── Confidence tier assignment
          │
          ▼
 Step 08: Structural Analysis
          │
-         ├── AlphaFold predictions
-         ├── Binding site prediction [NEW]
-         ├── Conservation mapping [NEW]
+         ├── Top-N ranked candidate selection [NEW v4]
+         ├── AlphaFold predictions (subset)
+         ├── Binding site prediction
+         ├── Pocket hydrophilicity analysis [NEW v4]
+         ├── Conservation mapping
          └── FoldTree (structural phylogeny)
          │
          ▼
@@ -394,16 +410,27 @@ berghia-chemogpcrs/
 ├── databases/                   # Local databases (API-independent mode)
 │
 └── results/                     # Pipeline outputs
-    ├── clustering/              # CD-HIT results [NEW]
-    ├── classification/          # GPCR classification [NEW]
-    ├── cafe/                    # CAFE5 results [NEW]
-    ├── notung/                  # Gene tree reconciliation [NEW]
+    ├── clustering/              # CD-HIT results
+    ├── classification/          # GPCR classification
+    ├── cafe/                    # CAFE5 results
+    │   └── expansion_interpretation.csv  # LSE interpretation [v4]
+    ├── notung/                  # Gene tree reconciliation
     ├── phylogenies/
     ├── selective_pressure/
+    ├── expression/              # Expression analysis [v4]
+    │   └── expression_summary.csv       # Chemosensory metrics
+    ├── gproteins/               # G-protein analysis [v4]
+    │   ├── classified_gproteins.csv     # G-protein classes
+    │   └── gprotein_coexpression.csv    # Co-expression data
+    ├── ecl_analysis/            # ECL divergence [v4]
+    │   └── ecl_divergence.csv
     ├── ranking/
-    │   ├── sensitivity_analysis.csv   # Ranking stability [NEW]
-    │   └── weight_importance.json     # Weight analysis [NEW]
+    │   ├── ranked_candidates_sorted.csv # Main output (updated v4)
+    │   ├── sensitivity_analysis.csv     # Ranking stability
+    │   └── weight_importance.json       # Weight analysis
     ├── structural_analysis/
+    │   ├── candidates_for_alphafold.txt # Selected subset [v4]
+    │   └── *_structure_summary.tsv      # Pocket hydrophilicity [v4]
     └── logs/
 ```
 
@@ -662,21 +689,33 @@ scaffold_1	maker	CDS	3000	5000	.	+	2	ID=cds002;Parent=mRNA001
 
 ### 4. Expression Data (Optional)
 
-Gene expression data for tissue-specific analysis.
+Gene expression data for tissue-specific analysis. Expression data may not be available for all species.
 
 #### Option A: Salmon Quantification (Recommended)
 
+Organize Salmon output by species, tissue, and replicate:
+
 ```
 expression_data/
-├── rhinophore/
-│   └── quant.sf
-├── oral_veil/
-│   └── quant.sf
-├── tentacle/
-│   └── quant.sf
-├── foot/
-│   └── quant.sf
-└── tissue_annotations.tsv       # Optional: map sample names to tissue types
+├── taxid_berghia/                    # Species (matches TAXA entry)
+│   ├── rhinophore/                   # Tissue name
+│   │   ├── rep1/                     # Replicate
+│   │   │   └── quant.sf
+│   │   ├── rep2/
+│   │   │   └── quant.sf
+│   │   └── rep3/
+│   │       └── quant.sf
+│   ├── oral_veil/
+│   │   ├── rep1/
+│   │   │   └── quant.sf
+│   │   └── ...
+│   ├── foot/
+│   │   └── ...
+│   └── mantle/
+│       └── ...
+├── taxid_aplysia/                    # Another species (if available)
+│   └── ...
+└── tissue_annotations.tsv            # Optional: metadata
 ```
 
 **quant.sf format (Salmon output):**
@@ -695,6 +734,11 @@ oral_veil	oral_veil	yes
 foot	foot	no
 mantle	mantle	no
 ```
+
+**Notes:**
+- Not all species need expression data; the pipeline handles missing data gracefully
+- Tissue names should match `CHEMOSENSORY_TISSUES` and `NON_CHEMOSENSORY_TISSUES` in config.sh
+- Replicates are averaged during processing
 
 #### Option B: Pre-computed Expression Matrix
 
@@ -723,7 +767,59 @@ custom_hmms/
 
 These should be HMMER3 format profiles built with `hmmbuild`.
 
-### 6. Configuring config.sh
+### 6. G-protein References (Optional, for Co-expression Analysis)
+
+Reference G-protein sequences for classifying G-proteins in transcriptomes and analyzing GPCR-Gprotein co-expression.
+
+#### File Location
+```
+references/
+├── gprotein_mollusc.fasta           # Molluscan G-protein sequences (user-provided)
+├── gprotein_mollusc_classes.tsv     # Class annotations for molluscan sequences
+├── gprotein_reference.fasta         # General reference G-proteins (curated)
+└── gprotein_reference_classes.tsv   # Class annotations for references
+```
+
+#### FASTA Format
+```fasta
+>Gnai1_Aplysia Galpha-i1 subunit
+MGCTLSAEDKAAVERSKMIDRNLREDGEKAAREVKLLLLGAGESGKSTIVKQMKIIHEAG
+YSEEECKQYKAVVYSNTIQSIIAIIRAMGRLKIDFGDSARADDARQLFVLAGAAEEGFMT
+...
+>Golf_Lottia Galpha-olf subunit
+MGCLGNSKTEDQRNEEKAQREANKKIEKQLQKDKQVYRATHRLLLLGAGESGKSTIVKQM
+...
+```
+
+#### Class Annotation Format (TSV)
+```tsv
+sequence_id	class	subtype	species	notes
+Gnai1_Aplysia	Gi	Galphai1	Aplysia_californica	inhibitory, olfactory-related
+Golf_Lottia	Golf	Galphaolf	Lottia_gigantea	olfactory-specific
+Gnao_Berghia	Go	Galphao	Berghia_stephanieae	olfactory-related
+Gnas_Aplysia	Gs	Galphas	Aplysia_californica	stimulatory (control)
+Gnaq_Lottia	Gq	Galphaq	Lottia_gigantea	taste/other chemosensory
+```
+
+**Required columns:**
+- `sequence_id` - Must match FASTA header (before first space)
+- `class` - G-protein class: `Golf`, `Gi`, `Go`, `Gq`, `Gs`, `G12/13`
+- `subtype` - Specific subtype (e.g., `Galphai1`, `Galphaolf`)
+- `species` - Species name
+- `notes` - Optional functional notes
+
+**G-protein classes for olfactory analysis:**
+| Class | Role | Relevance |
+|-------|------|-----------|
+| Golf | Olfactory-specific | Primary olfactory signaling (vertebrates) |
+| Gi | Inhibitory | Olfactory signaling in invertebrates |
+| Go | Other | Some invertebrate olfactory systems |
+| Gq | Phospholipase C | Taste, some chemosensory |
+| Gs | Stimulatory | General signaling (negative control) |
+
+The pipeline uses these to identify which GPCRs are co-expressed with olfactory-associated G-proteins in chemosensory tissues.
+
+### 7. Configuring config.sh
 
 After preparing your input files, update `config.sh` to match your data:
 
@@ -761,7 +857,7 @@ export LSE_LEVELS=(
 export CHEMOSENSORY_TISSUES="rhinophore,oral_veil,tentacle,cephalic"
 ```
 
-### 7. Validation Checklist
+### 8. Validation Checklist
 
 Before running the pipeline, verify your setup:
 
@@ -787,7 +883,7 @@ Before running the pipeline, verify your setup:
 | "No nucleotide sequences" | Missing .mrna/.cds file | Provide CDS file or dN/dS will be skipped |
 | "Empty reference file" | Download failed | Re-download reference sequences |
 
-### 8. Example Setup
+### 9. Example Setup
 
 Complete example for analyzing *Berghia stephanieae* with two outgroups:
 
@@ -849,6 +945,16 @@ export CAFE_LAMBDA_SEARCH=true   # Search for optimal lambda
 export CAFE_PVALUE_THRESHOLD=0.05 # Significance threshold
 ```
 
+### IQ-TREE Model Selection
+
+```bash
+# Use standard empirical amino acid models to reduce computation
+export IQTREE_MODEL="MFP -mset LG,WAG,JTT,Dayhoff,mtREV,cpREV"
+export IQTREE_BOOTSTRAP=1000
+```
+
+The default restricts ModelFinder to common protein models (LG, WAG, JTT, etc.) rather than testing all 286 models, reducing runtime without sacrificing accuracy for most datasets.
+
 ### Sensitivity Analysis Parameters
 
 ```bash
@@ -872,6 +978,99 @@ export MIN_TPM_THRESHOLD=1.0             # Minimum TPM for "expressed"
 export TAU_THRESHOLD=0.8                 # Tissue specificity threshold
 export CHEMOSENSORY_TISSUES="rhinophore,oral_veil,tentacle,cephalic"
 ```
+
+### Chemosensory-Specific Scoring (v4)
+
+The v4 update adds multiple chemosensory-specific scoring components:
+
+#### Chemosensory Expression Scoring (Phase 1)
+
+```bash
+# Tissue lists for tau index calculation
+export CHEMOSENSORY_TISSUES="rhinophore,oral_veil,tentacle,cephalic"
+export NON_CHEMOSENSORY_TISSUES="foot,digestive,gonad,mantle"
+
+# Scoring weights
+export CHEMOSENSORY_EXPR_WEIGHT=3         # Weight for chemosensory-specific expression
+export CHEMOSENSORY_HARD_FILTER=false     # If true, exclude candidates without chemosensory expression
+```
+
+**Scoring components:**
+- Tau index (tissue specificity): 0-1 score, higher = more tissue-specific
+- Chemosensory enrichment: fold-change vs non-chemosensory tissues
+- Binary bonus for expression in any chemosensory tissue
+
+#### G-protein Co-expression (Phase 2)
+
+```bash
+# Reference files
+export GPROTEIN_REF_FASTA="${REFERENCE_DIR}/gprotein_reference.fasta"
+export GPROTEIN_REF_CLASSES="${REFERENCE_DIR}/gprotein_reference_classes.tsv"
+export GPROTEIN_MOLLUSC_FASTA="${REFERENCE_DIR}/gprotein_mollusc.fasta"  # Optional
+
+# Analysis parameters
+export GPROTEIN_EVALUE="1e-10"
+export GPROTEIN_COEXPR_WEIGHT=2           # Weight for G-protein co-expression
+export OLFACTORY_GPROTEIN_CLASSES="Golf,Gi,Go"  # Classes for olfactory signaling
+```
+
+**Scoring:**
+- Spearman correlation between GPCR and G-protein expression across tissues
+- Bonus for co-expression in chemosensory tissues
+- Bonus for olfactory G-protein classes (Golf, Gi, Go)
+
+#### ECL Divergence Analysis (Phase 3)
+
+```bash
+export ECL_DIVERGENCE_WEIGHT=1.5          # Weight for ECL divergence score
+export MIN_ECL_LENGTH=5                   # Minimum ECL length to analyze
+export ECL_CONSERVATION_RATIO_THRESHOLD=2.0  # ECL/TM divergence ratio threshold
+```
+
+**Rationale:** High ECL divergence with conserved TM regions suggests ligand-binding diversification while maintaining core GPCR function.
+
+#### Binding Pocket Hydrophilicity (Phase 4)
+
+```bash
+export POCKET_ANALYSIS_MODE="aquatic"     # Options: "aquatic", "terrestrial", "both"
+export POCKET_HYDROPHILICITY_WEIGHT=1.0   # Weight for pocket hydrophilicity score
+export MIN_POCKET_VOLUME=100              # Minimum pocket volume (Å³)
+export MAX_POCKET_VOLUME=1000             # Maximum pocket volume
+```
+
+**Analysis modes:**
+- **Aquatic**: Expect hydrophilic pockets for water-soluble ligands (amino acids, nucleotides)
+- **Terrestrial**: Expect hydrophobic pockets for volatile ligands
+- **Both**: Report raw hydrophilicity values for interpretation
+
+#### CAFE Expansion Interpretation (Phase 5)
+
+```bash
+export EXPANSION_WEIGHT=1.5               # Weight for CAFE expansion score
+export PREFERRED_EXPANSION_LEVELS="Aeolid-specific"  # Preferred taxonomic expansion levels
+```
+
+**Scoring:**
+- -log10(p-value) from CAFE5 significance test
+- Bonus for preferred taxonomic level (e.g., Aeolid-specific)
+- Bonus for high expansion fold
+
+### DeepTMHMM Parameters
+
+```bash
+export MIN_TM_REGIONS=6                  # Minimum transmembrane domains for GPCR
+export DEEPTMHMM_MIN_CONFIDENCE=0.5      # Confidence threshold (0-1) for TM predictions
+```
+
+### Fair Missing Data Handling
+
+The ranking algorithm handles missing data (synteny, expression) fairly:
+
+- Candidates **with** synteny/expression data are scored on all available evidence
+- Candidates **without** data are scored only on available evidence, then normalized
+- This prevents penalizing species lacking genome assemblies or expression data
+
+The output includes `has_synteny_data` and `has_expression_data` columns to track data availability.
 
 ### Memory Estimation Profiles
 
@@ -980,13 +1179,24 @@ source = lookup.get_source_type('ref_9606_1')
 | `scripts/conservation_mapping.py` | Per-residue conservation with motif detection | `python3 conservation_mapping.py <alignment> <output_prefix> [pdb_dir]` |
 | `scripts/generate_ultrametric.R` | Convert ML tree to ultrametric using chronos | `Rscript generate_ultrametric.R <tree> <output> [model]` |
 
+### New v4 Scripts (Chemosensory-Specific Analysis)
+
+| Script | Purpose | Usage |
+|--------|---------|-------|
+| `scripts/process_expression.py` | Process Salmon quant.sf with chemosensory tissue analysis | `python3 process_expression.py --quant-dir <dir> --chemosensory-tissues <list> --output <csv>` |
+| `scripts/classify_gproteins.py` | Classify G-proteins in transcriptomes (Golf, Gi, Go, etc.) | `python3 classify_gproteins.py --transcriptomes <pattern> --reference <fasta> --output <csv>` |
+| `scripts/coexpression_analysis.py` | Calculate GPCR-Gprotein co-expression in chemosensory tissues | `python3 coexpression_analysis.py --expression <csv> --gproteins <csv> --output <csv>` |
+| `scripts/analyze_ecl.py` | Analyze extracellular loop divergence vs TM conservation | `python3 analyze_ecl.py --alignments <pattern> --deeptmhmm <dir> --output <csv>` |
+| `scripts/interpret_cafe.py` | Interpret CAFE5 expansions with LSE taxonomic context | `python3 interpret_cafe.py --cafe-output <dir> --species-tree <tree> --output <csv>` |
+
 ### Enhanced Scripts
 
 | Script | New Features |
 |--------|--------------|
-| `rank_candidates.py` | Sensitivity analysis, cross-validation, rank stability metrics |
+| `rank_candidates.py` | **v4**: Chemosensory expression scoring (tau index, enrichment), G-protein co-expression scoring, ECL divergence scoring, CAFE expansion scoring, hard filter option. **v3**: Sensitivity analysis, cross-validation, rank stability metrics, fair missing data handling |
+| `scripts/binding_site_prediction.py` | **v4**: Pocket hydrophilicity analysis, aquatic/terrestrial mode, volume filtering |
 | `update_headers.py` | Extended metadata CSV with source_type, species_name, gene_name columns |
-| `functions.sh` | Checkpointing, provenance tracking, resource estimation, metadata lookup helpers |
+| `functions.sh` | Checkpointing, provenance tracking, resource estimation, metadata lookup helpers, SLURM configuration helpers |
 
 ---
 
@@ -998,9 +1208,37 @@ source = lookup.get_source_type('ref_9606_1')
 |------|-------------|
 | `results/ranking/sensitivity_analysis.csv` | Rank stability across weight perturbations |
 | `results/ranking/weight_importance.json` | Relative importance of each scoring component |
+| `results/ranking/score_correlations.csv` | Spearman correlations between score components |
 | `results/classification/gpcr_classifications.tsv` | GPCR class and sub-family assignments |
 | `results/cafe/significant_expansions.tsv` | Statistically significant gene family changes |
 | `results/clustering/cluster_mapping.tsv` | Representative-to-cluster member mapping |
+
+### New v4 Output Files
+
+| File | Description |
+|------|-------------|
+| `results/expression/expression_summary.csv` | Per-gene chemosensory expression metrics (tau, enrichment) |
+| `results/gproteins/classified_gproteins.csv` | G-proteins classified by class (Golf, Gi, Go, etc.) |
+| `results/gproteins/gprotein_coexpression.csv` | GPCR-Gprotein co-expression correlations |
+| `results/ecl_analysis/ecl_divergence.csv` | ECL vs TM divergence ratios per gene |
+| `results/cafe/expansion_interpretation.csv` | CAFE expansions with taxonomic level annotations |
+| `results/structural_analysis/candidates_for_alphafold.txt` | Top-N candidates selected for structure prediction |
+| `results/structural_analysis/*_structure_summary.tsv` | Binding pocket hydrophilicity metrics |
+
+### Updated Ranking Output Columns (v4)
+
+The `ranked_candidates_sorted.csv` now includes additional columns:
+
+| Column | Description |
+|--------|-------------|
+| `chemosensory_expr_score` | Chemosensory tissue expression score |
+| `has_chemosensory_expr_data` | Whether expression data was available |
+| `gprotein_coexpr_score` | G-protein co-expression score |
+| `has_gprotein_data` | Whether G-protein data was available |
+| `ecl_divergence_score` | ECL/TM divergence ratio score |
+| `has_ecl_data` | Whether ECL analysis was performed |
+| `expansion_score` | CAFE expansion significance score |
+| `has_expansion_data` | Whether CAFE data was available |
 
 ---
 

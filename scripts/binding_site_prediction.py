@@ -62,6 +62,27 @@ REFERENCE_POCKET_RESIDUES = {
     'beta2_adrenergic': [113, 117, 118, 121, 122, 203, 204, 207, 286, 289, 290, 293, 312, 316, 320],
 }
 
+# Kyte-Doolittle hydrophobicity scale (negative = hydrophilic, positive = hydrophobic)
+HYDROPHOBICITY = {
+    'A': 1.8, 'R': -4.5, 'N': -3.5, 'D': -3.5, 'C': 2.5,
+    'Q': -3.5, 'E': -3.5, 'G': -0.4, 'H': -3.2, 'I': 4.5,
+    'L': 3.8, 'K': -3.9, 'M': 1.9, 'F': 2.8, 'P': -1.6,
+    'S': -0.8, 'T': -0.7, 'W': -0.9, 'Y': -1.3, 'V': 4.2
+}
+
+# Three-letter to one-letter amino acid code mapping
+AA_3TO1 = {
+    'ALA': 'A', 'CYS': 'C', 'ASP': 'D', 'GLU': 'E', 'PHE': 'F',
+    'GLY': 'G', 'HIS': 'H', 'ILE': 'I', 'LYS': 'K', 'LEU': 'L',
+    'MET': 'M', 'ASN': 'N', 'PRO': 'P', 'GLN': 'Q', 'ARG': 'R',
+    'SER': 'S', 'THR': 'T', 'VAL': 'V', 'TRP': 'W', 'TYR': 'Y'
+}
+
+# Get pocket analysis mode from environment
+POCKET_ANALYSIS_MODE = os.getenv('POCKET_ANALYSIS_MODE', 'aquatic')
+MIN_POCKET_VOLUME = float(os.getenv('MIN_POCKET_VOLUME', 100))
+MAX_POCKET_VOLUME = float(os.getenv('MAX_POCKET_VOLUME', 1000))
+
 
 def parse_pdb_structure(pdb_file: str) -> Optional[Dict]:
     """
@@ -301,6 +322,97 @@ def find_cavity_volume(structure_info: Dict, binding_residues: List[Dict]) -> fl
         return np.prod(max_coords - min_coords)
 
 
+def calculate_pocket_hydrophilicity(pocket_residues: List[Dict]) -> Dict:
+    """
+    Calculate hydrophilicity metrics for binding pocket residues.
+
+    For aquatic chemoreceptors: expect negative mean (hydrophilic)
+    For terrestrial olfactory: expect positive mean (hydrophobic)
+
+    Args:
+        pocket_residues: List of pocket residue dicts with 'resname'
+
+    Returns:
+        Dict with hydrophilicity metrics
+    """
+    if not pocket_residues:
+        return {
+            'mean_hydrophobicity': 0.0,
+            'hydrophilicity': 0.0,
+            'n_charged': 0,
+            'n_aromatic': 0,
+            'charged_fraction': 0.0,
+            'aromatic_fraction': 0.0
+        }
+
+    hydrophobicity_scores = []
+    n_charged = 0
+    n_aromatic = 0
+
+    charged_residues = {'ARG', 'LYS', 'ASP', 'GLU', 'HIS'}
+    aromatic_residues = {'PHE', 'TYR', 'TRP', 'HIS'}
+
+    for res in pocket_residues:
+        resname = res.get('resname', '')
+
+        # Convert to 1-letter code if needed
+        if len(resname) == 3:
+            aa = AA_3TO1.get(resname.upper(), 'X')
+        else:
+            aa = resname[0] if resname else 'X'
+
+        score = HYDROPHOBICITY.get(aa, 0.0)
+        hydrophobicity_scores.append(score)
+
+        if resname.upper() in charged_residues:
+            n_charged += 1
+        if resname.upper() in aromatic_residues:
+            n_aromatic += 1
+
+    mean_hydrophobicity = np.mean(hydrophobicity_scores) if hydrophobicity_scores else 0.0
+    n_residues = len(pocket_residues)
+
+    return {
+        'mean_hydrophobicity': mean_hydrophobicity,
+        'hydrophilicity': -mean_hydrophobicity,  # Invert for hydrophilicity
+        'n_charged': n_charged,
+        'n_aromatic': n_aromatic,
+        'charged_fraction': n_charged / n_residues if n_residues > 0 else 0.0,
+        'aromatic_fraction': n_aromatic / n_residues if n_residues > 0 else 0.0
+    }
+
+
+def score_pocket_for_mode(hydrophilicity: float, mode: str) -> float:
+    """
+    Score pocket based on expected properties for ligand type.
+
+    Aquatic: water-soluble ligands (amino acids, nucleotides) -> hydrophilic pocket preferred
+    Terrestrial: volatile ligands -> hydrophobic pocket preferred
+    Both: return raw hydrophilicity value
+
+    Args:
+        hydrophilicity: Mean hydrophilicity of pocket
+        mode: 'aquatic', 'terrestrial', or 'both'
+
+    Returns:
+        Score (higher = better match for expected ligand type)
+    """
+    if mode == 'aquatic':
+        # Higher hydrophilicity = better for aquatic
+        return max(0, hydrophilicity)
+    elif mode == 'terrestrial':
+        # Lower hydrophilicity (higher hydrophobicity) = better
+        return max(0, -hydrophilicity)
+    else:  # 'both'
+        # Return raw value for interpretation
+        return hydrophilicity
+
+
+def check_pocket_volume_suitable(volume: float, min_vol: float, max_vol: float) -> bool:
+    """Check if pocket volume is suitable for small molecule binding."""
+    return min_vol <= volume <= max_vol
+
+
 def main():
     """Main execution function."""
     if len(sys.argv) < 4:
@@ -364,6 +476,16 @@ def main():
         # Estimate cavity volume
         cavity_volume = find_cavity_volume(structure_info, binding_residues[:20])
 
+        # Calculate pocket hydrophilicity (Phase 4 enhancement)
+        hydrophilicity_metrics = calculate_pocket_hydrophilicity(binding_residues[:20])
+        pocket_score = score_pocket_for_mode(
+            hydrophilicity_metrics['hydrophilicity'],
+            POCKET_ANALYSIS_MODE
+        )
+        volume_suitable = check_pocket_volume_suitable(
+            cavity_volume, MIN_POCKET_VOLUME, MAX_POCKET_VOLUME
+        )
+
         # Store results
         result = {
             'structure': pdb_name,
@@ -373,7 +495,17 @@ def main():
             'n_tm_helices': len(set(tm_assignments.values())),
             'n_binding_residues': len(binding_residues),
             'top_binding_residues': [r['position'] for r in binding_residues[:15]],
-            'cavity_volume': cavity_volume
+            'cavity_volume': cavity_volume,
+            # Phase 4: Hydrophilicity metrics
+            'pocket_hydrophilicity': hydrophilicity_metrics['hydrophilicity'],
+            'pocket_hydrophobicity': hydrophilicity_metrics['mean_hydrophobicity'],
+            'n_charged_residues': hydrophilicity_metrics['n_charged'],
+            'n_aromatic_residues': hydrophilicity_metrics['n_aromatic'],
+            'charged_fraction': hydrophilicity_metrics['charged_fraction'],
+            'aromatic_fraction': hydrophilicity_metrics['aromatic_fraction'],
+            'pocket_score': pocket_score,
+            'volume_suitable': volume_suitable,
+            'analysis_mode': POCKET_ANALYSIS_MODE
         }
         results.append(result)
 
@@ -411,7 +543,13 @@ def main():
         'mean_cavity_volume': np.mean([r['cavity_volume'] for r in results]) if results else 0,
         'mean_binding_residues': np.mean([r['n_binding_residues'] for r in results]) if results else 0,
         'high_confidence_structures': len([r for r in results if r['mean_plddt'] > 70]),
-        'complete_tm_structures': len([r for r in results if r['n_tm_helices'] >= 6])
+        'complete_tm_structures': len([r for r in results if r['n_tm_helices'] >= 6]),
+        # Phase 4: Hydrophilicity summary
+        'analysis_mode': POCKET_ANALYSIS_MODE,
+        'mean_pocket_hydrophilicity': np.mean([r['pocket_hydrophilicity'] for r in results]) if results else 0,
+        'mean_charged_fraction': np.mean([r['charged_fraction'] for r in results]) if results else 0,
+        'mean_aromatic_fraction': np.mean([r['aromatic_fraction'] for r in results]) if results else 0,
+        'suitable_volume_count': len([r for r in results if r.get('volume_suitable', False)])
     }
 
     summary_json_file = f"{output_prefix}_summary.json"
@@ -425,6 +563,11 @@ def main():
     print(f"Complete TM (≥6 helices): {summary['complete_tm_structures']}", file=sys.stderr)
     print(f"Mean binding pocket residues: {summary['mean_binding_residues']:.1f}", file=sys.stderr)
     print(f"Mean cavity volume: {summary['mean_cavity_volume']:.1f} Å³", file=sys.stderr)
+    print(f"\n=== Pocket Hydrophilicity Analysis (Mode: {POCKET_ANALYSIS_MODE}) ===", file=sys.stderr)
+    print(f"Mean pocket hydrophilicity: {summary['mean_pocket_hydrophilicity']:.2f}", file=sys.stderr)
+    print(f"Mean charged residue fraction: {summary['mean_charged_fraction']:.2f}", file=sys.stderr)
+    print(f"Mean aromatic residue fraction: {summary['mean_aromatic_fraction']:.2f}", file=sys.stderr)
+    print(f"Structures with suitable pocket volume: {summary['suitable_volume_count']}", file=sys.stderr)
 
     if results:
         print("\nTop structures by binding pocket definition:", file=sys.stderr)

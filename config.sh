@@ -195,3 +195,37 @@ export SPECIES_TREE="${RESULTS_DIR}/busco/busco_species_tree.tre"
 # Run setup_databases.py first to populate this directory
 # Set to empty string to use online APIs
 export LOCAL_DB_DIR="${BASE_DIR}/databases"
+
+# === NEW: Chemosensory Expression (Phase 1) ===
+# Tissue-specific expression scoring for olfactory chemoreceptor identification
+export NON_CHEMOSENSORY_TISSUES="foot,digestive,gonad,mantle"  # For tau index calculation
+export CHEMOSENSORY_EXPR_WEIGHT=3         # Weight for chemosensory-specific expression score
+export CHEMOSENSORY_HARD_FILTER=false     # If true, exclude candidates without chemosensory expression
+
+# === NEW: G-protein Co-expression (Phase 2) ===
+# Identify GPCRs co-expressed with olfactory G-proteins (Golf, Gi, Go)
+export GPROTEIN_REF_FASTA="${REFERENCE_DIR}/gprotein_reference.fasta"
+export GPROTEIN_REF_CLASSES="${REFERENCE_DIR}/gprotein_reference_classes.tsv"
+export GPROTEIN_MOLLUSC_FASTA="${REFERENCE_DIR}/gprotein_mollusc.fasta"      # Optional user-provided
+export GPROTEIN_MOLLUSC_CLASSES="${REFERENCE_DIR}/gprotein_mollusc_classes.tsv"
+export GPROTEIN_EVALUE="1e-10"
+export GPROTEIN_COEXPR_WEIGHT=2           # Weight for G-protein co-expression score
+export OLFACTORY_GPROTEIN_CLASSES="Golf,Gi,Go"  # Classes associated with olfactory signaling
+
+# === NEW: ECL Divergence Analysis (Phase 3) ===
+# Analyze extracellular loop divergence vs transmembrane conservation
+export ECL_DIVERGENCE_WEIGHT=1.5          # Weight for ECL divergence score
+export MIN_ECL_LENGTH=5                   # Minimum ECL length to analyze
+export ECL_CONSERVATION_RATIO_THRESHOLD=2.0  # ECL divergence / TM divergence ratio threshold
+
+# === NEW: Binding Pocket Hydrophilicity (Phase 4) ===
+# Analyze binding pocket properties for aquatic vs terrestrial ligand detection
+export POCKET_ANALYSIS_MODE="aquatic"     # Options: "aquatic", "terrestrial", "both"
+export POCKET_HYDROPHILICITY_WEIGHT=1.0   # Weight for pocket hydrophilicity score
+export MIN_POCKET_VOLUME=100              # Minimum pocket volume (Å³) for small molecule binding
+export MAX_POCKET_VOLUME=1000             # Maximum pocket volume
+
+# === NEW: CAFE Expansion Interpretation (Phase 5) ===
+# Interpret CAFE5 gene family expansion with LSE taxonomy
+export EXPANSION_WEIGHT=1.5               # Weight for CAFE expansion score
+export PREFERRED_EXPANSION_LEVELS="Aeolid-specific"  # Preferred taxonomic expansion levels
