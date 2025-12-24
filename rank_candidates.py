@@ -347,9 +347,13 @@ def get_synteny_score(candidate_id, synteny_scores):
     """
     Get quantitative synteny score for a candidate.
 
-    Returns score between 0.0 and 1.0.
+    Returns: (score, has_data)
+        - score: float between 0.0 and 1.0
+        - has_data: bool indicating if synteny data exists for this candidate
     """
-    return synteny_scores.get(candidate_id, 0.0)
+    if candidate_id in synteny_scores:
+        return synteny_scores[candidate_id], True
+    return 0.0, False
 
 
 def get_expression_score(candidate_id, expr_data):
@@ -388,21 +392,42 @@ def calculate_rank_score(df, weights):
     """
     Calculate rank scores with given weight parameters.
 
+    Uses fair scoring that handles missing data (synteny, expression) by
+    normalizing per-candidate based on available evidence.
+
     Args:
-        df: DataFrame with normalized score columns
+        df: DataFrame with normalized score columns and has_*_data flags
         weights: dict with keys phylo, purifying, positive, synteny, expr, lse_depth
 
     Returns:
         Series of rank scores
     """
-    return (
-        df['phylo_score_norm'] * weights['phylo'] +
-        df['purifying_score_norm'] * weights['purifying'] +
-        df['positive_score_norm'] * weights['positive'] +
-        df['synteny_score_norm'] * weights['synteny'] +
-        df['expression_score_norm'] * weights['expr'] +
-        df['lse_depth_score_norm'] * weights['lse_depth']
-    )
+    max_possible_weight = sum(weights.values())
+
+    def calc_row(row):
+        # Base scores always available
+        score = (
+            row['phylo_score_norm'] * weights['phylo'] +
+            row['purifying_score_norm'] * weights['purifying'] +
+            row['positive_score_norm'] * weights['positive'] +
+            row['lse_depth_score_norm'] * weights['lse_depth']
+        )
+        total_weight = weights['phylo'] + weights['purifying'] + weights['positive'] + weights['lse_depth']
+
+        # Conditionally add synteny and expression
+        if row.get('has_synteny_data', False):
+            score += row['synteny_score_norm'] * weights['synteny']
+            total_weight += weights['synteny']
+        if row.get('has_expression_data', False):
+            score += row['expression_score_norm'] * weights['expr']
+            total_weight += weights['expr']
+
+        # Normalize to max possible
+        if total_weight > 0:
+            return (score / total_weight) * max_possible_weight
+        return 0.0
+
+    return df.apply(calc_row, axis=1)
 
 
 def run_sensitivity_analysis(df, base_weights, perturbation=0.5, n_iterations=100):
@@ -631,7 +656,7 @@ for cand_id in candidates['id']:
     purifying_score, positive_score, selection_significant = get_selection_scores(cand_id, dnds_data)
 
     # Synteny score (quantitative)
-    synteny_score = get_synteny_score(cand_id, synteny_scores)
+    synteny_score, has_synteny = get_synteny_score(cand_id, synteny_scores)
 
     # Expression score
     expr_score, has_expression = get_expression_score(cand_id, expr_data)
@@ -639,11 +664,11 @@ for cand_id in candidates['id']:
     # LSE depth score
     lse_score, raw_depth = get_lse_depth_score(cand_id, t, lse_threshold)
 
-    # Track evidence completeness
+    # Track evidence completeness (based on data availability, not just score > 0)
     evidence_count = sum([
         phylo_score > 0,
         purifying_score > 0 or positive_score > 0,
-        synteny_score > 0,
+        has_synteny,  # Data available (even if score is 0)
         has_expression,
         lse_score > 0
     ])
@@ -656,6 +681,7 @@ for cand_id in candidates['id']:
         'positive_score': positive_score,
         'selection_significant': selection_significant,
         'synteny_score': synteny_score,
+        'has_synteny_data': has_synteny,
         'expression_score': expr_score,
         'has_expression_data': has_expression,
         'lse_depth_score': lse_score,
@@ -681,15 +707,51 @@ for col in normalize_cols:
 # Synteny is already 0-1
 df['synteny_score_norm'] = df['synteny_score']
 
-# --- Calculate Final Rank Score ---
-df['rank_score'] = (
-    df['phylo_score_norm'] * PHYLO_WEIGHT +
-    df['purifying_score_norm'] * PURIFYING_WEIGHT +
-    df['positive_score_norm'] * POSITIVE_WEIGHT +
-    df['synteny_score_norm'] * SYNTENY_WEIGHT +
-    df['expression_score_norm'] * EXPR_WEIGHT +
-    df['lse_depth_score_norm'] * LSE_DEPTH_WEIGHT
-)
+# --- Calculate Final Rank Score with Fair Missing Data Handling ---
+# For candidates missing synteny or expression data, we normalize by available weights
+# This prevents penalizing candidates from species without genome assemblies
+
+
+def calculate_fair_rank_score(row):
+    """
+    Calculate rank score with per-candidate weight normalization.
+
+    Candidates missing data (synteny, expression) are scored only on available
+    evidence, then normalized to be comparable with candidates having full data.
+    """
+    # Base scores that are always available
+    score = (
+        row['phylo_score_norm'] * PHYLO_WEIGHT +
+        row['purifying_score_norm'] * PURIFYING_WEIGHT +
+        row['positive_score_norm'] * POSITIVE_WEIGHT +
+        row['lse_depth_score_norm'] * LSE_DEPTH_WEIGHT
+    )
+    total_weight = PHYLO_WEIGHT + PURIFYING_WEIGHT + POSITIVE_WEIGHT + LSE_DEPTH_WEIGHT
+
+    # Add synteny if data is available
+    if row['has_synteny_data']:
+        score += row['synteny_score_norm'] * SYNTENY_WEIGHT
+        total_weight += SYNTENY_WEIGHT
+
+    # Add expression if data is available
+    if row['has_expression_data']:
+        score += row['expression_score_norm'] * EXPR_WEIGHT
+        total_weight += EXPR_WEIGHT
+
+    # Normalize to max possible score (as if all weights were available)
+    max_possible_weight = (PHYLO_WEIGHT + PURIFYING_WEIGHT + POSITIVE_WEIGHT +
+                           SYNTENY_WEIGHT + EXPR_WEIGHT + LSE_DEPTH_WEIGHT)
+
+    # Scale score to be comparable across candidates with different data availability
+    if total_weight > 0:
+        normalized_score = (score / total_weight) * max_possible_weight
+    else:
+        normalized_score = 0.0
+
+    return normalized_score
+
+
+df['rank_score'] = df.apply(calculate_fair_rank_score, axis=1)
 
 # --- Add Confidence Tier ---
 def assign_confidence_tier(row):
@@ -725,7 +787,7 @@ df_sorted = df.sort_values('rank_score', ascending=False)
 output_cols = [
     'id', 'rank_score', 'confidence_tier', 'evidence_completeness',
     'phylo_score', 'purifying_score', 'positive_score', 'selection_significant',
-    'synteny_score', 'expression_score', 'has_expression_data',
+    'synteny_score', 'has_synteny_data', 'expression_score', 'has_expression_data',
     'lse_depth_score', 'raw_tree_depth'
 ]
 
@@ -827,7 +889,7 @@ if RUN_CROSSVAL and len(ref_ids) >= CROSSVAL_FOLDS:
 output_cols = [
     'id', 'rank_score', 'confidence_tier', 'evidence_completeness',
     'phylo_score', 'purifying_score', 'positive_score', 'selection_significant',
-    'synteny_score', 'expression_score', 'has_expression_data',
+    'synteny_score', 'has_synteny_data', 'expression_score', 'has_expression_data',
     'lse_depth_score', 'raw_tree_depth'
 ]
 
@@ -844,8 +906,14 @@ print(f"  High confidence: {len(df[df['confidence_tier'] == 'High'])}", file=sys
 print(f"  Medium confidence: {len(df[df['confidence_tier'] == 'Medium'])}", file=sys.stderr)
 print(f"  Low confidence: {len(df[df['confidence_tier'] == 'Low'])}", file=sys.stderr)
 print(f"  With significant selection: {df['selection_significant'].sum()}", file=sys.stderr)
-print(f"  With synteny support: {(df['synteny_score'] > 0).sum()}", file=sys.stderr)
+print(f"  With synteny data: {df['has_synteny_data'].sum()} (score > 0: {(df['synteny_score'] > 0).sum()})", file=sys.stderr)
 print(f"  With expression data: {df['has_expression_data'].sum()}", file=sys.stderr)
+
+# Warn if synteny data is only available for a subset
+synteny_coverage = df['has_synteny_data'].mean()
+if 0 < synteny_coverage < 1.0:
+    print(f"\nNote: Synteny data available for {synteny_coverage*100:.1f}% of candidates.", file=sys.stderr)
+    print(f"  Scores are normalized per-candidate to avoid penalizing species without genomes.", file=sys.stderr)
 
 if sensitivity_results:
     print(f"\nSensitivity analysis written to: {output_dir}/sensitivity_analysis.csv", file=sys.stderr)
