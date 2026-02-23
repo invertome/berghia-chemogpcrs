@@ -10,6 +10,7 @@
 #                                --output <output.csv>
 
 import os
+import re
 import sys
 import argparse
 import pandas as pd
@@ -73,16 +74,29 @@ def find_quant_files(quant_dir: str) -> Dict[str, Dict[str, List[str]]]:
         rel_path = qf.relative_to(quant_path)
         parts = rel_path.parts
 
-        if len(parts) >= 3:
+        if len(parts) >= 4:
             # species/tissue/replicate/quant.sf
             species = parts[0]
             tissue = parts[1]
             quant_files[species][tissue].append(str(qf))
-        elif len(parts) >= 2:
+        elif len(parts) >= 3:
             # tissue/replicate/quant.sf (single species)
             species = "default"
             tissue = parts[0]
             quant_files[species][tissue].append(str(qf))
+        elif len(parts) >= 2:
+            # Flat naming: {tissue}_{SRA_accession}/quant.sf
+            dirname = parts[0]
+            match = re.match(r'^(.+?)_((?:SRR|ERR|DRR)\d+)$', dirname)
+            if match:
+                species = "default"
+                tissue = match.group(1)
+                quant_files[species][tissue].append(str(qf))
+            else:
+                # Fallback: treat dirname as tissue
+                species = "default"
+                tissue = dirname
+                quant_files[species][tissue].append(str(qf))
 
     n_files = sum(len(v) for d in quant_files.values() for v in d.values())
     print(f"Found {n_files} quant.sf files across {len(quant_files)} species",

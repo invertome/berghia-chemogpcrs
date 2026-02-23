@@ -61,6 +61,14 @@ export BERGHIA_TAXID="taxid_berghia"
 export CPUS=16
 export GPU_ENABLED=false
 
+# --- HMM Build Strategy ---
+# per_species     = one HMM per species (fast, good for preliminary analysis)
+# per_orthogroup  = DIAMOND + MCL clustering → one HMM per ortholog group
+#                   (gold standard, requires >=32GB RAM and DIAMOND/MCL installed)
+export HMM_BUILD_STRATEGY="per_orthogroup"
+export DIAMOND="diamond"
+export MCL="mcl"
+
 # --- SLURM Configuration ---
 # Basic job parameters
 export DEFAULT_TIME="24:00:00"

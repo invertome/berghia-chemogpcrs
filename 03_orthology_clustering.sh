@@ -30,6 +30,9 @@ cp "${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa" "${RESULTS_DIR}/orthogroups
 
 # Additional transcriptomes
 for trans in "${TRANSCRIPTOME_DIR}"/*.aa; do
+    [ -f "$trans" ] || continue
+    # Skip Berghia transcriptome (already copied above)
+    [ "$(realpath "$trans")" = "$(realpath "${TRANSCRIPTOME}")" ] && continue
     sample=$(basename "$trans" .aa)
     taxid_sample="${sample}"
     cp "${RESULTS_DIR}/chemogpcrs/chemogpcrs_${taxid_sample}.fa" "${RESULTS_DIR}/orthogroups/input/${taxid_sample}.fa" 2>/dev/null || log "Warning: No GPCR FASTA for ${taxid_sample}"

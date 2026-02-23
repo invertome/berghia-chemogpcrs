@@ -148,34 +148,166 @@ else
         > "${RESULTS_DIR}/reference_sequences/all_references.fa" 2>/dev/null || { log "Error: No reference sequences found"; exit 1; }
 fi
 
-# --- Step 4: Build HMMs from combined references (nath_et_al structure) ---
+# --- Step 4: Build HMMs from references (nath_et_al structure) ---
+#
+# HMM Strategy: ${HMM_BUILD_STRATEGY:-per_species}
+#
+#   per_species  (default, preliminary) — Build one HMM per species FASTA file.
+#       Each species has ~200-300 GPCR sequences, small enough for fast MAFFT
+#       alignment. Multiple species-level HMMs are more sensitive than one giant
+#       alignment because a Berghia GPCR similar to Aplysia's repertoire hits
+#       that species' HMM strongly rather than being diluted by distant phyla.
+#       Limitation: mixes functionally distinct receptor subtypes within a species.
+#
+#   per_orthogroup  (full analysis) — Cluster ALL 109K reference sequences into
+#       ortholog groups via DIAMOND + MCL (or OrthoFinder), then build one HMM
+#       per ortholog group. This produces functionally coherent profiles (e.g.,
+#       "all lophotrochozoan rhodopsin-type receptors") and is the gold standard
+#       for remote homolog detection. Requires all-vs-all DIAMOND (~109K seqs),
+#       which needs a machine with >=32GB RAM and several hours of compute.
+#       Set HMM_BUILD_STRATEGY=per_orthogroup in config.sh when resources allow.
+#
 if [ "${USE_NATH_ET_AL}" = true ]; then
-    log "Building HMMs from reference sequences..."
 
-    # Build conserved HMM if not provided
-    if [ -n "${CONSERVED_HMM}" ] && [ -f "${CONSERVED_HMM}" ]; then
-        cp "${CONSERVED_HMM}" "${RESULTS_DIR}/hmms/conserved.hmm"
-        log "Using custom conserved HMM: ${CONSERVED_HMM}"
-    elif [ -s "${RESULTS_DIR}/reference_sequences/conserved_references.fa" ]; then
-        # Align sequences first
-        run_command "ref_align_conserved" ${MAFFT} --auto "${RESULTS_DIR}/reference_sequences/conserved_references.fa" \
-            > "${RESULTS_DIR}/reference_sequences/conserved_references_aligned.fa"
-        run_command "ref_hmm_conserved" ${HMMBUILD} "${RESULTS_DIR}/hmms/conserved.hmm" \
-            "${RESULTS_DIR}/reference_sequences/conserved_references_aligned.fa"
-        log "Built conserved HMM from ${conserved_count} sequences"
-    fi
+    HMM_STRATEGY="${HMM_BUILD_STRATEGY:-per_species}"
+    log "HMM build strategy: ${HMM_STRATEGY}"
 
-    # Build LSE HMM if not provided
-    if [ -n "${LSE_HMM}" ] && [ -f "${LSE_HMM}" ]; then
-        cp "${LSE_HMM}" "${RESULTS_DIR}/hmms/lse.hmm"
-        log "Using custom LSE HMM: ${LSE_HMM}"
-    elif [ -s "${RESULTS_DIR}/reference_sequences/lse_references.fa" ]; then
-        # Align sequences first
-        run_command "ref_align_lse" ${MAFFT} --auto "${RESULTS_DIR}/reference_sequences/lse_references.fa" \
-            > "${RESULTS_DIR}/reference_sequences/lse_references_aligned.fa"
-        run_command "ref_hmm_lse" ${HMMBUILD} "${RESULTS_DIR}/hmms/lse.hmm" \
-            "${RESULTS_DIR}/reference_sequences/lse_references_aligned.fa"
-        log "Built LSE HMM from ${lse_count} sequences"
+    MAX_ALIGN_SEQS=500  # CD-HIT + subsample if a group exceeds this
+
+    # Helper: align sequences and build one HMM from a FASTA file
+    build_hmm_from_fasta() {
+        local faa_file="$1"
+        local hmm_out="$2"
+        local label="$3"
+
+        local seq_count
+        seq_count=$(grep -c "^>" "$faa_file" 2>/dev/null | tail -1)
+        seq_count=${seq_count:-0}
+        [ "$seq_count" -lt 2 ] && return 1  # Need at least 2 sequences for alignment
+
+        local align_input="$faa_file"
+
+        if [ "$seq_count" -gt "$MAX_ALIGN_SEQS" ]; then
+            local rep_fa="${hmm_out%.hmm}_reps.fa"
+            ${CDHIT} -i "$faa_file" -o "$rep_fa" -c 0.7 -n 5 \
+                -M "${CDHIT_MEMORY:-8000}" -T "${CPUS}" -d 0 > /dev/null 2>&1
+            align_input="$rep_fa"
+        fi
+
+        local aligned="${hmm_out%.hmm}_aligned.fa"
+        ${MAFFT} --auto --thread "${CPUS}" "$align_input" > "$aligned" 2>/dev/null
+        [ -s "$aligned" ] || return 1
+
+        ${HMMBUILD} --cpu "${CPUS}" "$hmm_out" "$aligned" > /dev/null 2>&1
+    }
+
+    # ---- per_orthogroup strategy (full analysis, gold standard) ----
+    if [ "${HMM_STRATEGY}" = "per_orthogroup" ]; then
+        log "Building per-orthogroup HMMs (DIAMOND + MCL clustering)..."
+        DIAMOND="${DIAMOND:-diamond}"
+        MCL="${MCL:-mcl}"
+
+        OG_WORKDIR="${RESULTS_DIR}/hmms/orthogroup_build"
+        mkdir -p "${OG_WORKDIR}"
+
+        # Build combined FASTA per category for clustering
+        for category in conserved lse; do
+            if [ "$category" = "conserved" ]; then
+                src_dir="${NATH_ET_AL_DIR}/one_to_one_ortholog"
+            else
+                src_dir="${NATH_ET_AL_DIR}/lse"
+            fi
+
+            combined="${OG_WORKDIR}/${category}_all.fa"
+            find "$src_dir" -name "*.faa" -exec cat {} + > "$combined" 2>/dev/null
+
+            total_seqs=$(grep -c "^>" "$combined" 2>/dev/null | tail -1)
+            total_seqs=${total_seqs:-0}
+            log "${category}: ${total_seqs} sequences for orthogroup clustering"
+
+            # All-vs-all DIAMOND blastp
+            db="${OG_WORKDIR}/${category}_db"
+            hits="${OG_WORKDIR}/${category}_hits.tsv"
+            run_command "diamond_makedb_${category}" ${DIAMOND} makedb --in "$combined" -d "$db"
+            run_command "diamond_blastp_${category}" ${DIAMOND} blastp \
+                -d "$db" -q "$combined" -o "$hits" \
+                --very-sensitive -e 1e-5 --max-target-seqs 500 \
+                --outfmt 6 qseqid sseqid pident length evalue bitscore \
+                --threads "${CPUS}"
+
+            # MCL clustering on DIAMOND hits (use -log10(evalue) as edge weight)
+            abc="${OG_WORKDIR}/${category}_hits.abc"
+            awk '{print $1, $2, $5}' "$hits" > "$abc"
+            mci="${OG_WORKDIR}/${category}.mci"
+            tab="${OG_WORKDIR}/${category}.tab"
+            run_command "mcxload_${category}" mcxload -abc "$abc" --stream-mirror -o "$mci" -write-tab "$tab"
+            run_command "mcl_${category}" ${MCL} "$mci" -I 2.0 -o "${OG_WORKDIR}/${category}_clusters.mcl" -use-tab "$tab"
+
+            # Parse MCL clusters → one FASTA per orthogroup → align → hmmbuild
+            hmm_dir="${RESULTS_DIR}/hmms/${category}_orthogroups"
+            mkdir -p "$hmm_dir"
+
+            python3 "${SCRIPTS_DIR}/split_mcl_to_fasta.py" \
+                "${OG_WORKDIR}/${category}_clusters.mcl" "$combined" "$hmm_dir" \
+                --min-seqs 3 --prefix "OG_${category}"
+
+            og_hmm_count=0
+            for og_fasta in "$hmm_dir"/OG_*.fa; do
+                [ -f "$og_fasta" ] || continue
+                og_name=$(basename "$og_fasta" .fa)
+                hmm_file="${hmm_dir}/${og_name}.hmm"
+                if build_hmm_from_fasta "$og_fasta" "$hmm_file" "$og_name"; then
+                    og_hmm_count=$((og_hmm_count + 1))
+                fi
+            done
+
+            cat "$hmm_dir"/*.hmm > "${RESULTS_DIR}/hmms/${category}.hmm" 2>/dev/null || true
+            log "Built ${og_hmm_count} ${category} orthogroup HMMs"
+        done
+
+    # ---- per_species strategy (preliminary, fast) ----
+    else
+        log "Building per-species HMMs from reference sequences..."
+
+        # Build conserved HMMs (one per species)
+        if [ -n "${CONSERVED_HMM}" ] && [ -f "${CONSERVED_HMM}" ]; then
+            cp "${CONSERVED_HMM}" "${RESULTS_DIR}/hmms/conserved.hmm"
+            log "Using custom conserved HMM: ${CONSERVED_HMM}"
+        else
+            mkdir -p "${RESULTS_DIR}/hmms/conserved_species"
+            conserved_hmm_count=0
+            for faa in "${NATH_ET_AL_DIR}/one_to_one_ortholog"/*/*.faa; do
+                [ -f "$faa" ] || continue
+                species=$(basename "$faa" .faa)
+                hmm_file="${RESULTS_DIR}/hmms/conserved_species/${species}.hmm"
+                if build_hmm_from_fasta "$faa" "$hmm_file" "$species"; then
+                    conserved_hmm_count=$((conserved_hmm_count + 1))
+                fi
+            done
+            # Concatenate all species HMMs into one file for hmmsearch
+            cat "${RESULTS_DIR}/hmms/conserved_species"/*.hmm > "${RESULTS_DIR}/hmms/conserved.hmm" 2>/dev/null || true
+            log "Built ${conserved_hmm_count} conserved species HMMs"
+        fi
+
+        # Build LSE HMMs (one per species)
+        if [ -n "${LSE_HMM}" ] && [ -f "${LSE_HMM}" ]; then
+            cp "${LSE_HMM}" "${RESULTS_DIR}/hmms/lse.hmm"
+            log "Using custom LSE HMM: ${LSE_HMM}"
+        else
+            mkdir -p "${RESULTS_DIR}/hmms/lse_species"
+            lse_hmm_count=0
+            for faa in "${NATH_ET_AL_DIR}/lse"/*/*.faa; do
+                [ -f "$faa" ] || continue
+                species=$(basename "$faa" .faa)
+                hmm_file="${RESULTS_DIR}/hmms/lse_species/${species}.hmm"
+                if build_hmm_from_fasta "$faa" "$hmm_file" "$species"; then
+                    lse_hmm_count=$((lse_hmm_count + 1))
+                fi
+            done
+            # Concatenate all species HMMs
+            cat "${RESULTS_DIR}/hmms/lse_species"/*.hmm > "${RESULTS_DIR}/hmms/lse.hmm" 2>/dev/null || true
+            log "Built ${lse_hmm_count} LSE species HMMs"
+        fi
     fi
 fi
 
