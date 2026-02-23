@@ -30,7 +30,7 @@ run_command "deeptmhmm_berghia" ${DEEPTMHMM} -f "${TRANSCRIPTOME}" -o "${RESULTS
 # DeepTMHMM output format: ID, prediction_type, confidence, ..., n_tm_regions
 # Column 3 is confidence, column 5 is TM region count
 awk -v min_tm="${MIN_TM_REGIONS}" -v min_conf="${DEEPTMHMM_MIN_CONFIDENCE:-0.5}" \
-    'NF >= 5 && $5 >= min_tm && ($3 >= min_conf || $3 == "") {print $1}' \
+    'NF >= 5 && $5+0 >= min_tm && $3+0 >= min_conf {print $1}' \
     "${RESULTS_DIR}/chemogpcrs/deeptmhmm_berghia/prediction" > "${RESULTS_DIR}/chemogpcrs/complete_ids_berghia.txt" || { log "Error: Failed to parse DeepTMHMM"; exit 1; }
 
 # Log filtering stats
@@ -94,7 +94,7 @@ for trans in "${TRANSCRIPTOME_DIR}"/*.aa; do
     run_command "deeptmhmm_${taxid_sample}" ${DEEPTMHMM} -f "$trans" -o "${RESULTS_DIR}/chemogpcrs/deeptmhmm_${taxid_sample}"
     # Filter by TM region count AND confidence score
     awk -v min_tm="${MIN_TM_REGIONS}" -v min_conf="${DEEPTMHMM_MIN_CONFIDENCE:-0.5}" \
-        'NF >= 5 && $5 >= min_tm && ($3 >= min_conf || $3 == "") {print $1}' \
+        'NF >= 5 && $5+0 >= min_tm && $3+0 >= min_conf {print $1}' \
         "${RESULTS_DIR}/chemogpcrs/deeptmhmm_${taxid_sample}/prediction" > "${RESULTS_DIR}/chemogpcrs/complete_ids_${taxid_sample}.txt"
     log "DeepTMHMM ${taxid_sample}: $(wc -l < "${RESULTS_DIR}/chemogpcrs/complete_ids_${taxid_sample}.txt") sequences passed filters"
     run_command "seqtk_complete_${taxid_sample}" ${SEQTK} subseq "$trans" "${RESULTS_DIR}/chemogpcrs/complete_ids_${taxid_sample}.txt" > "${RESULTS_DIR}/chemogpcrs/complete_${taxid_sample}.fa"

@@ -311,11 +311,51 @@ results_dir = str(Path(phylo_dir).parent.parent)
 
 # --- Scoring Functions ---
 
+def path_bootstrap_confidence(tree, name_a, name_b, threshold):
+    """
+    Calculate a confidence multiplier for the path between two nodes
+    based on bootstrap support values of internal nodes along the path.
+
+    Returns a value in [0, 1]:
+    - 1.0 if all branches on the path have support >= threshold (or no support data)
+    - Reduced proportionally for each low-support branch
+    - 0.0 if the path cannot be determined
+    """
+    try:
+        ancestor = tree.get_common_ancestor(name_a, name_b)
+    except Exception:
+        return 0.0
+
+    # Walk from each leaf up to the common ancestor, collecting support values
+    supports = []
+    for name in (name_a, name_b):
+        try:
+            nodes = tree.search_nodes(name=name)
+            if not nodes:
+                continue
+            current = nodes[0]
+            while current != ancestor and current.up:
+                support = getattr(current.up, 'support', None)
+                if support is not None:
+                    supports.append(support)
+                current = current.up
+        except Exception:
+            continue
+
+    if not supports:
+        return 1.0  # No bootstrap data available, don't penalize
+
+    # Fraction of branches meeting threshold
+    good = sum(1 for s in supports if s >= threshold)
+    return good / len(supports)
+
+
 def weighted_distance_to_refs(node_name, tree, ref_ids):
     """
     Calculate weighted phylogenetic distance to references.
 
     Chemoreceptor references are weighted higher than other GPCRs.
+    Paths with low bootstrap support are penalized proportionally.
     Returns inverse weighted distance (higher = closer to important refs).
     """
     # Guard for when tree is not available
@@ -331,8 +371,12 @@ def weighted_distance_to_refs(node_name, tree, ref_ids):
             try:
                 distance = tree.get_distance(node_name, ref)
                 weight = categorize_reference(ref)
-                # Weighted inverse distance
-                total_weighted_inverse += weight / (distance + 1e-6)
+                # Penalize paths with low bootstrap support
+                confidence = path_bootstrap_confidence(
+                    tree, node_name, ref, BOOTSTRAP_THRESHOLD
+                )
+                # Weighted inverse distance scaled by path confidence
+                total_weighted_inverse += confidence * weight / (distance + 1e-6)
             except Exception:
                 continue
 
