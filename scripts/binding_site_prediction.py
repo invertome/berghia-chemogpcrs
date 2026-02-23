@@ -315,8 +315,8 @@ def find_cavity_volume(structure_info: Dict, binding_residues: List[Dict]) -> fl
         from scipy.spatial import ConvexHull
         hull = ConvexHull(coords)
         return hull.volume
-    except:
-        # Fallback: bounding box
+    except Exception:
+        # Fallback: bounding box (ConvexHull can fail with coplanar points)
         min_coords = coords.min(axis=0)
         max_coords = coords.max(axis=0)
         return np.prod(max_coords - min_coords)

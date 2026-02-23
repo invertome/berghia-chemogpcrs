@@ -93,12 +93,12 @@ export MEM_MAX_GB=128            # maximum memory to request via SLURM
 # --- Tool-Specific Parameters ---
 export HMM_EVALUE="1e-5"
 export HHBLITS_EVALUE="1e-5"
-export MIN_TM_REGIONS=6
+export MIN_TM_REGIONS=6  # Kept at 6 to capture fragmented transcriptome assemblies
 # DeepTMHMM confidence threshold (0-1): Filter predictions below this confidence
 # Recommended: 0.5-0.7 (lower = more permissive, higher = more stringent)
 export DEEPTMHMM_MIN_CONFIDENCE=0.5
 export MIN_SEQ_LENGTH=100
-export MAX_GAP_PERCENT=50
+export MAX_GAP_PERCENT=30  # 25-30% recommended for robust phylogenetic inference
 # IQ-TREE model selection: Use standard amino acid models to reduce computation and overfitting
 # Options: "TEST" (all 286 models), "MFP" (ModelFinder Plus), or specific models
 # Recommended: Standard empirical AA models with gamma rate variation

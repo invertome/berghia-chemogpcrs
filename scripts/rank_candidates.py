@@ -1128,6 +1128,8 @@ normalize_cols = [
 ]
 
 for col in normalize_cols:
+    if col not in df.columns:
+        df[col] = 0.0
     col_min = df[col].min()
     col_max = df[col].max()
     col_range = col_max - col_min
@@ -1137,6 +1139,8 @@ for col in normalize_cols:
         df[f'{col}_norm'] = 0.0
 
 # Synteny is already 0-1
+if 'synteny_score' not in df.columns:
+    df['synteny_score'] = 0.0
 df['synteny_score_norm'] = df['synteny_score']
 
 # --- Calculate Final Rank Score with Fair Missing Data Handling ---
@@ -1210,7 +1214,7 @@ def calculate_fair_rank_score(row):
     return normalized_score
 
 
-df['rank_score'] = df.apply(calculate_fair_rank_score, axis=1)
+df['rank_score'] = df.apply(calculate_fair_rank_score, axis=1, result_type='reduce')
 
 # --- Add Confidence Tier ---
 def assign_confidence_tier(row):
@@ -1241,7 +1245,7 @@ def assign_confidence_tier(row):
         return 'Low'
 
 
-df['confidence_tier'] = df.apply(assign_confidence_tier, axis=1)
+df['confidence_tier'] = df.apply(assign_confidence_tier, axis=1, result_type='reduce')
 
 # --- Apply Hard Filter if Enabled (Phase 1) ---
 if CHEMOSENSORY_HARD_FILTER and 'has_chemosensory_expr_data' in df.columns:
@@ -1268,6 +1272,14 @@ output_cols = [
     'ecl_divergence_score', 'has_ecl_data',
     'expansion_score', 'has_expansion_data'
 ]
+
+# Ensure all output columns exist (fill missing with defaults)
+for col in output_cols:
+    if col not in df_sorted.columns:
+        if col.startswith('has_'):
+            df_sorted[col] = False
+        else:
+            df_sorted[col] = 0.0
 
 df_sorted[output_cols].to_csv(output_file, index=False)
 

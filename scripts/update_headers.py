@@ -37,9 +37,13 @@ def extract_taxid(header, description=""):
     # Try to extract taxid from underscore-separated format
     parts = header.split('_')
     if len(parts) >= 2:
-        # Check if first part looks like a taxid (numeric or short species code)
+        # Check if first part looks like a taxid (numeric only, or known species code format)
         first_part = parts[0]
-        if first_part.isdigit() or (len(first_part) <= 10 and first_part.isalnum()):
+        if first_part.isdigit():
+            return first_part
+        # Accept short alphanumeric codes only if they contain at least one digit
+        # (avoids matching plain species names like "aplcal", "alvmar")
+        if len(first_part) <= 10 and first_part.isalnum() and any(c.isdigit() for c in first_part):
             return first_part
 
     # Try to extract from UniProt format OS=Species

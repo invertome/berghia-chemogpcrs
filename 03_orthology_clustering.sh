@@ -81,7 +81,7 @@ fi
 run_command "orthofinder" ${ORTHOFINDER} -f "${RESULTS_DIR}/orthogroups/input" -t "${CPUS}" -a "${CPUS}" -I "${ORTHOFINDER_INFLATION}" -S diamond -A mafft -T fasttree
 
 # Verify output
-ORTHOFINDER_RESULTS=$(find "${RESULTS_DIR}/orthogroups" -maxdepth 2 -type d -name "Results_*" 2>/dev/null | sort -r | head -1)
+ORTHOFINDER_RESULTS=$(find "${RESULTS_DIR}/orthogroups" -maxdepth 4 -type d -name "Results_*" 2>/dev/null | sort -r | head -1)
 if [ -z "$ORTHOFINDER_RESULTS" ] || [ ! -d "$ORTHOFINDER_RESULTS" ]; then
     log "Error: OrthoFinder failed to produce results"
     exit 1

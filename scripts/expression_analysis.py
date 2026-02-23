@@ -327,13 +327,7 @@ def main():
 
     # Parse Salmon quant files
     print("\nParsing Salmon quantification files...", file=sys.stderr)
-    result = parse_salmon_quants(quant_dir)
-
-    if isinstance(result, tuple):
-        expression_matrix, sample_stats = result
-    else:
-        expression_matrix = result
-        sample_stats = {}
+    expression_matrix, sample_stats = parse_salmon_quants(quant_dir)
 
     if expression_matrix.empty:
         print("Error: No expression data parsed", file=sys.stderr)

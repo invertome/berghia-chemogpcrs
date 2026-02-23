@@ -31,7 +31,7 @@ log "Starting LSE classification."
 USE_PYTHON_LSE=${USE_PYTHON_LSE:-true}
 
 # --- Get orthogroup directory ---
-OG_DIR=$(ls -d "${RESULTS_DIR}/orthogroups/OrthoFinder/Results"*/Orthogroups 2>/dev/null | head -1)
+OG_DIR=$(find "${RESULTS_DIR}/orthogroups" -maxdepth 5 -type d -name "Orthogroups" -path "*/Results_*/*" 2>/dev/null | head -1)
 if [ -z "$OG_DIR" ] || [ ! -d "$OG_DIR" ]; then
     log "Error: Orthogroups directory not found"
     exit 1
@@ -82,7 +82,7 @@ if [ "$USE_PYTHON_LSE" = true ]; then
 
         # Run lse_refine.py for this orthogroup
         # Use absolute path to ensure it works in SLURM jobs
-        python3 "${BASE_DIR}/lse_refine.py" "$og" \
+        python3 "${SCRIPTS_DIR}/lse_refine.py" "$og" \
             ${ID_MAP_ARG} \
             ${GENE_TREE_ARG} \
             ${SYNTENY_ARG} \

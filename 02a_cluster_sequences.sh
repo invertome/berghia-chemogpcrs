@@ -102,6 +102,8 @@ run_command "cdhit_cluster" \
 # --- Parse Cluster File and Create Mapping ---
 log "Parsing cluster results"
 
+export CLUSTER_DIR CDHIT_IDENTITY
+
 python3 << 'PYTHON_SCRIPT'
 import sys
 import os

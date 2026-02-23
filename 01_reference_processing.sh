@@ -86,12 +86,14 @@ if [ "${USE_NATH_ET_AL}" = true ]; then
 
     # Combine LSE references
     find "${NATH_ET_AL_DIR}/lse" -name "*.faa" -exec cat {} + > "${RESULTS_DIR}/reference_sequences/lse_references.fa" 2>/dev/null || true
-    lse_count=$(grep -c "^>" "${RESULTS_DIR}/reference_sequences/lse_references.fa" 2>/dev/null || echo 0)
+    lse_count=$(grep -c "^>" "${RESULTS_DIR}/reference_sequences/lse_references.fa" 2>/dev/null | tail -1)
+    lse_count=${lse_count:-0}
     log "Combined ${lse_count} LSE reference sequences"
 
     # Combine conserved (one_to_one_ortholog) references
     find "${NATH_ET_AL_DIR}/one_to_one_ortholog" -name "*.faa" -exec cat {} + > "${RESULTS_DIR}/reference_sequences/conserved_references.fa" 2>/dev/null || true
-    conserved_count=$(grep -c "^>" "${RESULTS_DIR}/reference_sequences/conserved_references.fa" 2>/dev/null || echo 0)
+    conserved_count=$(grep -c "^>" "${RESULTS_DIR}/reference_sequences/conserved_references.fa" 2>/dev/null | tail -1)
+    conserved_count=${conserved_count:-0}
     log "Combined ${conserved_count} conserved reference sequences"
 
     # Combine all references
@@ -179,7 +181,8 @@ fi
 
 # --- Step 5: Update headers with short IDs and generate ID map ---
 # Check if we have any references
-ref_count=$(grep -c "^>" "${RESULTS_DIR}/reference_sequences/all_references.fa" 2>/dev/null || echo 0)
+ref_count=$(grep -c "^>" "${RESULTS_DIR}/reference_sequences/all_references.fa" 2>/dev/null | tail -1 || echo 0)
+ref_count=${ref_count:-0}
 if [ "${ref_count}" -eq 0 ]; then
     log "Error: No reference sequences found in all_references.fa"
     exit 1
@@ -190,7 +193,7 @@ log "Processing ${ref_count} total reference sequences..."
 run_command "ref_id_map" python3 "${SCRIPTS_DIR}/update_headers.py" \
     "${RESULTS_DIR}/reference_sequences/all_references.fa" "${ID_MAP}" \
     --source-type reference
-mv "${RESULTS_DIR}/reference_sequences/all_references_updated.fa" "${RESULTS_DIR}/reference_sequences/all_references.fa" || { log "Error: Failed to move updated reference file"; exit 1; }
+mv "${RESULTS_DIR}/reference_sequences/all_references.fa_updated.fa" "${RESULTS_DIR}/reference_sequences/all_references.fa" || { log "Error: Failed to move updated reference file"; exit 1; }
 
 # --- Step 6: Update CDS headers to match protein headers ---
 if [ -f "${RESULTS_DIR}/reference_sequences/cds/all_references_cds.fna" ]; then

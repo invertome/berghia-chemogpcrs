@@ -43,18 +43,24 @@ check_file "${RESULTS_DIR}/step_completed_03.txt"
 check_file "${RESULTS_DIR}/step_completed_busco_species_tree.txt"
 
 # Find OrthoFinder results
-ORTHOFINDER_DIR="${RESULTS_DIR}/orthofinder"
+ORTHOFINDER_DIR="${RESULTS_DIR}/orthogroups/input/OrthoFinder"
 ORTHOGROUPS_FILE=""
 
-for og_file in \
-    "${ORTHOFINDER_DIR}/Results_*/Orthogroups/Orthogroups.GeneCount.tsv" \
-    "${ORTHOFINDER_DIR}/Orthogroups.GeneCount.tsv" \
-    "${ORTHOFINDER_DIR}/Results_*/Orthogroups.GeneCount.tsv"; do
-    if [ -f "$og_file" ]; then
-        ORTHOGROUPS_FILE="$og_file"
-        break
-    fi
-done
+# Use find to locate the file (globs in double-quoted for loops don't expand)
+ORTHOGROUPS_FILE=$(find "${ORTHOFINDER_DIR}" -name "Orthogroups.GeneCount.tsv" 2>/dev/null | head -1)
+
+# Fallback: check common locations without find
+if [ -z "$ORTHOGROUPS_FILE" ]; then
+    for og_file in \
+        ${ORTHOFINDER_DIR}/Results_*/Orthogroups/Orthogroups.GeneCount.tsv \
+        ${ORTHOFINDER_DIR}/Orthogroups.GeneCount.tsv \
+        ${ORTHOFINDER_DIR}/Results_*/Orthogroups.GeneCount.tsv; do
+        if [ -f "$og_file" ]; then
+            ORTHOGROUPS_FILE="$og_file"
+            break
+        fi
+    done
+fi
 
 if [ -z "$ORTHOGROUPS_FILE" ]; then
     log --level=ERROR "OrthoFinder gene count file not found"
@@ -98,6 +104,8 @@ check_file "$ULTRAMETRIC_TREE"
 
 # --- Step 2: Prepare CAFE Input Files ---
 log "Step 2: Preparing CAFE5 input files"
+
+export CAFE_DIR ORTHOGROUPS_FILE
 
 python3 << 'PYTHON_SCRIPT'
 import pandas as pd

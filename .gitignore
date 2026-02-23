@@ -51,3 +51,4 @@ secrets/
 
 # Review files
 PIPELINE_VALIDITY_ASSESSMENT.md
+.beads/

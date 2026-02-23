@@ -101,6 +101,8 @@ fi
 # --- Step 2: Run GPCR Sub-family Classification ---
 log "Step 2: Running GPCR sub-family classification"
 
+export CLASSIFY_DIR INPUT_FASTA
+
 python3 << 'PYTHON_SCRIPT'
 import os
 import sys
@@ -386,8 +388,7 @@ if subfamily_counts:
         print(f"  {sf}: {count}", file=sys.stderr)
 PYTHON_SCRIPT
 
-# Export variables for Python script
-export CLASSIFY_DIR INPUT_FASTA
+# Variables already exported above before the Python heredoc
 
 check_file "${CLASSIFY_DIR}/gpcr_classifications.tsv"
 

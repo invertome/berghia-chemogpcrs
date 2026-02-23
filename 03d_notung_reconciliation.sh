@@ -130,6 +130,8 @@ check_file "$NOTUNG_SPECIES_TREE"
 # --- Step 2: Run Reconciliation ---
 log "Step 2: Running gene tree reconciliation"
 
+export NOTUNG_DIR NOTUNG_SPECIES_TREE PHYLO_DIR RESULTS_DIR
+
 if [ "$USE_PYTHON_FALLBACK" = true ]; then
     # Python-based reconciliation (simpler but functional)
     log "Using Python-based reconciliation analysis"
