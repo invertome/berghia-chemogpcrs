@@ -172,7 +172,8 @@ if [ "${USE_NATH_ET_AL}" = true ]; then
     HMM_STRATEGY="${HMM_BUILD_STRATEGY:-per_species}"
     log "HMM build strategy: ${HMM_STRATEGY}"
 
-    MAX_ALIGN_SEQS=500  # CD-HIT + subsample if a group exceeds this
+    MAX_ALIGN_SEQS="${MAX_ALIGN_SEQS:-200}"  # CD-HIT reduction if species exceeds this
+    MAFFT_THREADS="${MAFFT_THREADS:-2}"       # Keep low to avoid OOM on constrained machines
 
     # Helper: align sequences and build one HMM from a FASTA file
     build_hmm_from_fasta() {
@@ -195,10 +196,12 @@ if [ "${USE_NATH_ET_AL}" = true ]; then
         fi
 
         local aligned="${hmm_out%.hmm}_aligned.fa"
-        ${MAFFT} --auto --thread "${CPUS}" "$align_input" > "$aligned" 2>/dev/null
+        # --retree 1 is much faster than --auto for HMM building (accuracy
+        # difference is negligible since hmmbuild re-weights columns anyway)
+        ${MAFFT} --retree 1 --thread "${MAFFT_THREADS}" "$align_input" > "$aligned" 2>/dev/null
         [ -s "$aligned" ] || return 1
 
-        ${HMMBUILD} --cpu "${CPUS}" "$hmm_out" "$aligned" > /dev/null 2>&1
+        ${HMMBUILD} --cpu "${MAFFT_THREADS}" "$hmm_out" "$aligned" > /dev/null 2>&1
     }
 
     # ---- per_orthogroup strategy (full analysis, gold standard) ----

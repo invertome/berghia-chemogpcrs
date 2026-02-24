@@ -76,7 +76,7 @@ for busco_id in "${!busco_files[@]}"; do
             sed "s/^>/>${sample}_/" "$faa" >> "$combined_file"
         done
 
-        run_command "align_busco_${busco_id}" ${MAFFT} --auto --thread "${CPUS}" "$combined_file" > "${RESULTS_DIR}/busco/alignments/${busco_id}.afa"
+        run_command "align_busco_${busco_id}" --stdout="${RESULTS_DIR}/busco/alignments/${busco_id}.afa" ${MAFFT} --auto --thread "${CPUS}" "$combined_file"
         run_command "trim_busco_${busco_id}" ${TRIMAL} -in "${RESULTS_DIR}/busco/alignments/${busco_id}.afa" -out "${RESULTS_DIR}/busco/alignments/${busco_id}_trimmed.afa" -automated1
     fi
 done

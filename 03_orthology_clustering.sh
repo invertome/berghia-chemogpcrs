@@ -38,31 +38,64 @@ for trans in "${TRANSCRIPTOME_DIR}"/*.aa; do
     cp "${RESULTS_DIR}/chemogpcrs/chemogpcrs_${taxid_sample}.fa" "${RESULTS_DIR}/orthogroups/input/${taxid_sample}.fa" 2>/dev/null || log "Warning: No GPCR FASTA for ${taxid_sample}"
 done
 
-# Include all reference sequences as a single outgroup file
-# References have been renamed to ref_TAXID_N format in step 01 (preserving taxonomy)
-# Group references by their taxid prefix
-for taxid in "${TAXA[@]}"; do
-    # Match references that contain the taxid in their ID (format: ref_TAXID_N)
-    # Use awk to properly handle multi-line FASTA sequences (grep -A1 would truncate them)
-    awk -v pattern="^>ref_${taxid}_" '
-        /^>/ {
-            if (match($0, pattern)) { print_seq = 1 }
-            else { print_seq = 0 }
-        }
-        print_seq { print }
-    ' "${RESULTS_DIR}/reference_sequences/all_references.fa" > "${RESULTS_DIR}/orthogroups/input/ref_${taxid}.fa" 2>/dev/null
+# --- Include reference sequences: one file per species ---
+NATH_ET_AL_DIR="${REFERENCE_DIR}/nath_et_al"
 
-    # If no matches, try alternate format or include all refs
-    if [ ! -s "${RESULTS_DIR}/orthogroups/input/ref_${taxid}.fa" ]; then
-        rm -f "${RESULTS_DIR}/orthogroups/input/ref_${taxid}.fa"
-        log "Note: No references found for taxid ${taxid}"
+if [ -d "${NATH_ET_AL_DIR}" ]; then
+    # Nath et al. structure: include per-species FASTA files directly
+    # ORTHOFINDER_REF_GROUPS controls which taxonomic groups to include.
+    # Default: all groups. Set to e.g. "gastropoda" for faster preliminary runs.
+    REF_GROUPS="${ORTHOFINDER_REF_GROUPS:-all}"
+
+    ref_species_count=0
+    for category_dir in "${NATH_ET_AL_DIR}/one_to_one_ortholog" "${NATH_ET_AL_DIR}/lse"; do
+        [ -d "$category_dir" ] || continue
+        for group_dir in "$category_dir"/*/; do
+            [ -d "$group_dir" ] || continue
+            group_name=$(basename "$group_dir")
+
+            # Filter by group if specified
+            if [ "$REF_GROUPS" != "all" ]; then
+                echo "$REF_GROUPS" | tr ',' '\n' | grep -qx "$group_name" || continue
+            fi
+
+            for faa in "$group_dir"/*.faa; do
+                [ -f "$faa" ] || continue
+                species=$(basename "$faa" .faa)
+                category=$(basename "$category_dir")
+                dest="${RESULTS_DIR}/orthogroups/input/ref_${category}_${species}.fa"
+
+                # Only copy if not already there (avoid LSE overwriting conserved)
+                if [ ! -f "$dest" ]; then
+                    cp "$faa" "$dest"
+                    ref_species_count=$((ref_species_count + 1))
+                fi
+            done
+        done
+    done
+    log "Included ${ref_species_count} reference species files for OrthoFinder"
+else
+    # Legacy structure: group references by taxid prefix
+    for taxid in "${TAXA[@]}"; do
+        awk -v pattern="^>ref_${taxid}_" '
+            /^>/ {
+                if (match($0, pattern)) { print_seq = 1 }
+                else { print_seq = 0 }
+            }
+            print_seq { print }
+        ' "${RESULTS_DIR}/reference_sequences/all_references.fa" > "${RESULTS_DIR}/orthogroups/input/ref_${taxid}.fa" 2>/dev/null
+
+        if [ ! -s "${RESULTS_DIR}/orthogroups/input/ref_${taxid}.fa" ]; then
+            rm -f "${RESULTS_DIR}/orthogroups/input/ref_${taxid}.fa"
+            log "Note: No references found for taxid ${taxid}"
+        fi
+    done
+
+    # Fallback: include all references as single file
+    if [ -z "$(ls "${RESULTS_DIR}/orthogroups/input/ref_"*.fa 2>/dev/null)" ]; then
+        log "Including all references as single outgroup"
+        cp "${RESULTS_DIR}/reference_sequences/all_references.fa" "${RESULTS_DIR}/orthogroups/input/references.fa"
     fi
-done
-
-# If no taxid-specific refs found, include all references as single file
-if [ -z "$(ls "${RESULTS_DIR}/orthogroups/input/ref_"*.fa 2>/dev/null)" ]; then
-    log "Including all references as single outgroup"
-    cp "${RESULTS_DIR}/reference_sequences/all_references.fa" "${RESULTS_DIR}/orthogroups/input/references.fa"
 fi
 
 # --- Pre-flight resource check ---
@@ -79,9 +112,9 @@ if ! check_resource_requirements "${RESULTS_DIR}/orthogroups/input" orthofinder;
 fi
 
 # Run OrthoFinder
-# Note: -M msa removed (invalid in OrthoFinder 2.5+), using default MSA method
+# -M msa required when specifying -A (aligner) or -T (tree builder)
 # -a for number of BLAST threads, -t for tree inference threads
-run_command "orthofinder" ${ORTHOFINDER} -f "${RESULTS_DIR}/orthogroups/input" -t "${CPUS}" -a "${CPUS}" -I "${ORTHOFINDER_INFLATION}" -S diamond -A mafft -T fasttree
+run_command "orthofinder" ${ORTHOFINDER} -f "${RESULTS_DIR}/orthogroups/input" -t "${CPUS}" -a "${CPUS}" -I "${ORTHOFINDER_INFLATION}" -M msa -S diamond -A mafft -T fasttree
 
 # Verify output
 ORTHOFINDER_RESULTS=$(find "${RESULTS_DIR}/orthogroups" -maxdepth 4 -type d -name "Results_*" 2>/dev/null | sort -r | head -1)

@@ -37,7 +37,7 @@ awk -v min_tm="${MIN_TM_REGIONS}" -v min_conf="${DEEPTMHMM_MIN_CONFIDENCE:-0.5}"
 total_pred=$(wc -l < "${RESULTS_DIR}/chemogpcrs/deeptmhmm_berghia/prediction" 2>/dev/null || echo 0)
 passed_pred=$(wc -l < "${RESULTS_DIR}/chemogpcrs/complete_ids_berghia.txt" 2>/dev/null || echo 0)
 log "DeepTMHMM: ${passed_pred}/${total_pred} sequences passed filters (>=${MIN_TM_REGIONS} TM regions, >=${DEEPTMHMM_MIN_CONFIDENCE:-0.5} confidence)"
-run_command "seqtk_complete_berghia" ${SEQTK} subseq "${TRANSCRIPTOME}" "${RESULTS_DIR}/chemogpcrs/complete_ids_berghia.txt" > "${RESULTS_DIR}/chemogpcrs/complete_berghia.fa"
+run_command "seqtk_complete_berghia" --stdout="${RESULTS_DIR}/chemogpcrs/complete_berghia.fa" ${SEQTK} subseq "${TRANSCRIPTOME}" "${RESULTS_DIR}/chemogpcrs/complete_ids_berghia.txt"
 
 # --- HHblits search (optional - requires proper HH-suite database) ---
 # hhmake requires an MSA input, not a multi-FASTA. Building a proper HH-suite
@@ -98,7 +98,7 @@ cat "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_hhblits_berghia.txt" \
 [ -s "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_berghia.txt" ] || { log "Error: No GPCR IDs identified"; exit 1; }
 
 # --- Extract GPCR sequences ---
-run_command "extract_berghia" ${SEQTK} subseq "${RESULTS_DIR}/chemogpcrs/complete_berghia.fa" "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_berghia.txt" > "${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa"
+run_command "extract_berghia" --stdout="${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa" ${SEQTK} subseq "${RESULTS_DIR}/chemogpcrs/complete_berghia.fa" "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_berghia.txt"
 
 # --- Process additional transcriptomes ---
 for trans in "${TRANSCRIPTOME_DIR}"/*.aa; do
@@ -113,7 +113,7 @@ for trans in "${TRANSCRIPTOME_DIR}"/*.aa; do
         'NF >= 5 && $5+0 >= min_tm && $3+0 >= min_conf {print $1}' \
         "${RESULTS_DIR}/chemogpcrs/deeptmhmm_${taxid_sample}/prediction" > "${RESULTS_DIR}/chemogpcrs/complete_ids_${taxid_sample}.txt"
     log "DeepTMHMM ${taxid_sample}: $(wc -l < "${RESULTS_DIR}/chemogpcrs/complete_ids_${taxid_sample}.txt") sequences passed filters"
-    run_command "seqtk_complete_${taxid_sample}" ${SEQTK} subseq "$trans" "${RESULTS_DIR}/chemogpcrs/complete_ids_${taxid_sample}.txt" > "${RESULTS_DIR}/chemogpcrs/complete_${taxid_sample}.fa"
+    run_command "seqtk_complete_${taxid_sample}" --stdout="${RESULTS_DIR}/chemogpcrs/complete_${taxid_sample}.fa" ${SEQTK} subseq "$trans" "${RESULTS_DIR}/chemogpcrs/complete_ids_${taxid_sample}.txt"
     
     touch "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_hhblits_${taxid_sample}.txt"
     if [ "$HHBLITS_AVAILABLE" = true ] && [ -f "${RESULTS_DIR}/hhdb/references.hhm" ]; then
@@ -151,7 +151,7 @@ with open('${RESULTS_DIR}/chemogpcrs/hhblits_${taxid_sample}.hhr') as f:
     cat "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_hhblits_${taxid_sample}.txt" \
         "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_hmmsearch_conserved_${taxid_sample}.txt" \
         "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_hmmsearch_lse_${taxid_sample}.txt" 2>/dev/null | sort -u > "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_${taxid_sample}.txt"
-    run_command "extract_${taxid_sample}" ${SEQTK} subseq "${RESULTS_DIR}/chemogpcrs/complete_${taxid_sample}.fa" "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_${taxid_sample}.txt" > "${RESULTS_DIR}/chemogpcrs/chemogpcrs_${taxid_sample}.fa"
+    run_command "extract_${taxid_sample}" --stdout="${RESULTS_DIR}/chemogpcrs/chemogpcrs_${taxid_sample}.fa" ${SEQTK} subseq "${RESULTS_DIR}/chemogpcrs/complete_${taxid_sample}.fa" "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_${taxid_sample}.txt"
     touch "${RESULTS_DIR}/step_completed_extract_${taxid_sample}.txt"
 done
 

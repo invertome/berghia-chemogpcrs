@@ -250,6 +250,9 @@ EOF
 # --- Command Execution Function (Enhanced) ---
 # Arguments: $1 - Command name, $2+ - Command and arguments
 # Options: --inputs=file1,file2 --outputs=file1,file2 --allow-fail
+#          --stdout=FILE  Redirect command stdout to FILE instead of log
+#                         (use for commands like seqtk/mafft/fasttree that
+#                         write results to stdout)
 run_command() {
     local name="$1"
     shift
@@ -257,6 +260,7 @@ run_command() {
     local inputs=""
     local outputs=""
     local allow_fail=false
+    local stdout_file=""
 
     # Parse options
     while [[ "$1" == --* ]]; do
@@ -264,6 +268,7 @@ run_command() {
             --inputs=*) inputs="${1#--inputs=}"; shift ;;
             --outputs=*) outputs="${1#--outputs=}"; shift ;;
             --allow-fail) allow_fail=true; shift ;;
+            --stdout=*) stdout_file="${1#--stdout=}"; shift ;;
             *) break ;;
         esac
     done
@@ -275,8 +280,12 @@ run_command() {
     # Record in provenance
     record_provenance "$name" "$*" "$inputs" "$outputs"
 
-    # Execute command
-    "$@" > "${LOGS_DIR}/${name}.log" 2> "${LOGS_DIR}/${name}.err"
+    # Execute command — redirect stdout to file if --stdout given, else to log
+    if [ -n "$stdout_file" ]; then
+        "$@" > "$stdout_file" 2> "${LOGS_DIR}/${name}.err"
+    else
+        "$@" > "${LOGS_DIR}/${name}.log" 2> "${LOGS_DIR}/${name}.err"
+    fi
     local exit_code=$?
 
     local end_time=$(date +%s)

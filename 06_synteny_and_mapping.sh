@@ -60,7 +60,7 @@ for genome in "${GENOME_DIR}"/*.fasta; do
             log --level=WARN "minimap2 not found, skipping mapping for ${taxid_sample}"
             continue
         fi
-        run_command "minimap2_${taxid_sample}" ${MINIMAP2} -ax splice -uf -k14 "$genome" "$nuc_trans" > "${RESULTS_DIR}/mapping/${taxid_sample}.sam"
+        run_command "minimap2_${taxid_sample}" --stdout="${RESULTS_DIR}/mapping/${taxid_sample}.sam" ${MINIMAP2} -ax splice -uf -k14 "$genome" "$nuc_trans"
         run_command "samtools_${taxid_sample}" ${SAMTOOLS} view -bS "${RESULTS_DIR}/mapping/${taxid_sample}.sam" | ${SAMTOOLS} sort -o "${RESULTS_DIR}/mapping/${taxid_sample}.bam"
         run_command "samtools_index_${taxid_sample}" ${SAMTOOLS} index "${RESULTS_DIR}/mapping/${taxid_sample}.bam"
     else
@@ -130,7 +130,8 @@ for ((i=0; i<${#genome_list[@]}; i++)); do
             [ -f "$query_prot" ] || query_prot="${RESULTS_DIR}/chemogpcrs/chemogpcrs_${taxid1}.fa"
 
             if [ -f "$query_prot" ]; then
-                run_command "blastp_${taxid1}_vs_${taxid2}" blastp -query "$query_prot" -db "${RESULTS_DIR}/synteny/blast/${taxid2}_db" -outfmt 6 -evalue 1e-5 -num_threads "${CPUS}" >> "${RESULTS_DIR}/synteny/${taxid1}_${taxid2}.blast"
+                log "Running: blastp_${taxid1}_vs_${taxid2}"
+                blastp -query "$query_prot" -db "${RESULTS_DIR}/synteny/blast/${taxid2}_db" -outfmt 6 -evalue 1e-5 -num_threads "${CPUS}" >> "${RESULTS_DIR}/synteny/${taxid1}_${taxid2}.blast" 2> "${LOGS_DIR}/blastp_${taxid1}_vs_${taxid2}.err"
             fi
         fi
     done

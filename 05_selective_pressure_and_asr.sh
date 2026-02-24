@@ -303,7 +303,7 @@ if [ "$taxa_count" -gt 1 ] && [ "$HYPHY_AVAILABLE" = true ]; then
         if find_nucleotide_sequences "$protein_align" "$nuc_align"; then
             # Create codon alignment
             codon_file="${RESULTS_DIR}/selective_pressure/${base}_codon.phy"
-            run_command "${base}_codon" pal2nal.pl "$protein_align" "$nuc_align" -output paml > "$codon_file" 2>/dev/null
+            run_command "${base}_codon" --stdout="$codon_file" pal2nal.pl "$protein_align" "$nuc_align" -output paml
 
             # Validate codon alignment (checks PAML format, codon structure, internal stops)
             if validate_codon_alignment "$codon_file"; then
@@ -347,7 +347,7 @@ if [ "$berghia_count" -gt 0 ] && [ "$seq_count" -gt 2 ]; then
             if [ ! -f "${RESULTS_DIR}/selective_pressure/${base}_absrel_lse.json" ]; then
                 codon_file="${RESULTS_DIR}/selective_pressure/${base}_codon.phy"
                 if [ ! -f "$codon_file" ]; then
-                    run_command "${base}_codon_lse" pal2nal.pl "$protein_align" "$nuc_align" -output paml > "$codon_file" 2>/dev/null
+                    run_command "${base}_codon_lse" --stdout="$codon_file" pal2nal.pl "$protein_align" "$nuc_align" -output paml
                 fi
 
                 # Validate codon alignment before running aBSREL

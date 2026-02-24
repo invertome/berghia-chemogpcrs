@@ -63,7 +63,7 @@ final_count=$(wc -l < "${RESULTS_DIR}/structural_analysis/top_ids.txt")
 log "Total candidates for structural prediction: ${final_count}"
 
 # --- Extract sequences for AlphaFold ---
-run_command "seqtk_top" ${SEQTK} subseq "${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa" "${RESULTS_DIR}/structural_analysis/top_ids.txt" > "${RESULTS_DIR}/structural_analysis/top_seqs.fa"
+run_command "seqtk_top" --stdout="${RESULTS_DIR}/structural_analysis/top_seqs.fa" ${SEQTK} subseq "${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa" "${RESULTS_DIR}/structural_analysis/top_ids.txt"
 
 # --- Predict structures with AlphaFold (only if not already done) ---
 log "Running AlphaFold predictions..."
