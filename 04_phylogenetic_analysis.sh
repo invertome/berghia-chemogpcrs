@@ -103,32 +103,63 @@ check_alignment() {
 detect_resources
 
 # --- All Berghia candidates + references ---
-# For preliminary local analysis: combine all_references.fa can be 100K+ sequences,
-# far too large for alignment+tree building. Use MAX_PHYLO_SEQS to cap input size.
-# When exceeded, use only Berghia candidates + one well-annotated reference species.
-MAX_PHYLO_SEQS=${MAX_PHYLO_SEQS:-5000}
+# Reference subsampling: when raw references exceed MAX_PHYLO_REFS, use CD-HIT clustering
+# + taxonomy-weighted proportional allocation to select a diverse representative subset.
+# This ensures the tree always includes reference sequences for meaningful phylo_scores.
+MAX_PHYLO_REFS=${MAX_PHYLO_REFS:-2000}
+REF_CLUSTER_IDENTITY=${REF_CLUSTER_IDENTITY:-0.7}
+REF_LSE_WEIGHT=${REF_LSE_WEIGHT:-1.5}
+REF_TAXONOMY_WEIGHTS=${REF_TAXONOMY_WEIGHTS:-"gastropoda:3.0,cephalopoda:1.5,bivalvia:1.5,other_molluscan_classes:1.2,annelida:1.0,platyhelminthes:1.0,other_lophotrochozoan_phyla:1.0"}
 
 if [ ! -f "${RESULTS_DIR}/step_completed_all_berghia_refs_iqtree.txt" ]; then
     ALL_REFS="${RESULTS_DIR}/reference_sequences/all_references.fa"
     BERGHIA_FA="${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa"
     COMBINED="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.fa"
+    SUBSAMPLED_REFS="${RESULTS_DIR}/reference_sequences/subsampled_references.fa"
+    SUBSAMPLED_RAW="${RESULTS_DIR}/reference_sequences/subsampled_refs_raw.fa"
+    SUBSAMPLED_REPORT="${RESULTS_DIR}/reference_sequences/subsampling_report.json"
+    SUBSAMPLED_ID_MAP="${RESULTS_DIR}/reference_sequences/subsampled_id_map.csv"
+    NATH_REF_DIR="${REFERENCE_DIR}/nath_et_al"
 
     BERGHIA_COUNT=$(grep -c "^>" "$BERGHIA_FA")
     REF_COUNT=$(grep -c "^>" "$ALL_REFS" 2>/dev/null || echo 0)
-    TOTAL=$((BERGHIA_COUNT + REF_COUNT))
 
-    if [ "$TOTAL" -le "$MAX_PHYLO_SEQS" ]; then
+    if [ "$REF_COUNT" -le "$MAX_PHYLO_REFS" ]; then
+        # References fit within limit — use all
         cat "$BERGHIA_FA" "$ALL_REFS" > "$COMBINED"
-        log "Combined Berghia ($BERGHIA_COUNT) + references ($REF_COUNT) = $TOTAL sequences"
-    else
-        # Too many sequences for full alignment — use Berghia + representative references
-        # Pick species with most sequences from each major clade as representatives
-        log "Total sequences ($TOTAL) exceeds MAX_PHYLO_SEQS ($MAX_PHYLO_SEQS)"
-        log "Using Berghia candidates + OrthoFinder gene trees for phylogenetics"
+        log "Combined Berghia ($BERGHIA_COUNT) + references ($REF_COUNT) = $((BERGHIA_COUNT + REF_COUNT)) sequences"
+    elif [ -f "$SUBSAMPLED_REFS" ]; then
+        # Reuse existing subsampled references (idempotent)
+        SUB_COUNT=$(grep -c "^>" "$SUBSAMPLED_REFS")
+        cat "$BERGHIA_FA" "$SUBSAMPLED_REFS" > "$COMBINED"
+        log "Reusing subsampled references ($SUB_COUNT) + Berghia ($BERGHIA_COUNT) = $((BERGHIA_COUNT + SUB_COUNT)) sequences"
+    elif [ -d "$NATH_REF_DIR" ]; then
+        # Subsample: run CD-HIT + taxonomy-weighted selection on raw .faa files
+        log "References ($REF_COUNT) exceed MAX_PHYLO_REFS ($MAX_PHYLO_REFS) — subsampling"
+        run_command "subsample_references" python3 "${SCRIPTS_DIR}/subsample_references.py" \
+            --ref-dir "$NATH_REF_DIR" \
+            --target-size "$MAX_PHYLO_REFS" \
+            --cluster-identity "$REF_CLUSTER_IDENTITY" \
+            --taxonomy-weights "$REF_TAXONOMY_WEIGHTS" \
+            --lse-weight "$REF_LSE_WEIGHT" \
+            --cdhit-memory "${CDHIT_MEMORY:-8000}" \
+            --threads "${CPUS}" \
+            --output "$SUBSAMPLED_RAW" \
+            --report "$SUBSAMPLED_REPORT"
 
-        # Copy just Berghia candidates for the overview tree
+        # Standardize headers (same pipeline as step 01)
+        run_command "subsample_update_headers" python3 "${SCRIPTS_DIR}/update_headers.py" \
+            "$SUBSAMPLED_RAW" "$SUBSAMPLED_ID_MAP" --source-type reference
+        mv "${SUBSAMPLED_RAW}_updated.fa" "$SUBSAMPLED_REFS"
+
+        SUB_COUNT=$(grep -c "^>" "$SUBSAMPLED_REFS")
+        cat "$BERGHIA_FA" "$SUBSAMPLED_REFS" > "$COMBINED"
+        log "Subsampled references ($SUB_COUNT) + Berghia ($BERGHIA_COUNT) = $((BERGHIA_COUNT + SUB_COUNT)) sequences"
+    else
+        # Fallback: no nath_et_al directory and refs too large — use Berghia only
+        log "WARNING: References ($REF_COUNT) exceed limit and no nath_et_al/ directory found for subsampling"
+        log "Using Berghia candidates only for overview tree"
         cp "$BERGHIA_FA" "$COMBINED"
-        log "Using ${BERGHIA_COUNT} Berghia candidates for overview tree"
     fi
 
     SEQ_COUNT=$(grep -c "^>" "$COMBINED")

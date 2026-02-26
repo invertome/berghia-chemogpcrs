@@ -123,6 +123,12 @@ export CDHIT_IDENTITY=0.98       # 98% identity threshold for clustering
 export CDHIT_WORDSIZE=5          # Word size for sequence comparison
 export CDHIT_MEMORY=16000        # Memory limit in MB
 
+# --- Reference Subsampling for Phylogenetic Trees ---
+export MAX_PHYLO_REFS=2000                 # Max reference sequences in phylogenetic tree
+export REF_CLUSTER_IDENTITY=0.7            # CD-HIT clustering identity threshold
+export REF_LSE_WEIGHT=1.5                  # Multiplier for LSE vs one-to-one orthologs
+export REF_TAXONOMY_WEIGHTS="gastropoda:3.0,cephalopoda:1.5,bivalvia:1.5,other_molluscan_classes:1.2,annelida:1.0,platyhelminthes:1.0,other_lophotrochozoan_phyla:1.0"
+
 # --- CAFE5 Parameters ---
 export CAFE_LAMBDA_SEARCH=true   # Search for optimal lambda
 export CAFE_PVALUE_THRESHOLD=0.05  # P-value threshold for significant expansions
