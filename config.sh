@@ -41,7 +41,7 @@ export ORTHOFINDER="orthofinder"
 export PHYLOFORMER="phyloformer"
 export PDFLATEX="pdflatex"
 export BUSCO="busco"
-export DEEPTMHMM="deeptmhmm"
+export DEEPTMHMM="bash ${SCRIPTS_DIR}/run_deeptmhmm.sh"  # Tries: local binary, biolib, Kyte-Doolittle fallback
 export ASTRAL="astral"
 export MRBAYES="mb"
 export CLIPKIT="clipkit"
@@ -128,6 +128,18 @@ export MAX_PHYLO_REFS=2000                 # Max reference sequences in phylogen
 export REF_CLUSTER_IDENTITY=0.7            # CD-HIT clustering identity threshold
 export REF_LSE_WEIGHT=1.5                  # Multiplier for LSE vs one-to-one orthologs
 export REF_TAXONOMY_WEIGHTS="gastropoda:3.0,cephalopoda:1.5,bivalvia:1.5,other_molluscan_classes:1.2,annelida:1.0,platyhelminthes:1.0,other_lophotrochozoan_phyla:1.0"
+
+# --- Outgroup for Tree Rooting ---
+export OUTGROUP_FASTA="${REFERENCE_DIR}/outgroup.fa"
+
+# --- Validation Chemoreceptors ---
+export VALIDATION_CHEMORECEPTORS="${REFERENCE_DIR}/validation_chemoreceptors.fa"
+
+# --- Orthogroup Confidence Score ---
+export OG_CONFIDENCE_WEIGHT=1
+
+# --- InterProScan Classification (production only) ---
+export RUN_INTERPROSCAN=false
 
 # --- CAFE5 Parameters ---
 export CAFE_LAMBDA_SEARCH=true   # Search for optimal lambda

@@ -119,6 +119,8 @@ if [ ! -f "${RESULTS_DIR}/step_completed_all_berghia_refs_iqtree.txt" ]; then
     SUBSAMPLED_RAW="${RESULTS_DIR}/reference_sequences/subsampled_refs_raw.fa"
     SUBSAMPLED_REPORT="${RESULTS_DIR}/reference_sequences/subsampling_report.json"
     SUBSAMPLED_ID_MAP="${RESULTS_DIR}/reference_sequences/subsampled_id_map.csv"
+    SUBSAMPLED_CATEGORIES="${RESULTS_DIR}/reference_sequences/subsampled_ref_categories.csv"
+    REF_CATEGORIES_FINAL="${RESULTS_DIR}/reference_sequences/ref_categories_final.csv"
     NATH_REF_DIR="${REFERENCE_DIR}/nath_et_al"
 
     BERGHIA_COUNT=$(grep -c "^>" "$BERGHIA_FA")
@@ -145,12 +147,31 @@ if [ ! -f "${RESULTS_DIR}/step_completed_all_berghia_refs_iqtree.txt" ]; then
             --cdhit-memory "${CDHIT_MEMORY:-8000}" \
             --threads "${CPUS}" \
             --output "$SUBSAMPLED_RAW" \
-            --report "$SUBSAMPLED_REPORT"
+            --report "$SUBSAMPLED_REPORT" \
+            --categories-output "$SUBSAMPLED_CATEGORIES"
 
         # Standardize headers (same pipeline as step 01)
         run_command "subsample_update_headers" python3 "${SCRIPTS_DIR}/update_headers.py" \
             "$SUBSAMPLED_RAW" "$SUBSAMPLED_ID_MAP" --source-type reference
         mv "${SUBSAMPLED_RAW}_updated.fa" "$SUBSAMPLED_REFS"
+
+        # Build merged category CSV: join original_id -> standardized ref_ ID
+        if [ -f "$SUBSAMPLED_CATEGORIES" ] && [ -f "$SUBSAMPLED_ID_MAP" ]; then
+            python3 -c "
+import csv
+id_map = {}
+with open('${SUBSAMPLED_ID_MAP}') as f:
+    for row in csv.DictReader(f):
+        id_map[row['original_id']] = row['short_id']
+with open('${SUBSAMPLED_CATEGORIES}') as f_in, open('${REF_CATEGORIES_FINAL}', 'w') as f_out:
+    f_out.write('ref_id,category,group\n')
+    for row in csv.DictReader(f_in):
+        short_id = id_map.get(row['original_id'], '')
+        if short_id:
+            f_out.write(f\"{short_id},{row['category']},{row['group']}\n\")
+"
+            log "Built reference category map: $(wc -l < "${REF_CATEGORIES_FINAL}") entries"
+        fi
 
         SUB_COUNT=$(grep -c "^>" "$SUBSAMPLED_REFS")
         cat "$BERGHIA_FA" "$SUBSAMPLED_REFS" > "$COMBINED"
@@ -160,6 +181,50 @@ if [ ! -f "${RESULTS_DIR}/step_completed_all_berghia_refs_iqtree.txt" ]; then
         log "WARNING: References ($REF_COUNT) exceed limit and no nath_et_al/ directory found for subsampling"
         log "Using Berghia candidates only for overview tree"
         cp "$BERGHIA_FA" "$COMBINED"
+    fi
+
+    # --- Append outgroup for tree rooting ---
+    # Uses ref_outgroup_ prefix to pass existing startswith('ref_') checks
+    if [ -f "${OUTGROUP_FASTA:-}" ]; then
+        run_command "outgroup_update_headers" python3 "${SCRIPTS_DIR}/update_headers.py" \
+            "${OUTGROUP_FASTA}" "${RESULTS_DIR}/reference_sequences/outgroup_id_map.csv" \
+            --source-type reference --id-prefix ref_outgroup
+        cat "${OUTGROUP_FASTA}_updated.fa" >> "$COMBINED"
+        # Add outgroup entries to category CSV
+        if [ -f "${REF_CATEGORIES_FINAL}" ]; then
+            python3 -c "
+import csv
+with open('${REF_CATEGORIES_FINAL}', 'a') as f:
+    writer = csv.writer(f)
+    with open('${RESULTS_DIR}/reference_sequences/outgroup_id_map.csv') as m:
+        for row in csv.DictReader(m):
+            writer.writerow([row['short_id'], 'outgroup', 'outgroup'])
+"
+        fi
+        OUTGROUP_COUNT=$(grep -c "^>" "${OUTGROUP_FASTA}_updated.fa")
+        log "Added ${OUTGROUP_COUNT} outgroup sequence(s) for tree rooting"
+    fi
+
+    # --- Append validation chemoreceptors ---
+    # Uses ref_validation_ prefix to pass existing startswith('ref_') checks
+    if [ -f "${VALIDATION_CHEMORECEPTORS:-}" ]; then
+        run_command "validation_update_headers" python3 "${SCRIPTS_DIR}/update_headers.py" \
+            "${VALIDATION_CHEMORECEPTORS}" "${RESULTS_DIR}/reference_sequences/validation_id_map.csv" \
+            --source-type reference --id-prefix ref_validation
+        cat "${VALIDATION_CHEMORECEPTORS}_updated.fa" >> "$COMBINED"
+        # Add validation entries to category CSV
+        if [ -f "${REF_CATEGORIES_FINAL}" ]; then
+            python3 -c "
+import csv
+with open('${REF_CATEGORIES_FINAL}', 'a') as f:
+    writer = csv.writer(f)
+    with open('${RESULTS_DIR}/reference_sequences/validation_id_map.csv') as m:
+        for row in csv.DictReader(m):
+            writer.writerow([row['short_id'], 'validation_chemoreceptor', 'gastropoda'])
+"
+        fi
+        VAL_COUNT=$(grep -c "^>" "${VALIDATION_CHEMORECEPTORS}_updated.fa")
+        log "Added ${VAL_COUNT} validation chemoreceptor sequence(s)"
     fi
 
     SEQ_COUNT=$(grep -c "^>" "$COMBINED")

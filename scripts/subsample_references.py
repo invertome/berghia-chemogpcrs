@@ -320,6 +320,8 @@ def main():
                         help="Output subsampled FASTA path")
     parser.add_argument("--report", default=None,
                         help="JSON report output path")
+    parser.add_argument("--categories-output", default=None,
+                        help="Output CSV mapping headers to LSE/one_to_one category and group")
 
     args = parser.parse_args()
 
@@ -404,6 +406,19 @@ def main():
                      group_breakdown, taxonomy_weights, args.lse_weight,
                      args.cluster_identity)
         print(f"Report written to {args.report}", file=sys.stderr)
+
+    # Step 6: Write category CSV if requested
+    if args.categories_output:
+        cat_written = 0
+        with open(args.categories_output, "w") as f:
+            f.write("original_id,category,group\n")
+            for header in selected:
+                if header in index:
+                    info = index[header]
+                    f.write(f"{header},{info['category']},{info['group']}\n")
+                    cat_written += 1
+        print(f"Wrote {cat_written} category entries to {args.categories_output}",
+              file=sys.stderr)
 
 
 if __name__ == "__main__":

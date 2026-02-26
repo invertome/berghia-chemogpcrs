@@ -63,3 +63,5 @@ __pycache__/
 # API keys and credentials
 credentials/
 secrets/
+docs/plans/2026-02-26-pipeline-improvements-design.md
+docs/plans/2026-02-26-pipeline-improvements.md

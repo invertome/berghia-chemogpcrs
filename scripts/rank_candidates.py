@@ -150,8 +150,13 @@ elif not ETE3_AVAILABLE:
 else:
     try:
         t = Tree(tree_file, format=1)  # format=1 for IQ-TREE output with support values
-        # Identify reference sequences and categorize them
-        ref_ids = [leaf.name for leaf in t if leaf.name.startswith('ref_')]
+        # Identify reference sequences — exclude outgroup (used only for rooting)
+        ref_ids = [leaf.name for leaf in t
+                   if leaf.name.startswith('ref_') and not leaf.name.startswith('ref_outgroup_')]
+        outgroup_ids = [leaf.name for leaf in t if leaf.name.startswith('ref_outgroup_')]
+        if outgroup_ids:
+            print(f"Excluded {len(outgroup_ids)} outgroup sequence(s) from distance calculations",
+                  file=sys.stderr)
     except Exception as e:
         print(f"Warning: Could not load tree: {e}. Phylogenetic scoring disabled.",
               file=sys.stderr)
@@ -159,17 +164,52 @@ else:
         ref_ids = []
 
 
+# --- Load Reference Categories from CSV ---
+# Maps ref_id -> weight based on LSE/one_to_one/validation category
+import csv as _csv
+ref_category_weights = {}  # ref_id -> weight (from ref_categories_final.csv)
+
+REF_CATEGORIES_CSV = os.getenv('REF_CATEGORIES_CSV', '')
+if not REF_CATEGORIES_CSV:
+    # Try default location
+    potential = os.path.join(results_dir, 'reference_sequences', 'ref_categories_final.csv')
+    if os.path.exists(potential):
+        REF_CATEGORIES_CSV = potential
+
+if REF_CATEGORIES_CSV and os.path.exists(REF_CATEGORIES_CSV):
+    with open(REF_CATEGORIES_CSV) as _f:
+        for row in _csv.DictReader(_f):
+            ref_id = row['ref_id']
+            category = row['category']
+            if category in ('lse', 'validation_chemoreceptor'):
+                ref_category_weights[ref_id] = CHEMORECEPTOR_REF_WEIGHT
+            elif category == 'outgroup':
+                pass  # Outgroup excluded from distance calculations
+            else:  # one_to_one_ortholog
+                ref_category_weights[ref_id] = OTHER_GPCR_REF_WEIGHT
+    lse_count = sum(1 for v in ref_category_weights.values() if v == CHEMORECEPTOR_REF_WEIGHT)
+    oto_count = sum(1 for v in ref_category_weights.values() if v == OTHER_GPCR_REF_WEIGHT)
+    print(f"Loaded {len(ref_category_weights)} reference categories "
+          f"({lse_count} LSE/validation, {oto_count} one-to-one)",
+          file=sys.stderr)
+
+
 def categorize_reference(ref_name):
     """
     Categorize a reference as chemoreceptor or other GPCR.
 
     Returns weight for this reference type.
+    Priority: (1) ref_categories_final.csv, (2) loaded JSON categories, (3) keyword heuristic.
     """
-    # Check against loaded categories
+    # Check CSV-based category map first (from subsampling pipeline)
+    if ref_name in ref_category_weights:
+        return ref_category_weights[ref_name]
+
+    # Check against loaded JSON categories (legacy path)
     if ref_name in chemoreceptor_refs:
         return CHEMORECEPTOR_REF_WEIGHT
 
-    # Heuristic: check for chemoreceptor keywords in name
+    # Fallback: keyword heuristic (for non-subsampled refs)
     chemoreceptor_keywords = ['olfr', 'or', 'taste', 'gust', 'odorant', 'chem', 'vomero']
     name_lower = ref_name.lower()
     if any(kw in name_lower for kw in chemoreceptor_keywords):
@@ -360,6 +400,82 @@ def path_bootstrap_confidence(tree, name_a, name_b, threshold):
     return good / len(supports)
 
 
+# --- Efficient Phylo Scoring ---
+# Precompute k-nearest distances and cache bootstrap values to avoid
+# O(candidates * refs) tree traversals per candidate.
+
+K_NEAREST_REFS = int(os.getenv('K_NEAREST_REFS', 50))
+
+
+def precompute_phylo_data(tree, candidate_names, ref_ids, k_nearest=50):
+    """Precompute distance matrix and bootstrap data for efficient scoring.
+
+    Returns:
+        distances: dict of candidate_name -> list of (distance, ref_name) sorted ascending, truncated to k
+        node_supports: dict of node_id -> support value for all internal nodes
+        leaf_lookup: dict of leaf_name -> ete3 node
+    """
+    # Cache all internal node support values by node id
+    node_supports = {}
+    for node in tree.traverse():
+        if not node.is_leaf():
+            node_supports[id(node)] = getattr(node, 'support', None)
+
+    # Build leaf name -> node lookup once
+    leaf_lookup = {leaf.name: leaf for leaf in tree}
+
+    # Precompute k-nearest ref distances for each candidate
+    distances = {}
+    for cand_name in candidate_names:
+        if cand_name not in leaf_lookup:
+            distances[cand_name] = []
+            continue
+
+        ref_dists = []
+        for ref_name in ref_ids:
+            if ref_name not in leaf_lookup:
+                continue
+            try:
+                dist = tree.get_distance(cand_name, ref_name)
+                ref_dists.append((dist, ref_name))
+            except Exception:
+                continue
+
+        # Sort and keep only k nearest
+        ref_dists.sort(key=lambda x: x[0])
+        distances[cand_name] = ref_dists[:k_nearest]
+
+    return distances, node_supports, leaf_lookup
+
+
+def fast_path_bootstrap_confidence(leaf_a, leaf_b, leaf_lookup, node_supports, threshold):
+    """Fast bootstrap confidence using cached node supports."""
+    if leaf_a not in leaf_lookup or leaf_b not in leaf_lookup:
+        return 0.0
+
+    try:
+        node_a = leaf_lookup[leaf_a]
+        node_b = leaf_lookup[leaf_b]
+        ancestor = node_a.get_common_ancestor(node_b)
+    except Exception:
+        return 0.0
+
+    supports = []
+    for node in (node_a, node_b):
+        current = node
+        while current != ancestor and current.up:
+            sup = node_supports.get(id(current.up))
+            if sup is not None:
+                supports.append(sup)
+            current = current.up
+
+    if not supports:
+        return 1.0
+
+    good = sum(1 for s in supports if s >= threshold)
+    return good / len(supports)
+
+
 def weighted_distance_to_refs(node_name, tree, ref_ids):
     """
     Calculate weighted phylogenetic distance to references.
@@ -367,6 +483,9 @@ def weighted_distance_to_refs(node_name, tree, ref_ids):
     Chemoreceptor references are weighted higher than other GPCRs.
     Paths with low bootstrap support are penalized proportionally.
     Returns inverse weighted distance (higher = closer to important refs).
+
+    NOTE: This is the legacy function used when precomputed data is not available.
+    The fast path uses weighted_distance_to_refs_fast() instead.
     """
     # Guard for when tree is not available
     if tree is None or not ref_ids:
@@ -393,6 +512,30 @@ def weighted_distance_to_refs(node_name, tree, ref_ids):
         return total_weighted_inverse if total_weighted_inverse > 0 else 0.0
     except Exception:
         return 0.0
+
+
+def weighted_distance_to_refs_fast(node_name, precomputed_distances, leaf_lookup,
+                                    node_supports):
+    """Efficient phylo scoring using precomputed k-nearest distances.
+
+    Uses cached distances and bootstrap values instead of per-pair tree traversal.
+    """
+    if node_name not in precomputed_distances:
+        return 0.0
+
+    nearest = precomputed_distances[node_name]
+    if not nearest:
+        return 0.0
+
+    total = 0.0
+    for dist, ref_name in nearest:
+        weight = categorize_reference(ref_name)
+        confidence = fast_path_bootstrap_confidence(
+            node_name, ref_name, leaf_lookup, node_supports, BOOTSTRAP_THRESHOLD
+        )
+        total += confidence * weight / (dist + 1e-6)
+
+    return total
 
 
 def get_selection_scores(candidate_id, dnds_data):
@@ -479,6 +622,105 @@ def get_lse_depth_score(candidate_id, tree, threshold):
     except Exception:
         pass
     return 0.0, 0.0
+
+
+# --- Orthogroup Bootstrap Confidence Score ---
+OG_CONFIDENCE_WEIGHT = float(os.getenv('OG_CONFIDENCE_WEIGHT', 1))
+
+
+def load_og_trees(results_dir):
+    """Load OrthoFinder resolved gene trees.
+
+    Returns dict: og_name -> ete3.Tree
+    """
+    if not ETE3_AVAILABLE:
+        return {}
+
+    og_trees = {}
+    og_tree_dirs = list(Path(results_dir).glob(
+        'orthogroups/input/OrthoFinder/Results_*/Resolved_Gene_Trees'
+    ))
+
+    for tree_dir in og_tree_dirs:
+        for tree_file in tree_dir.glob('OG*_tree.txt'):
+            og_name = tree_file.stem.replace('_tree', '')
+            try:
+                og_trees[og_name] = Tree(str(tree_file), format=1)
+            except Exception:
+                try:
+                    og_trees[og_name] = Tree(str(tree_file), format=0)
+                except Exception:
+                    continue
+
+    return og_trees
+
+
+def get_og_confidence_score(candidate_id, gene_to_og, og_trees, bootstrap_threshold):
+    """Compute bootstrap confidence from orthogroup gene tree.
+
+    Finds nearest reference in OG tree, returns fraction of path nodes
+    with bootstrap >= threshold.
+
+    Returns: (score, has_data)
+    """
+    og = gene_to_og.get(candidate_id)
+    if not og or og not in og_trees:
+        return 0.0, False
+
+    tree = og_trees[og]
+    leaves = [l.name for l in tree]
+
+    # Find this candidate's leaf (Berghia IDs in OG trees use full OrthoFinder format)
+    cand_leaves = [l for l in leaves if candidate_id in l]
+    if not cand_leaves:
+        return 0.0, False
+    cand_leaf = cand_leaves[0]
+
+    # Find reference leaves (exclude outgroup)
+    ref_leaves = [l for l in leaves
+                  if (l.startswith('ref_lse_') or l.startswith('ref_one_to_one_ortholog_')
+                      or l.startswith('ref_validation_'))]
+    if not ref_leaves:
+        return 0.0, False
+
+    # Find nearest reference by distance
+    best_dist = float('inf')
+    best_ref = None
+    for ref_leaf in ref_leaves:
+        try:
+            dist = tree.get_distance(cand_leaf, ref_leaf)
+            if dist < best_dist:
+                best_dist = dist
+                best_ref = ref_leaf
+        except Exception:
+            continue
+
+    if best_ref is None:
+        return 0.0, False
+
+    # Compute bootstrap confidence along path to nearest ref
+    try:
+        ancestor = tree.get_common_ancestor(cand_leaf, best_ref)
+    except Exception:
+        return 0.0, False
+
+    supports = []
+    for name in (cand_leaf, best_ref):
+        nodes = tree.search_nodes(name=name)
+        if not nodes:
+            continue
+        current = nodes[0]
+        while current != ancestor and current.up:
+            sup = getattr(current.up, 'support', None)
+            if sup is not None:
+                supports.append(sup)
+            current = current.up
+
+    if not supports:
+        return 1.0, True  # No bootstrap data — don't penalize
+
+    good = sum(1 for s in supports if s >= bootstrap_threshold)
+    return good / len(supports), True
 
 
 # --- NEW: Phase 1 - Chemosensory Expression Scoring ---
@@ -883,6 +1125,9 @@ def calculate_rank_score(df, weights):
         if row.get('has_expansion_data', False):
             score += row.get('expansion_score_norm', 0) * weights.get('expansion', 0)
             total_weight += weights.get('expansion', 0)
+        if row.get('has_og_confidence_data', False):
+            score += row.get('og_confidence_score_norm', 0) * weights.get('og_confidence', 0)
+            total_weight += weights.get('og_confidence', 0)
 
         # Normalize to max possible
         if total_weight > 0:
@@ -1086,6 +1331,19 @@ def run_leave_one_out_crossval(df, tree, ref_ids, base_weights, n_folds=5):
 
 # --- Calculate Scores for All Candidates ---
 
+# Precompute phylo data for efficient scoring
+precomputed_distances = {}
+node_supports = {}
+leaf_lookup = {}
+if t is not None and ref_ids:
+    print(f"Precomputing phylo data: {len(candidates)} candidates x {len(ref_ids)} refs "
+          f"(k={K_NEAREST_REFS})...", file=sys.stderr)
+    precomputed_distances, node_supports, leaf_lookup = precompute_phylo_data(
+        t, list(candidates['id']), ref_ids, k_nearest=K_NEAREST_REFS
+    )
+    print(f"Precomputation complete: {len(precomputed_distances)} candidates indexed",
+          file=sys.stderr)
+
 # First pass: collect all depths for percentile calculation
 # Only include nodes on paths with sufficient bootstrap support (H12 fix)
 all_depths = []
@@ -1130,6 +1388,16 @@ ecl_divergence_data = load_ecl_divergence(results_dir)
 cafe_expansion_data = load_cafe_expansion(results_dir)
 gene_to_orthogroup = load_gene_to_orthogroup(results_dir)
 
+# Orthogroup gene trees for bootstrap confidence scoring
+og_trees = {}
+if OG_CONFIDENCE_WEIGHT > 0 and gene_to_orthogroup:
+    og_trees = load_og_trees(results_dir)
+    if og_trees:
+        print(f"Loaded {len(og_trees)} orthogroup gene trees for confidence scoring",
+              file=sys.stderr)
+    else:
+        print("No orthogroup gene trees found for confidence scoring", file=sys.stderr)
+
 # ECL divergence threshold from environment
 ECL_RATIO_THRESHOLD = float(os.getenv('ECL_CONSERVATION_RATIO_THRESHOLD', 2.0))
 
@@ -1137,8 +1405,13 @@ ECL_RATIO_THRESHOLD = float(os.getenv('ECL_CONSERVATION_RATIO_THRESHOLD', 2.0))
 results = []
 
 for cand_id in candidates['id']:
-    # Phylogenetic score (weighted distance to refs)
-    phylo_score = weighted_distance_to_refs(cand_id, t, ref_ids)
+    # Phylogenetic score — use fast precomputed path when available
+    if precomputed_distances:
+        phylo_score = weighted_distance_to_refs_fast(
+            cand_id, precomputed_distances, leaf_lookup, node_supports
+        )
+    else:
+        phylo_score = weighted_distance_to_refs(cand_id, t, ref_ids)
 
     # Selection scores (separate purifying and positive)
     purifying_score, positive_score, selection_significant = get_selection_scores(cand_id, dnds_data)
@@ -1174,6 +1447,11 @@ for cand_id in candidates['id']:
         cand_id, cafe_expansion_data, gene_to_orthogroup, PREFERRED_EXPANSION_LEVELS
     )
 
+    # Orthogroup bootstrap confidence score
+    og_conf, has_og_data = get_og_confidence_score(
+        cand_id, gene_to_orthogroup, og_trees, BOOTSTRAP_THRESHOLD
+    )
+
     # Track evidence completeness (based on data availability, not just score > 0)
     # Updated to include new score sources
     evidence_sources = [
@@ -1185,7 +1463,8 @@ for cand_id in candidates['id']:
         has_chemo_expr,
         has_gprotein,
         has_ecl,
-        has_expansion
+        has_expansion,
+        has_og_data
     ]
     evidence_count = sum(evidence_sources)
     evidence_completeness = evidence_count / len(evidence_sources)
@@ -1211,6 +1490,8 @@ for cand_id in candidates['id']:
         'has_ecl_data': has_ecl,
         'expansion_score': expansion_score,
         'has_expansion_data': has_expansion,
+        'og_confidence_score': og_conf,
+        'has_og_confidence_data': has_og_data,
         'evidence_completeness': evidence_completeness
     })
 
@@ -1221,7 +1502,8 @@ df = pd.DataFrame(results)
 normalize_cols = [
     'phylo_score', 'purifying_score', 'positive_score', 'expression_score', 'lse_depth_score',
     # NEW score columns
-    'chemosensory_expr_score', 'gprotein_coexpr_score', 'ecl_divergence_score', 'expansion_score'
+    'chemosensory_expr_score', 'gprotein_coexpr_score', 'ecl_divergence_score', 'expansion_score',
+    'og_confidence_score'
 ]
 
 for col in normalize_cols:
@@ -1294,12 +1576,18 @@ def calculate_fair_rank_score(row):
         score += row['expansion_score_norm'] * EXPANSION_WEIGHT
         total_weight += EXPANSION_WEIGHT
 
+    # Add orthogroup bootstrap confidence if data is available
+    if row.get('has_og_confidence_data', False):
+        score += row.get('og_confidence_score_norm', 0) * OG_CONFIDENCE_WEIGHT
+        total_weight += OG_CONFIDENCE_WEIGHT
+
     # Normalize to max possible score (as if all weights were available)
     max_possible_weight = (
         PHYLO_WEIGHT + PURIFYING_WEIGHT + POSITIVE_WEIGHT +
         SYNTENY_WEIGHT + EXPR_WEIGHT + LSE_DEPTH_WEIGHT +
         CHEMOSENSORY_EXPR_WEIGHT + GPROTEIN_COEXPR_WEIGHT +
-        ECL_DIVERGENCE_WEIGHT + EXPANSION_WEIGHT
+        ECL_DIVERGENCE_WEIGHT + EXPANSION_WEIGHT +
+        OG_CONFIDENCE_WEIGHT
     )
 
     # Scale score to be comparable across candidates with different data availability
@@ -1330,7 +1618,8 @@ def assign_confidence_tier(row):
     max_possible = (
         PHYLO_WEIGHT + PURIFYING_WEIGHT + POSITIVE_WEIGHT + SYNTENY_WEIGHT +
         EXPR_WEIGHT + LSE_DEPTH_WEIGHT + CHEMOSENSORY_EXPR_WEIGHT +
-        GPROTEIN_COEXPR_WEIGHT + ECL_DIVERGENCE_WEIGHT + EXPANSION_WEIGHT
+        GPROTEIN_COEXPR_WEIGHT + ECL_DIVERGENCE_WEIGHT + EXPANSION_WEIGHT +
+        OG_CONFIDENCE_WEIGHT
     )
     score_pct = score / max_possible if max_possible > 0 else 0
 
@@ -1367,7 +1656,8 @@ output_cols = [
     'chemosensory_expr_score', 'has_chemosensory_expr_data',
     'gprotein_coexpr_score', 'has_gprotein_data',
     'ecl_divergence_score', 'has_ecl_data',
-    'expansion_score', 'has_expansion_data'
+    'expansion_score', 'has_expansion_data',
+    'og_confidence_score', 'has_og_confidence_data'
 ]
 
 # Ensure all output columns exist (fill missing with defaults)
@@ -1396,7 +1686,8 @@ if RUN_SENSITIVITY:
         'chemosensory_expr': CHEMOSENSORY_EXPR_WEIGHT,
         'gprotein_coexpr': GPROTEIN_COEXPR_WEIGHT,
         'ecl_divergence': ECL_DIVERGENCE_WEIGHT,
-        'expansion': EXPANSION_WEIGHT
+        'expansion': EXPANSION_WEIGHT,
+        'og_confidence': OG_CONFIDENCE_WEIGHT
     }
 
     sensitivity_results = run_sensitivity_analysis(
@@ -1487,7 +1778,8 @@ output_cols = [
     'chemosensory_expr_score', 'has_chemosensory_expr_data',
     'gprotein_coexpr_score', 'has_gprotein_data',
     'ecl_divergence_score', 'has_ecl_data',
-    'expansion_score', 'has_expansion_data'
+    'expansion_score', 'has_expansion_data',
+    'og_confidence_score', 'has_og_confidence_data'
 ]
 
 if sensitivity_results and 'rank_stability' in df_sorted.columns:
@@ -1495,6 +1787,80 @@ if sensitivity_results and 'rank_stability' in df_sorted.columns:
 
 # Re-save with additional columns
 df_sorted[output_cols].to_csv(output_file, index=False)
+
+# --- Validation Report: Check AcCR Proximity ---
+validation_refs = [r for r in ref_ids if 'validation' in r]
+if validation_refs and t is not None:
+    print("\n=== Validation: Aplysia AcCR Chemoreceptor Proximity ===", file=sys.stderr)
+
+    # Find candidates nearest to each validation reference
+    for val_ref in validation_refs:
+        val_dists = []
+        for cand_id in df_sorted['id']:
+            try:
+                dist = t.get_distance(cand_id, val_ref)
+                val_dists.append((cand_id, dist))
+            except Exception:
+                continue
+
+        val_dists.sort(key=lambda x: x[1])
+        nearest_5 = val_dists[:5]
+
+        print(f"\n  {val_ref}:", file=sys.stderr)
+        for cand_id, dist in nearest_5:
+            cand_rows = df_sorted[df_sorted['id'] == cand_id]
+            if not cand_rows.empty:
+                rank = cand_rows.index[0] + 1
+                score = cand_rows['rank_score'].values[0]
+                print(f"    {cand_id}: dist={dist:.4f}, rank={rank}, score={score:.3f}",
+                      file=sys.stderr)
+
+    # Overall: what fraction of candidates nearest to AcCR are in top quartile?
+    top_quartile_cutoff = df_sorted['rank_score'].quantile(0.75)
+    near_validation = set()
+    median_phylo = df_sorted['phylo_score'].median() if df_sorted['phylo_score'].max() > 0 else float('inf')
+    for val_ref in validation_refs:
+        for cand_id in df_sorted['id']:
+            try:
+                dist = t.get_distance(cand_id, val_ref)
+                if dist < median_phylo:
+                    near_validation.add(cand_id)
+            except Exception:
+                continue
+
+    if near_validation:
+        near_df = df_sorted[df_sorted['id'].isin(near_validation)]
+        in_top_q = (near_df['rank_score'] >= top_quartile_cutoff).sum()
+        print(f"\n  Validation summary: {len(near_validation)} candidates near AcCR refs, "
+              f"{in_top_q} ({in_top_q/len(near_validation)*100:.0f}%) in top quartile",
+              file=sys.stderr)
+    else:
+        print("\n  Validation summary: no candidates found near AcCR refs", file=sys.stderr)
+
+    # Write validation report to file
+    output_dir = Path(output_file).parent
+    val_report_file = output_dir / 'validation_report.json'
+    val_report = {
+        'validation_refs': validation_refs,
+        'nearest_candidates': {},
+        'near_validation_count': len(near_validation),
+        'in_top_quartile': int(in_top_q) if near_validation else 0,
+        'top_quartile_pct': float(in_top_q / len(near_validation) * 100) if near_validation else 0.0
+    }
+    for val_ref in validation_refs:
+        val_dists = []
+        for cand_id in df_sorted['id']:
+            try:
+                dist = t.get_distance(cand_id, val_ref)
+                val_dists.append((cand_id, float(dist)))
+            except Exception:
+                continue
+        val_dists.sort(key=lambda x: x[1])
+        val_report['nearest_candidates'][val_ref] = [
+            {'candidate': c, 'distance': d} for c, d in val_dists[:10]
+        ]
+    with open(val_report_file, 'w') as f:
+        json.dump(val_report, f, indent=2)
 
 # --- Summary Statistics ---
 print(f"\nRanking Summary:", file=sys.stderr)
