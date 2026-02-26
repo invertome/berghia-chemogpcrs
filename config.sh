@@ -209,6 +209,7 @@ export LOCAL_DB_DIR="${BASE_DIR}/databases"
 export NON_CHEMOSENSORY_TISSUES="foot,digestive,gonad,mantle"  # For tau index calculation
 export CHEMOSENSORY_EXPR_WEIGHT=3         # Weight for chemosensory-specific expression score
 export CHEMOSENSORY_HARD_FILTER=false     # If true, exclude candidates without chemosensory expression
+export CHEMOSENSORY_TISSUE_WEIGHTS="rhinophore:2.0,oral-tentacle:1.0"  # Rhinophore prioritized over oral tentacle
 
 # === NEW: G-protein Co-expression (Phase 2) ===
 # Identify GPCRs co-expressed with olfactory G-proteins (Golf, Gi, Go)

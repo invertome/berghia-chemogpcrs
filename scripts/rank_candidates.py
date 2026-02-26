@@ -60,6 +60,14 @@ LSE_DEPTH_WEIGHT = float(os.getenv('LSE_DEPTH_WEIGHT', 1))
 CHEMOSENSORY_EXPR_WEIGHT = float(os.getenv('CHEMOSENSORY_EXPR_WEIGHT', 3))
 CHEMOSENSORY_HARD_FILTER = os.getenv('CHEMOSENSORY_HARD_FILTER', 'false').lower() == 'true'
 
+# Tissue-specific weights for chemosensory scoring (rhinophore prioritized)
+# Format: comma-separated tissue:weight pairs
+CHEMOSENSORY_TISSUE_WEIGHTS_STR = os.getenv('CHEMOSENSORY_TISSUE_WEIGHTS', 'rhinophore:2.0,oral-tentacle:1.0')
+CHEMOSENSORY_TISSUE_WEIGHTS = {}
+for pair in CHEMOSENSORY_TISSUE_WEIGHTS_STR.split(','):
+    tissue, weight = pair.strip().split(':')
+    CHEMOSENSORY_TISSUE_WEIGHTS[tissue.strip()] = float(weight.strip())
+
 # NEW: Phase 2 - G-protein co-expression weight
 GPROTEIN_COEXPR_WEIGHT = float(os.getenv('GPROTEIN_COEXPR_WEIGHT', 2))
 
@@ -97,11 +105,13 @@ CROSSVAL_FOLDS = int(os.getenv('CROSSVAL_FOLDS', 5))
 candidates = pd.read_csv(candidates_file, names=['id'])
 
 # Expression data (handle missing gracefully)
+# Try legacy 2-column expression_file first; fall back to expression_summary.csv
 if os.path.exists(expression_file):
     expr_data = pd.read_csv(expression_file, names=['id', 'weight'])
 else:
     expr_data = pd.DataFrame(columns=['id', 'weight'])
-    print(f"Warning: Expression file not found: {expression_file}", file=sys.stderr)
+    print(f"Note: Legacy expression file not found: {expression_file}. "
+          "Will use expression_summary.csv if available.", file=sys.stderr)
 
 # --- Load Reference Categories ---
 chemoreceptor_refs = set()
@@ -477,7 +487,7 @@ def load_chemosensory_expression(results_dir):
     """
     Load chemosensory expression summary from process_expression.py output.
 
-    Returns dict: gene_id -> {tau_index, enrichment, is_specific, has_data}
+    Returns dict: gene_id -> {tau_index, enrichment, is_specific, tissue_tpms, has_data}
     """
     expr_file = os.path.join(results_dir, 'expression', 'expression_summary.csv')
     expr_data = {}
@@ -487,14 +497,22 @@ def load_chemosensory_expression(results_dir):
 
     try:
         df = pd.read_csv(expr_file)
+        # Detect per-tissue TPM columns (end with _tpm)
+        tpm_cols = [c for c in df.columns if c.endswith('_tpm')]
         for _, row in df.iterrows():
             gene_id = str(row['gene_id'])
+            tissue_tpms = {}
+            for col in tpm_cols:
+                tissue_name = col.replace('_tpm', '')
+                val = row.get(col, 0.0)
+                tissue_tpms[tissue_name] = val if pd.notna(val) else 0.0
             expr_data[gene_id] = {
                 'tau_index': row.get('tau_index', 0.0),
                 'chemosensory_enrichment': row.get('chemosensory_enrichment', 0.0),
                 'mean_chemosensory_tpm': row.get('mean_chemosensory_tpm', 0.0),
                 'expressed_in_chemosensory': row.get('expressed_in_chemosensory', False),
                 'is_chemosensory_specific': row.get('is_chemosensory_specific', False),
+                'tissue_tpms': tissue_tpms,
                 'has_data': True
             }
         print(f"Loaded chemosensory expression data for {len(expr_data)} genes", file=sys.stderr)
@@ -504,14 +522,18 @@ def load_chemosensory_expression(results_dir):
     return expr_data
 
 
-def get_chemosensory_expression_score(candidate_id, chemo_expr_data):
+def get_chemosensory_expression_score(candidate_id, chemo_expr_data,
+                                      tissue_weights=None):
     """
-    Calculate chemosensory expression score.
+    Calculate chemosensory expression score with tissue-specific weighting.
 
     Components:
-    1. Is expressed in any chemosensory tissue (binary bonus)
+    1. Tissue-weighted chemosensory expression (rhinophore > oral-tentacle)
     2. Tau index (tissue specificity)
     3. Chemosensory enrichment (fold-change vs other tissues)
+
+    Args:
+        tissue_weights: dict of tissue_name -> weight (e.g. rhinophore:2.0, oral-tentacle:1.0)
 
     Returns: (score, has_data)
     """
@@ -523,27 +545,50 @@ def get_chemosensory_expression_score(candidate_id, chemo_expr_data):
     if not data.get('has_data', False):
         return 0.0, False
 
+    if tissue_weights is None:
+        tissue_weights = {'rhinophore': 2.0, 'oral-tentacle': 1.0}
+
     score = 0.0
+    tissue_tpms = data.get('tissue_tpms', {})
 
-    # Component 1: Expressed in chemosensory tissue
-    if data.get('expressed_in_chemosensory', False):
-        score += 0.3
+    # Component 1: Tissue-weighted chemosensory expression (0-0.4)
+    # Weight each chemosensory tissue's contribution by its importance
+    weighted_tpm = 0.0
+    total_weight = 0.0
+    for tissue, weight in tissue_weights.items():
+        tpm = tissue_tpms.get(tissue, 0.0)
+        weighted_tpm += tpm * weight
+        total_weight += weight
 
-    # Component 2: Tissue specificity (tau index)
+    if total_weight > 0 and weighted_tpm > 0:
+        # Log-scale weighted TPM, normalize to 0-0.4 range
+        # log2(1 + weighted_tpm/total_weight) capped at ~7 (128 TPM)
+        norm_tpm = weighted_tpm / total_weight
+        log_tpm = min(np.log2(1 + norm_tpm) / 7, 1.0)
+        score += log_tpm * 0.4
+
+    # Component 2: Tissue specificity (tau index, 0-0.3)
     tau = data.get('tau_index', 0.0)
     if pd.notna(tau):
-        score += tau * 0.3  # Max 0.3 contribution
+        score += tau * 0.3
 
-    # Component 3: Chemosensory enrichment (log fold-change, capped)
+    # Component 3: Chemosensory enrichment (log fold-change, 0-0.3)
     enrichment = data.get('chemosensory_enrichment', 0.0)
     if enrichment > 1:
-        # Log2 fold-change, capped at 0.4 contribution
-        log_enrichment = min(np.log2(enrichment) / 5, 1.0)  # Cap at 5-fold (log2=2.32)
-        score += log_enrichment * 0.4
+        log_enrichment = min(np.log2(enrichment) / 5, 1.0)
+        score += log_enrichment * 0.3
 
-    # Bonus for chemosensory-specific expression
+    # Bonus for chemosensory-specific expression (tau >= threshold AND max in chemo tissue)
     if data.get('is_chemosensory_specific', False):
-        score *= 1.5  # 50% bonus
+        # Extra bonus if rhinophore is the dominant tissue
+        rhino_tpm = tissue_tpms.get('rhinophore', 0.0)
+        other_chemo_tpms = [tissue_tpms.get(t, 0.0) for t in tissue_weights if t != 'rhinophore']
+        max_other_chemo = max(other_chemo_tpms) if other_chemo_tpms else 0.0
+
+        if rhino_tpm > 0 and rhino_tpm >= max_other_chemo:
+            score *= 1.75  # 75% bonus for rhinophore-dominant
+        else:
+            score *= 1.5   # 50% bonus for other chemosensory-specific
 
     return score, True
 
@@ -1101,14 +1146,22 @@ for cand_id in candidates['id']:
     # Synteny score (quantitative)
     synteny_score, has_synteny = get_synteny_score(cand_id, synteny_scores)
 
-    # Expression score
+    # Expression score (from legacy file or expression_summary.csv)
     expr_score, has_expression = get_expression_score(cand_id, expr_data)
+    # If legacy expression file was missing, derive from expression_summary.csv
+    if not has_expression and cand_id in chemo_expr_data:
+        tissue_tpms = chemo_expr_data[cand_id].get('tissue_tpms', {})
+        mean_tpm = np.mean(list(tissue_tpms.values())) if tissue_tpms else 0.0
+        if mean_tpm > 0:
+            expr_score = np.log2(1 + mean_tpm)
+            has_expression = True
 
     # LSE depth score
     lse_score, raw_depth = get_lse_depth_score(cand_id, t, lse_threshold)
 
-    # NEW: Phase 1 - Chemosensory expression score
-    chemo_expr_score, has_chemo_expr = get_chemosensory_expression_score(cand_id, chemo_expr_data)
+    # Phase 1 - Chemosensory expression score (tissue-weighted: rhinophore > oral-tentacle)
+    chemo_expr_score, has_chemo_expr = get_chemosensory_expression_score(
+        cand_id, chemo_expr_data, tissue_weights=CHEMOSENSORY_TISSUE_WEIGHTS)
 
     # NEW: Phase 2 - G-protein co-expression score
     gprotein_score, has_gprotein = get_gprotein_coexpr_score(cand_id, gprotein_coexpr_data)
