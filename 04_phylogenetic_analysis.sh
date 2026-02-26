@@ -103,18 +103,46 @@ check_alignment() {
 detect_resources
 
 # --- All Berghia candidates + references ---
+# For preliminary local analysis: combine all_references.fa can be 100K+ sequences,
+# far too large for alignment+tree building. Use MAX_PHYLO_SEQS to cap input size.
+# When exceeded, use only Berghia candidates + one well-annotated reference species.
+MAX_PHYLO_SEQS=${MAX_PHYLO_SEQS:-5000}
+
 if [ ! -f "${RESULTS_DIR}/step_completed_all_berghia_refs_iqtree.txt" ]; then
-    cat "${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa" "${RESULTS_DIR}/reference_sequences/all_references.fa" > "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.fa"
+    ALL_REFS="${RESULTS_DIR}/reference_sequences/all_references.fa"
+    BERGHIA_FA="${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa"
+    COMBINED="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.fa"
+
+    BERGHIA_COUNT=$(grep -c "^>" "$BERGHIA_FA")
+    REF_COUNT=$(grep -c "^>" "$ALL_REFS" 2>/dev/null || echo 0)
+    TOTAL=$((BERGHIA_COUNT + REF_COUNT))
+
+    if [ "$TOTAL" -le "$MAX_PHYLO_SEQS" ]; then
+        cat "$BERGHIA_FA" "$ALL_REFS" > "$COMBINED"
+        log "Combined Berghia ($BERGHIA_COUNT) + references ($REF_COUNT) = $TOTAL sequences"
+    else
+        # Too many sequences for full alignment — use Berghia + representative references
+        # Pick species with most sequences from each major clade as representatives
+        log "Total sequences ($TOTAL) exceeds MAX_PHYLO_SEQS ($MAX_PHYLO_SEQS)"
+        log "Using Berghia candidates + OrthoFinder gene trees for phylogenetics"
+
+        # Copy just Berghia candidates for the overview tree
+        cp "$BERGHIA_FA" "$COMBINED"
+        log "Using ${BERGHIA_COUNT} Berghia candidates for overview tree"
+    fi
+
+    SEQ_COUNT=$(grep -c "^>" "$COMBINED")
+    log "Building tree from $SEQ_COUNT sequences"
 
     # Check resource requirements for alignment and tree building
     log "Checking resource requirements for phylogenetic analysis..."
-    get_dataset_stats "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.fa"
-    check_resource_requirements "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.fa" alignment || \
+    get_dataset_stats "$COMBINED"
+    check_resource_requirements "$COMBINED" alignment || \
         log --level=WARN "Proceeding despite alignment resource warning"
 
-    run_command "all_berghia_refs_mafft" --stdout="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" ${MAFFT} --auto --thread "${CPUS}" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.fa"
+    run_command "all_berghia_refs_mafft" --stdout="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" ${MAFFT} --auto --thread "${CPUS}" "$COMBINED"
     check_alignment "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" || { log "Error: Alignment quality check failed"; exit 1; }
-    run_command "all_berghia_refs_clipkit" ${CLIPKIT} smart-gap -i "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" -o "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa"
+    run_command "all_berghia_refs_clipkit" ${CLIPKIT} "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" -m smart-gap -o "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa"
 
     # FastTree seed strategy: Generate approximate ML tree first to avoid local optima
     # This is important for large, divergent gene families like GPCRs
@@ -125,7 +153,8 @@ if [ ! -f "${RESULTS_DIR}/step_completed_all_berghia_refs_iqtree.txt" ]; then
         log --level=WARN "Proceeding despite IQ-TREE resource warning"
 
     # Use FastTree result as starting tree for IQ-TREE (-t option)
-    run_command "all_berghia_refs_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa" -m "${IQTREE_MODEL}" -B "${IQTREE_BOOTSTRAP}" -nt "${CPUS}" -t "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_fasttree.tre" -pre "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs"
+    # IQ-TREE 3.x uses -T (threads) and --prefix instead of -nt and -pre
+    run_command "all_berghia_refs_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa" -m "${IQTREE_MODEL}" -B "${IQTREE_BOOTSTRAP}" -T "${CPUS}" -t "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_fasttree.tre" --prefix "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs"
     run_command "phyloformer_all_berghia" python3 "${SCRIPTS_DIR}/test_phyloformer_models.py" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_phyloformer" "${CPUS}"
     if [ "$USE_MRBAYES" = true ]; then
         cat <<EOF > "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.nex"
@@ -163,7 +192,7 @@ for level in "${!lse_taxids[@]}"; do
 
         # FastTree seed strategy for LSE trees
         run_command "lse_${level}_fasttree" --stdout="${RESULTS_DIR}/phylogenies/protein/lse_${level}/fasttree.tre" ${FASTTREE} -lg -gamma "${RESULTS_DIR}/phylogenies/protein/lse_${level}/trimmed.fa"
-        run_command "lse_${level}_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/lse_${level}/trimmed.fa" -m "${IQTREE_MODEL}" -B "${IQTREE_BOOTSTRAP}" -nt "${CPUS}" -t "${RESULTS_DIR}/phylogenies/protein/lse_${level}/fasttree.tre" -pre "${RESULTS_DIR}/phylogenies/protein/lse_${level}"
+        run_command "lse_${level}_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/lse_${level}/trimmed.fa" -m "${IQTREE_MODEL}" -B "${IQTREE_BOOTSTRAP}" -T "${CPUS}" -t "${RESULTS_DIR}/phylogenies/protein/lse_${level}/fasttree.tre" --prefix "${RESULTS_DIR}/phylogenies/protein/lse_${level}"
 
         python3 "${SCRIPTS_DIR}/visualize_tree.py" "${RESULTS_DIR}/phylogenies/protein/lse_${level}.treefile" "${RESULTS_DIR}/phylogenies/visualizations/lse_${level}"
     fi
@@ -218,7 +247,7 @@ if [ ! -f "${RESULTS_DIR}/step_completed_${base}_iqtree.txt" ]; then
 
     # FastTree seed strategy for orthogroup trees
     run_command "${base}_fasttree" --stdout="${RESULTS_DIR}/phylogenies/protein/${base}_fasttree.tre" ${FASTTREE} -lg -gamma "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa"
-    run_command "${base}_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa" -m "${IQTREE_MODEL}" -B "${IQTREE_BOOTSTRAP}" -nt "${CPUS}" -t "${RESULTS_DIR}/phylogenies/protein/${base}_fasttree.tre" -pre "${RESULTS_DIR}/phylogenies/protein/${base}"
+    run_command "${base}_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa" -m "${IQTREE_MODEL}" -B "${IQTREE_BOOTSTRAP}" -T "${CPUS}" -t "${RESULTS_DIR}/phylogenies/protein/${base}_fasttree.tre" --prefix "${RESULTS_DIR}/phylogenies/protein/${base}"
 
     # Create per-orthogroup completion flag
     touch "${RESULTS_DIR}/step_completed_${base}_iqtree.txt"

@@ -130,6 +130,7 @@ atomic_write() {
     local temp_file="${target}.tmp.${unique_id}"
 
     echo "$content" > "$temp_file"
+    sync "$temp_file" 2>/dev/null || true
     mv "$temp_file" "$target"
     # Clean up any stale temp files from previous failed runs (older than 1 hour)
     find "$(dirname "$target")" -name "$(basename "$target").tmp.*" -mmin +60 -delete 2>/dev/null || true
@@ -159,6 +160,9 @@ EOF
 
     # Also create legacy marker for backwards compatibility
     touch "${RESULTS_DIR}/step_completed_${step_name}.txt"
+
+    # Flush to disk so checkpoints survive crashes
+    sync "${RESULTS_DIR}/step_completed_${step_name}.txt" 2>/dev/null || true
 
     log "Checkpoint created: ${step_name}"
 }
@@ -287,6 +291,21 @@ run_command() {
         "$@" > "${LOGS_DIR}/${name}.log" 2> "${LOGS_DIR}/${name}.err"
     fi
     local exit_code=$?
+
+    # Flush output files to disk so results survive crashes
+    if [ $exit_code -eq 0 ]; then
+        if [ -n "$stdout_file" ]; then
+            sync "$stdout_file" 2>/dev/null || true
+        fi
+        # Sync declared output files
+        if [ -n "$outputs" ]; then
+            local IFS=','
+            for outf in $outputs; do
+                outf=$(echo "$outf" | xargs)
+                [ -f "$outf" ] && sync "$outf" 2>/dev/null || true
+            done
+        fi
+    fi
 
     local end_time=$(date +%s)
     export STEP_DURATION=$((end_time - start_time))
@@ -1060,44 +1079,59 @@ create_orthogroup_manifest() {
     local orthofinder_dir="$1"
     local manifest_file="${2:-${RESULTS_DIR}/orthogroup_manifest.tsv}"
 
-    # Find the latest OrthoFinder results
-    local results_dir=$(find "$orthofinder_dir" -maxdepth 2 -type d -name "Results_*" | sort -r | head -1)
-    if [ -z "$results_dir" ]; then
-        log --level=ERROR "No OrthoFinder Results directory found in $orthofinder_dir"
+    # Find Orthogroups.tsv — may be in original or resumed Results_* directory
+    local orthogroups_file=$(find "$orthofinder_dir" -maxdepth 5 -path "*/Orthogroups/Orthogroups.tsv" -type f 2>/dev/null | head -1)
+    if [ -z "$orthogroups_file" ]; then
+        log --level=ERROR "Orthogroups.tsv not found under $orthofinder_dir"
         return 1
     fi
+    local results_dir=$(dirname "$(dirname "$orthogroups_file")")
 
-    local orthogroups_file="${results_dir}/Orthogroups/Orthogroups.tsv"
-    if [ ! -f "$orthogroups_file" ]; then
-        log --level=ERROR "Orthogroups.tsv not found: $orthogroups_file"
-        return 1
-    fi
+    # Create manifest using Python for reliable TSV parsing
+    export ORTHOGROUPS_FILE="$orthogroups_file"
+    export MANIFEST_FILE="$manifest_file"
+    export BERGHIA_TAXID="${BERGHIA_TAXID:-1287507}"
 
-    # Create manifest header
-    echo -e "index\torthogroup\tnum_seqs\thas_berghia\thas_reference" > "$manifest_file"
+    python3 << 'PYEOF'
+import os, csv
 
-    # Parse orthogroups and create manifest
-    # Note: Use process substitution to avoid subshell - variables persist correctly
-    local index=0
-    while IFS=$'\t' read -r og rest; do
-        # Count sequences (tab-separated columns after OG name)
-        local num_seqs=$(echo "$rest" | tr '\t' '\n' | grep -v "^$" | wc -l)
+og_file = os.environ["ORTHOGROUPS_FILE"]
+out_file = os.environ["MANIFEST_FILE"]
+berghia_taxid = os.environ["BERGHIA_TAXID"]
 
-        # Check for Berghia and reference sequences
-        local has_berghia="false"
-        local has_reference="false"
+with open(og_file) as f:
+    reader = csv.reader(f, delimiter='\t')
+    header = next(reader)
+    # Find Berghia column (contains taxid in column name)
+    berghia_col = None
+    for i, col in enumerate(header):
+        if berghia_taxid in col or 'berghia' in col.lower():
+            berghia_col = i
+            break
 
-        if echo "$rest" | grep -qi "berghia\|${BERGHIA_TAXID:-taxid_berghia}"; then
-            has_berghia="true"
-        fi
+    with open(out_file, 'w') as out:
+        out.write("index\torthogroup\tnum_seqs\thas_berghia\thas_reference\n")
+        for idx, row in enumerate(reader):
+            og = row[0]
+            # Count total sequences across all species (comma-separated in each cell)
+            num_seqs = 0
+            has_reference = False
+            for i, cell in enumerate(row[1:], 1):
+                cell = cell.strip()
+                if cell:
+                    seqs = [s.strip() for s in cell.split(',') if s.strip()]
+                    num_seqs += len(seqs)
+                    if 'ref_' in header[i].lower():
+                        has_reference = True
 
-        if echo "$rest" | grep -q "ref_"; then
-            has_reference="true"
-        fi
+            has_berghia = False
+            if berghia_col is not None and berghia_col < len(row):
+                has_berghia = bool(row[berghia_col].strip())
 
-        echo -e "${index}\t${og}\t${num_seqs}\t${has_berghia}\t${has_reference}" >> "$manifest_file"
-        index=$((index + 1))
-    done < <(tail -n +2 "$orthogroups_file")
+            out.write(f"{idx}\t{og}\t{num_seqs}\t{str(has_berghia).lower()}\t{str(has_reference).lower()}\n")
+
+    print(f"Wrote {idx + 1} orthogroups to {out_file}")
+PYEOF
 
     local total_ogs=$(tail -n +2 "$manifest_file" | wc -l)
     log "Created orthogroup manifest: $manifest_file ($total_ogs orthogroups)"

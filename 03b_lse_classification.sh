@@ -30,10 +30,11 @@ log "Starting LSE classification."
 # Set to false to use the legacy bash-based classification from config.sh LSE_LEVELS
 USE_PYTHON_LSE=${USE_PYTHON_LSE:-true}
 
-# --- Get orthogroup directory ---
-OG_DIR=$(find "${RESULTS_DIR}/orthogroups" -maxdepth 5 -type d -name "Orthogroups" -path "*/Results_*/*" 2>/dev/null | head -1)
+# --- Get orthogroup FASTA directory ---
+# OrthoFinder puts per-OG FASTA files in Orthogroup_Sequences/, not Orthogroups/
+OG_DIR=$(find "${RESULTS_DIR}/orthogroups" -maxdepth 5 -type d -name "Orthogroup_Sequences" -path "*/Results_*/*" 2>/dev/null | head -1)
 if [ -z "$OG_DIR" ] || [ ! -d "$OG_DIR" ]; then
-    log "Error: Orthogroups directory not found"
+    log "Error: Orthogroup_Sequences directory not found"
     exit 1
 fi
 

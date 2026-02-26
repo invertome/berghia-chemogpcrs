@@ -65,9 +65,13 @@ if [ -d "${NATH_ET_AL_DIR}" ]; then
                 category=$(basename "$category_dir")
                 dest="${RESULTS_DIR}/orthogroups/input/ref_${category}_${species}.fa"
 
+                # Extract taxid from filename (format: TAXID_Species_name.faa)
+                taxid=$(echo "$species" | cut -d'_' -f1)
+
                 # Only copy if not already there (avoid LSE overwriting conserved)
                 if [ ! -f "$dest" ]; then
-                    cp "$faa" "$dest"
+                    # Prefix each header with ref_TAXID_ for traceability
+                    sed "s/^>/>ref_${taxid}_/" "$faa" > "$dest"
                     ref_species_count=$((ref_species_count + 1))
                 fi
             done
@@ -114,7 +118,19 @@ fi
 # Run OrthoFinder
 # -M msa required when specifying -A (aligner) or -T (tree builder)
 # -a for number of BLAST threads, -t for tree inference threads
-run_command "orthofinder" ${ORTHOFINDER} -f "${RESULTS_DIR}/orthogroups/input" -t "${CPUS}" -a "${CPUS}" -I "${ORTHOFINDER_INFLATION}" -M msa -S diamond -A mafft -T fasttree
+#
+# Resume logic: if a previous run exists (e.g., from a crash), use -fg to
+# skip the expensive DIAMOND all-vs-all phase and resume from orthogroups.
+PREV_RESULTS=$(find "${RESULTS_DIR}/orthogroups/input/OrthoFinder" -maxdepth 1 -type d -name "Results_*" 2>/dev/null | sort -r | head -1)
+
+if [ -n "$PREV_RESULTS" ] && [ -f "$PREV_RESULTS/Orthogroups/Orthogroups.tsv" ]; then
+    # Previous run has orthogroups — resume from there (skip DIAMOND + MCL)
+    log "Resuming OrthoFinder from previous orthogroups: ${PREV_RESULTS}"
+    run_command "orthofinder" ${ORTHOFINDER} -fg "${PREV_RESULTS}" -t "${CPUS}" -a "${CPUS}" -M msa -A mafft -T fasttree
+else
+    # Fresh run
+    run_command "orthofinder" ${ORTHOFINDER} -f "${RESULTS_DIR}/orthogroups/input" -t "${CPUS}" -a "${CPUS}" -I "${ORTHOFINDER_INFLATION}" -M msa -S diamond -A mafft -T fasttree
+fi
 
 # Verify output
 ORTHOFINDER_RESULTS=$(find "${RESULTS_DIR}/orthogroups" -maxdepth 4 -type d -name "Results_*" 2>/dev/null | sort -r | head -1)
