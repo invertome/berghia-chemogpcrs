@@ -205,28 +205,6 @@ with open('${REF_CATEGORIES_FINAL}', 'a') as f:
         log "Added ${OUTGROUP_COUNT} outgroup sequence(s) for tree rooting"
     fi
 
-    # --- Append validation chemoreceptors ---
-    # Uses ref_validation_ prefix to pass existing startswith('ref_') checks
-    if [ -f "${VALIDATION_CHEMORECEPTORS:-}" ]; then
-        run_command "validation_update_headers" python3 "${SCRIPTS_DIR}/update_headers.py" \
-            "${VALIDATION_CHEMORECEPTORS}" "${RESULTS_DIR}/reference_sequences/validation_id_map.csv" \
-            --source-type reference --id-prefix ref_validation
-        cat "${VALIDATION_CHEMORECEPTORS}_updated.fa" >> "$COMBINED"
-        # Add validation entries to category CSV
-        if [ -f "${REF_CATEGORIES_FINAL}" ]; then
-            python3 -c "
-import csv
-with open('${REF_CATEGORIES_FINAL}', 'a') as f:
-    writer = csv.writer(f)
-    with open('${RESULTS_DIR}/reference_sequences/validation_id_map.csv') as m:
-        for row in csv.DictReader(m):
-            writer.writerow([row['short_id'], 'validation_chemoreceptor', 'gastropoda'])
-"
-        fi
-        VAL_COUNT=$(grep -c "^>" "${VALIDATION_CHEMORECEPTORS}_updated.fa")
-        log "Added ${VAL_COUNT} validation chemoreceptor sequence(s)"
-    fi
-
     SEQ_COUNT=$(grep -c "^>" "$COMBINED")
     log "Building tree from $SEQ_COUNT sequences"
 

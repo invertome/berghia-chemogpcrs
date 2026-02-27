@@ -132,9 +132,6 @@ export REF_TAXONOMY_WEIGHTS="gastropoda:3.0,cephalopoda:1.5,bivalvia:1.5,other_m
 # --- Outgroup for Tree Rooting ---
 export OUTGROUP_FASTA="${REFERENCE_DIR}/outgroup.fa"
 
-# --- Validation Chemoreceptors ---
-export VALIDATION_CHEMORECEPTORS="${REFERENCE_DIR}/validation_chemoreceptors.fa"
-
 # --- Orthogroup Confidence Score ---
 export OG_CONFIDENCE_WEIGHT=1
 

@@ -165,7 +165,7 @@ else:
 
 
 # --- Load Reference Categories from CSV ---
-# Maps ref_id -> weight based on LSE/one_to_one/validation category
+# Maps ref_id -> weight based on LSE/one_to_one category
 import csv as _csv
 ref_category_weights = {}  # ref_id -> weight (from ref_categories_final.csv)
 
@@ -181,7 +181,7 @@ if REF_CATEGORIES_CSV and os.path.exists(REF_CATEGORIES_CSV):
         for row in _csv.DictReader(_f):
             ref_id = row['ref_id']
             category = row['category']
-            if category in ('lse', 'validation_chemoreceptor'):
+            if category == 'lse':
                 ref_category_weights[ref_id] = CHEMORECEPTOR_REF_WEIGHT
             elif category == 'outgroup':
                 pass  # Outgroup excluded from distance calculations
@@ -190,7 +190,7 @@ if REF_CATEGORIES_CSV and os.path.exists(REF_CATEGORIES_CSV):
     lse_count = sum(1 for v in ref_category_weights.values() if v == CHEMORECEPTOR_REF_WEIGHT)
     oto_count = sum(1 for v in ref_category_weights.values() if v == OTHER_GPCR_REF_WEIGHT)
     print(f"Loaded {len(ref_category_weights)} reference categories "
-          f"({lse_count} LSE/validation, {oto_count} one-to-one)",
+          f"({lse_count} LSE, {oto_count} one-to-one)",
           file=sys.stderr)
 
 
@@ -678,8 +678,7 @@ def get_og_confidence_score(candidate_id, gene_to_og, og_trees, bootstrap_thresh
 
     # Find reference leaves (exclude outgroup)
     ref_leaves = [l for l in leaves
-                  if (l.startswith('ref_lse_') or l.startswith('ref_one_to_one_ortholog_')
-                      or l.startswith('ref_validation_'))]
+                  if (l.startswith('ref_lse_') or l.startswith('ref_one_to_one_ortholog_'))]
     if not ref_leaves:
         return 0.0, False
 
@@ -1787,80 +1786,6 @@ if sensitivity_results and 'rank_stability' in df_sorted.columns:
 
 # Re-save with additional columns
 df_sorted[output_cols].to_csv(output_file, index=False)
-
-# --- Validation Report: Check AcCR Proximity ---
-validation_refs = [r for r in ref_ids if 'validation' in r]
-if validation_refs and t is not None:
-    print("\n=== Validation: Aplysia AcCR Chemoreceptor Proximity ===", file=sys.stderr)
-
-    # Find candidates nearest to each validation reference
-    for val_ref in validation_refs:
-        val_dists = []
-        for cand_id in df_sorted['id']:
-            try:
-                dist = t.get_distance(cand_id, val_ref)
-                val_dists.append((cand_id, dist))
-            except Exception:
-                continue
-
-        val_dists.sort(key=lambda x: x[1])
-        nearest_5 = val_dists[:5]
-
-        print(f"\n  {val_ref}:", file=sys.stderr)
-        for cand_id, dist in nearest_5:
-            cand_rows = df_sorted[df_sorted['id'] == cand_id]
-            if not cand_rows.empty:
-                rank = cand_rows.index[0] + 1
-                score = cand_rows['rank_score'].values[0]
-                print(f"    {cand_id}: dist={dist:.4f}, rank={rank}, score={score:.3f}",
-                      file=sys.stderr)
-
-    # Overall: what fraction of candidates nearest to AcCR are in top quartile?
-    top_quartile_cutoff = df_sorted['rank_score'].quantile(0.75)
-    near_validation = set()
-    median_phylo = df_sorted['phylo_score'].median() if df_sorted['phylo_score'].max() > 0 else float('inf')
-    for val_ref in validation_refs:
-        for cand_id in df_sorted['id']:
-            try:
-                dist = t.get_distance(cand_id, val_ref)
-                if dist < median_phylo:
-                    near_validation.add(cand_id)
-            except Exception:
-                continue
-
-    if near_validation:
-        near_df = df_sorted[df_sorted['id'].isin(near_validation)]
-        in_top_q = (near_df['rank_score'] >= top_quartile_cutoff).sum()
-        print(f"\n  Validation summary: {len(near_validation)} candidates near AcCR refs, "
-              f"{in_top_q} ({in_top_q/len(near_validation)*100:.0f}%) in top quartile",
-              file=sys.stderr)
-    else:
-        print("\n  Validation summary: no candidates found near AcCR refs", file=sys.stderr)
-
-    # Write validation report to file
-    output_dir = Path(output_file).parent
-    val_report_file = output_dir / 'validation_report.json'
-    val_report = {
-        'validation_refs': validation_refs,
-        'nearest_candidates': {},
-        'near_validation_count': len(near_validation),
-        'in_top_quartile': int(in_top_q) if near_validation else 0,
-        'top_quartile_pct': float(in_top_q / len(near_validation) * 100) if near_validation else 0.0
-    }
-    for val_ref in validation_refs:
-        val_dists = []
-        for cand_id in df_sorted['id']:
-            try:
-                dist = t.get_distance(cand_id, val_ref)
-                val_dists.append((cand_id, float(dist)))
-            except Exception:
-                continue
-        val_dists.sort(key=lambda x: x[1])
-        val_report['nearest_candidates'][val_ref] = [
-            {'candidate': c, 'distance': d} for c, d in val_dists[:10]
-        ]
-    with open(val_report_file, 'w') as f:
-        json.dump(val_report, f, indent=2)
 
 # --- Summary Statistics ---
 print(f"\nRanking Summary:", file=sys.stderr)
