@@ -1,0 +1,64 @@
+Bootstrap: docker
+From: python:3.8-slim
+
+%labels
+    Author Jorge L. Perez-Moreno
+    Description DeepTMHMM container for transmembrane topology prediction
+    Version 1.0
+
+%files
+    DeepTMHMM-Academic-License-v1.0/ /opt/deeptmhmm
+
+%post
+    apt-get update && apt-get install -y --no-install-recommends \
+        libhdf5-dev gcc g++ && \
+    rm -rf /var/lib/apt/lists/*
+
+    cd /opt/deeptmhmm
+
+    pip install --no-cache-dir wheel Cython==0.29.37 pkgconfig==1.5.5
+
+    # CPU-only PyTorch compatible with DeepTMHMM model checkpoints (saved with 1.5)
+    # The +cpu variant is x86_64-only; plain version works on both x86_64 and aarch64
+    pip install --no-cache-dir torch==1.13.1+cpu \
+        -f https://download.pytorch.org/whl/torch_stable.html 2>/dev/null || \
+    pip install --no-cache-dir torch==1.13.1 2>/dev/null || \
+    pip install --no-cache-dir "torch>=1.9,<2"
+
+    # Install remaining deps, skipping the pinned torch line (which has +cu92)
+    grep -v "^torch==" requirements.txt | pip install --no-cache-dir -r /dev/stdin
+
+    # Verify critical imports work
+    python3 -c "
+import torch
+print(f'PyTorch {torch.__version__}')
+from esm import Alphabet, ProteinBertModel
+print('ESM imports OK')
+from experiments.tmhmm3.tm_util import original_labels_to_fasta
+print('DeepTMHMM imports OK')
+"
+
+%environment
+    export LC_ALL=C
+    # Ensure DeepTMHMM modules are importable
+    export PYTHONPATH=/opt/deeptmhmm:$PYTHONPATH
+
+%runscript
+    cd /opt/deeptmhmm
+    exec python3 predict.py "$@"
+
+%help
+    DeepTMHMM - Deep learning-based transmembrane topology prediction.
+    Academic license from DTU Health Tech.
+
+    Usage:
+      apptainer run deeptmhmm.sif --fasta INPUT.fasta --output-dir OUTPUT_DIR
+
+    Output files:
+      predicted_topologies.3line  - 3-line format: >header, sequence, topology (I/O/M)
+      TMRs.gff3                  - Region boundaries
+
+    Notes:
+      - Build on the TARGET architecture (x86_64 for HPC, aarch64 for ARM)
+      - First run downloads nothing — all models are baked into the container
+      - ESM1b embeddings: ~1 seq/sec on CPU, faster with GPU

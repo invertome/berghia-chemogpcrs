@@ -10,12 +10,19 @@ consistent with transmembrane alpha-helices. Designed as a fast pre-filter
 Output format matches DeepTMHMM prediction file:
     seqid\tpred_type\tconfidence\tSP\tn_tm_regions
 
+Optional --topology-output writes DeepTMHMM-compatible .3line format:
+    >header
+    MEFSKNQSLM...                      (amino acid sequence)
+    OOOOMMMMMMMMMMMMMMMMMMMMIIII...     (per-residue topology: I/O/M)
+
 Usage:
     python predict_tm_helices.py input.fasta output_prediction [--min-tm 6]
+    python predict_tm_helices.py input.fasta output_prediction --topology-output topo.3line
 """
 
 import sys
 import argparse
+
 
 # Kyte-Doolittle hydrophobicity scale
 KD_SCALE = {
@@ -31,17 +38,19 @@ HYDRO_THRESHOLD = 1.6  # Mean hydrophobicity cutoff for TM segment
 MIN_GAP = 8            # Minimum residues between TM helices (loop region)
 
 
-def count_tm_helices(sequence):
+def find_tm_segments(sequence):
     """
-    Count putative transmembrane helices in a protein sequence.
+    Find putative transmembrane helix segments in a protein sequence.
 
     Uses sliding window hydrophobicity analysis with merging of overlapping
     predictions and enforcement of minimum loop lengths between helices.
+
+    Returns list of (start, end) tuples (0-indexed, exclusive end).
     """
     seq = sequence.upper()
     n = len(seq)
     if n < WINDOW_SIZE:
-        return 0
+        return []
 
     # Calculate hydrophobicity for each window position
     tm_positions = []
@@ -52,7 +61,7 @@ def count_tm_helices(sequence):
             tm_positions.append(i)
 
     if not tm_positions:
-        return 0
+        return []
 
     # Merge overlapping/adjacent TM windows into segments
     segments = []
@@ -78,9 +87,21 @@ def count_tm_helices(sequence):
             # Merge with previous if too close
             filtered[-1] = (filtered[-1][0], seg[1])
 
+    return filtered
+
+
+def count_tm_helices(sequence):
+    """
+    Count putative transmembrane helices in a protein sequence.
+
+    Uses sliding window hydrophobicity analysis with merging of overlapping
+    predictions and enforcement of minimum loop lengths between helices.
+    """
+    segments = find_tm_segments(sequence)
+
     # Count segments with reasonable TM helix length (15-45 residues)
     count = 0
-    for start, end in filtered:
+    for start, end in segments:
         length = end - start
         if 15 <= length <= 45:
             count += 1
@@ -89,6 +110,49 @@ def count_tm_helices(sequence):
             count += round(length / 25)
 
     return count
+
+
+def build_topology_string(sequence, segments):
+    """
+    Build per-residue topology string from TM segment boundaries.
+
+    Assumes standard Class A GPCR topology: N-terminus extracellular.
+    - Before TM1: outside (o)
+    - After TM1: inside (i)
+    - After TM2: outside (o)
+    - ... alternating
+
+    Args:
+        sequence: protein sequence string
+        segments: list of (start, end) tuples from find_tm_segments (0-indexed, exclusive end)
+
+    Returns:
+        topology string of same length as sequence using i/M/o characters
+    """
+    n = len(sequence)
+    topo = ['o'] * n  # Default: outside
+
+    if not segments:
+        return ''.join(topo)
+
+    # Mark TM regions
+    for start, end in segments:
+        for i in range(start, min(end, n)):
+            topo[i] = 'M'
+
+    # Assign inside/outside to non-TM regions by alternating
+    # GPCR N-terminus is extracellular (outside), so:
+    # before TM1 = outside, after TM1 = inside, after TM2 = outside, etc.
+    inside = False  # First loop (before TM1) is outside
+    for i in range(n):
+        if topo[i] == 'M':
+            continue
+        # Check if we just exited a TM region
+        if i > 0 and topo[i - 1] == 'M':
+            inside = not inside
+        topo[i] = 'i' if inside else 'o'
+
+    return ''.join(topo)
 
 
 def parse_fasta(filepath):
@@ -117,15 +181,28 @@ def main():
     parser.add_argument('output', help='Output prediction file (DeepTMHMM format)')
     parser.add_argument('--min-tm', type=int, default=0,
                         help='Only output sequences with >= N TM helices (0=all)')
+    parser.add_argument('--topology-output',
+                        help='Write DeepTMHMM-compatible .3line topology file')
     args = parser.parse_args()
 
     total = 0
     written = 0
+    topo_entries = []
 
     with open(args.output, 'w') as out:
         for seq_id, sequence in parse_fasta(args.fasta):
             total += 1
-            tm_count = count_tm_helices(sequence)
+            segments = find_tm_segments(sequence)
+
+            # Count TM helices from segments
+            tm_count = 0
+            for start, end in segments:
+                length = end - start
+                if 15 <= length <= 45:
+                    tm_count += 1
+                elif length > 45:
+                    tm_count += round(length / 25)
+
             if tm_count >= args.min_tm:
                 pred_type = "TMH" if tm_count > 0 else "GLOB"
                 # Confidence is approximate — hydrophobicity is less precise than DeepTMHMM
@@ -133,8 +210,26 @@ def main():
                 out.write(f"{seq_id}\tTMH\t{conf:.2f}\tSP\t{tm_count}\n")
                 written += 1
 
+            # Build topology string if requested
+            if args.topology_output:
+                topo_str = build_topology_string(sequence, segments)
+                topo_entries.append((seq_id, sequence, topo_str))
+
             if total % 10000 == 0:
                 print(f"  Processed {total} sequences...", file=sys.stderr)
+
+    # Write topology file in DeepTMHMM 3-line format:
+    #   >header
+    #   amino_acid_sequence
+    #   topology_labels (I/O/M characters)
+    if args.topology_output and topo_entries:
+        with open(args.topology_output, 'w') as f:
+            for seq_id, sequence, topo_str in topo_entries:
+                f.write(f">{seq_id}\n")
+                f.write(f"{sequence}\n")
+                f.write(f"{topo_str.upper()}\n")
+        print(f"Wrote {len(topo_entries)} topology predictions to {args.topology_output}",
+              file=sys.stderr)
 
     print(f"Processed {total} sequences, wrote {written} predictions", file=sys.stderr)
 
