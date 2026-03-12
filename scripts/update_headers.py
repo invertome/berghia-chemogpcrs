@@ -22,8 +22,8 @@ def extract_taxid(header, description=""):
     """
     Extract taxonomic identifier from FASTA header.
     Tries multiple common formats:
-    - taxid_proteinid
-    - species_proteinid
+    - taxid_proteinid (numeric NCBI taxid)
+    - species_code_accession (e.g., aplcal_XP_005089826.1, hadi_HDSC00048_47552)
     - >sp|ACCESSION|NAME OS=Species OX=taxid
     - Plain accession
     """
@@ -37,13 +37,13 @@ def extract_taxid(header, description=""):
     # Try to extract taxid from underscore-separated format
     parts = header.split('_')
     if len(parts) >= 2:
-        # Check if first part looks like a taxid (numeric only, or known species code format)
         first_part = parts[0]
+        # Numeric taxid (e.g., 1287507_Berghia_stephanieae)
         if first_part.isdigit():
             return first_part
-        # Accept short alphanumeric codes only if they contain at least one digit
-        # (avoids matching plain species names like "aplcal", "alvmar")
-        if len(first_part) <= 10 and first_part.isalnum() and any(c.isdigit() for c in first_part):
+        # Short alphanumeric species code (e.g., aplcal, hadi, gima)
+        # Accept codes 2-10 chars, all lowercase alpha or with digits
+        if 2 <= len(first_part) <= 10 and first_part.isalnum():
             return first_part
 
     # Try to extract from UniProt format OS=Species
@@ -164,10 +164,14 @@ def process_sequences(fasta_file, id_map_file, source_type=None, append=False,
             counter = taxid_counters[taxid]
 
             # Create short ID preserving taxonomy
+            # Avoid double-prefixing (e.g., ref_ref_aplcal_1)
             if id_prefix:
                 short_id = f"{id_prefix}_{taxid}_{counter}"
             elif src_type == 'reference':
-                short_id = f"ref_{taxid}_{counter}"
+                if taxid.startswith('ref_'):
+                    short_id = f"{taxid}_{counter}"
+                else:
+                    short_id = f"ref_{taxid}_{counter}"
             else:
                 short_id = f"{taxid}_{counter}"
 

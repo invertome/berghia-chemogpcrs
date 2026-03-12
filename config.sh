@@ -108,6 +108,10 @@ export MIN_TM_REGIONS=6  # Kept at 6 to capture fragmented transcriptome assembl
 export DEEPTMHMM_MIN_CONFIDENCE=0.5
 export MIN_SEQ_LENGTH=100
 export MAX_GAP_PERCENT=30  # 25-30% recommended for robust phylogenetic inference
+# Pre-alignment sequence length filtering (removes gene prediction artifacts)
+export SEQ_LENGTH_FILTER_MIN=250           # Biological minimum for 6+ TM GPCRs
+export SEQ_LENGTH_FILTER_MAX_METHOD="tukey" # Upper bound: Q3 + 1.5*IQR
+export SEQ_LENGTH_FILTER_MAX_FLOOR=800      # Floor for computed upper bound
 # IQ-TREE model selection: Use standard amino acid models to reduce computation and overfitting
 # Options: "TEST" (all 286 models), "MFP" (ModelFinder Plus), or specific models
 # Recommended: Standard empirical AA models with gamma rate variation
@@ -235,7 +239,7 @@ export GPROTEIN_MOLLUSC_FASTA="${REFERENCE_DIR}/gprotein_mollusc.fasta"      # O
 export GPROTEIN_MOLLUSC_CLASSES="${REFERENCE_DIR}/gprotein_mollusc_classes.tsv"
 export GPROTEIN_EVALUE="1e-10"
 export GPROTEIN_COEXPR_WEIGHT=2           # Weight for G-protein co-expression score
-export OLFACTORY_GPROTEIN_CLASSES="Golf,Gi,Go"  # Classes associated with olfactory signaling
+export OLFACTORY_GPROTEIN_CLASSES="Golf,Gs"  # Classes associated with chemosensory signaling
 
 # === NEW: ECL Divergence Analysis (Phase 3) ===
 # Analyze extracellular loop divergence vs transmembrane conservation

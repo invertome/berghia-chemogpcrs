@@ -176,13 +176,17 @@ def calculate_coexpression_score(
     olfactory_classes: List[str]
 ) -> Dict:
     """
-    Calculate co-expression score for a GPCR candidate.
+    Binary co-expression score for a GPCR candidate with olfactory G-proteins.
 
-    Prioritizes co-expression with olfactory G-proteins in chemosensory tissues.
+    Checks whether candidate and an olfactory G-protein (Golf/Gs) are both
+    expressed (>= 1.0 TPM) in a chemosensory tissue. Rhinophore is scored
+    higher (1.0) than oral-tentacle (0.75) as the primary chemosensory organ.
 
-    Returns dict with best G-protein match and score.
+    This avoids correlation-based scoring which is unreliable with few tissues
+    (n=6) and confounded by starvation conditions suppressing olfactory genes.
     """
-    tpm_cols = get_tissue_tpm_columns(expr_df)
+    # Tissue weights: rhinophore prioritized as primary chemosensory organ
+    tissue_weights = {'rhinophore': 1.0, 'oral-tentacle': 0.75}
 
     best_result = {
         'gpcr_id': gpcr_id,
@@ -208,41 +212,25 @@ def calculate_coexpression_score(
     for _, gp_row in species_gproteins.iterrows():
         gprotein_id = gp_row['gene_id']
         gp_class = gp_row['gprotein_class']
-        is_olfactory = gp_class in olfactory_classes
 
-        # Calculate correlation
-        corr, n_tissues = calculate_expression_correlation(
-            gpcr_id, gprotein_id, expr_df, tpm_cols
-        )
-
-        if n_tissues < 3:
+        # Only score chemoreceptor-associated G-proteins (cAMP pathway)
+        if gp_class not in olfactory_classes:
             continue
 
-        # Base score from correlation
-        score = max(0, corr)  # Only positive correlations
-
-        # Check co-expression in chemosensory tissues
-        coexpr_tissue = ''
+        # Check binary co-expression in each chemosensory tissue
         for tissue in chemo_tissues:
             if check_coexpression_in_tissue(gpcr_id, gprotein_id, tissue, expr_df):
-                coexpr_tissue = tissue
-                score *= 1.5  # 50% bonus for chemosensory co-expression
-                break
-
-        # Bonus for olfactory G-protein class
-        if is_olfactory:
-            score *= 1.5  # 50% bonus for olfactory G-proteins
-
-        if score > best_score:
-            best_score = score
-            best_result = {
-                'gpcr_id': gpcr_id,
-                'best_coexpr_gprotein': gprotein_id,
-                'gprotein_class': gp_class,
-                'correlation': corr,
-                'coexpr_tissue': coexpr_tissue,
-                'coexpr_score': score
-            }
+                score = tissue_weights.get(tissue, 0.5)
+                if score > best_score:
+                    best_score = score
+                    best_result = {
+                        'gpcr_id': gpcr_id,
+                        'best_coexpr_gprotein': gprotein_id,
+                        'gprotein_class': gp_class,
+                        'correlation': 0.0,
+                        'coexpr_tissue': tissue,
+                        'coexpr_score': score
+                    }
 
     return best_result
 

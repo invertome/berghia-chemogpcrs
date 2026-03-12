@@ -208,13 +208,25 @@ with open('${REF_CATEGORIES_FINAL}', 'a') as f:
     SEQ_COUNT=$(grep -c "^>" "$COMBINED")
     log "Building tree from $SEQ_COUNT sequences"
 
+    # Length filter: remove extreme outliers before alignment
+    FILTERED="${COMBINED%.fa}_filtered.fa"
+    python3 "${SCRIPTS_DIR}/filter_sequences_by_length.py" \
+        "$COMBINED" "$FILTERED" \
+        --min-length "${SEQ_LENGTH_FILTER_MIN:-250}" \
+        --max-length-method "${SEQ_LENGTH_FILTER_MAX_METHOD:-tukey}" \
+        --max-length-floor "${SEQ_LENGTH_FILTER_MAX_FLOOR:-800}" \
+        --report "${RESULTS_DIR}/phylogenies/protein/length_filter_report.tsv"
+    COMBINED="$FILTERED"
+    SEQ_COUNT=$(grep -c "^>" "$COMBINED")
+    log "After length filter: $SEQ_COUNT sequences (report: length_filter_report.tsv)"
+
     # Check resource requirements for alignment and tree building
     log "Checking resource requirements for phylogenetic analysis..."
     get_dataset_stats "$COMBINED"
     check_resource_requirements "$COMBINED" alignment || \
         log --level=WARN "Proceeding despite alignment resource warning"
 
-    run_command "all_berghia_refs_mafft" --stdout="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" ${MAFFT} --auto --thread "${CPUS}" "$COMBINED"
+    run_command "all_berghia_refs_mafft" --stdout="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" ${MAFFT} --retree 2 --thread "${CPUS}" "$COMBINED"
     check_alignment "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" || { log "Error: Alignment quality check failed"; exit 1; }
     run_command "all_berghia_refs_clipkit" ${CLIPKIT} "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" -m smart-gap -o "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa"
 
@@ -260,7 +272,7 @@ done
 for level in "${!lse_taxids[@]}"; do
     if [ -f "${RESULTS_DIR}/lse_classification/lse_${level}.fa" ] && [ ! -f "${RESULTS_DIR}/step_completed_lse_${level}_iqtree.txt" ]; then
         mkdir -p "${RESULTS_DIR}/phylogenies/protein/lse_${level}"
-        run_command "lse_${level}_mafft" --stdout="${RESULTS_DIR}/phylogenies/protein/lse_${level}/aligned.fa" ${MAFFT} --auto --thread "${CPUS}" "${RESULTS_DIR}/lse_classification/lse_${level}.fa"
+        run_command "lse_${level}_mafft" --stdout="${RESULTS_DIR}/phylogenies/protein/lse_${level}/aligned.fa" ${MAFFT} --retree 2 --thread "${CPUS}" "${RESULTS_DIR}/lse_classification/lse_${level}.fa"
         check_alignment "${RESULTS_DIR}/phylogenies/protein/lse_${level}/aligned.fa" || { log "Error: Alignment quality check failed for lse_${level}"; exit 1; }
         run_command "lse_${level}_trimal" ${TRIMAL} -in "${RESULTS_DIR}/phylogenies/protein/lse_${level}/aligned.fa" -out "${RESULTS_DIR}/phylogenies/protein/lse_${level}/trimmed.fa" -automated1
 
@@ -315,7 +327,7 @@ og=$(find "${RESULTS_DIR}/orthogroups" -name "${base}.fa" -type f 2>/dev/null | 
 [ -z "$og" ] || [ ! -f "$og" ] && { log "Skipping missing orthogroup: ${base}"; exit 0; }
 
 if [ ! -f "${RESULTS_DIR}/step_completed_${base}_iqtree.txt" ]; then
-    run_command "${base}_mafft" --stdout="${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" ${MAFFT} --auto --thread "${CPUS}" "$og"
+    run_command "${base}_mafft" --stdout="${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" ${MAFFT} --retree 2 --thread "${CPUS}" "$og"
     check_alignment "${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" || { log "Error: Alignment quality check failed for ${base}"; exit 1; }
     run_command "${base}_trimal" ${TRIMAL} -in "${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" -out "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa" -automated1
 
