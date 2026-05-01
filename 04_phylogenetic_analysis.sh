@@ -232,7 +232,7 @@ with open('${REF_CATEGORIES_FINAL}', 'a') as f:
 
     # FastTree seed strategy: Generate approximate ML tree first to avoid local optima
     # This is important for large, divergent gene families like GPCRs
-    run_command "all_berghia_refs_fasttree" --stdout="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_fasttree.tre" ${FASTTREE} -lg -gamma "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa"
+    run_command "all_berghia_refs_fasttree" --stdout="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_fasttree.tre" ${FASTTREE} -seed "${FASTTREE_SEED}" -lg -gamma "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa"
 
     # Check resource requirements for IQ-TREE (more memory-intensive than FastTree)
     check_resource_requirements "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa" iqtree || \
@@ -240,7 +240,7 @@ with open('${REF_CATEGORIES_FINAL}', 'a') as f:
 
     # Use FastTree result as starting tree for IQ-TREE (-t option)
     # IQ-TREE 3.x uses -T (threads) and --prefix instead of -nt and -pre
-    run_command "all_berghia_refs_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa" -m "${IQTREE_MODEL}" -B "${IQTREE_BOOTSTRAP}" -T "${CPUS}" -t "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_fasttree.tre" --prefix "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs"
+    run_command "all_berghia_refs_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa" -m "${IQTREE_MODEL_FIND}" -mset "${IQTREE_MODEL_SET}" -B "${IQTREE_BOOTSTRAP}" -alrt 1000 -seed "${IQTREE_SEED}" -T "${CPUS}" -t "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_fasttree.tre" --prefix "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs"
     run_command "phyloformer_all_berghia" python3 "${SCRIPTS_DIR}/test_phyloformer_models.py" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_phyloformer" "${CPUS}"
     if [ "$USE_MRBAYES" = true ]; then
         cat <<EOF > "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.nex"
@@ -277,8 +277,8 @@ for level in "${!lse_taxids[@]}"; do
         run_command "lse_${level}_trimal" ${TRIMAL} -in "${RESULTS_DIR}/phylogenies/protein/lse_${level}/aligned.fa" -out "${RESULTS_DIR}/phylogenies/protein/lse_${level}/trimmed.fa" -automated1
 
         # FastTree seed strategy for LSE trees
-        run_command "lse_${level}_fasttree" --stdout="${RESULTS_DIR}/phylogenies/protein/lse_${level}/fasttree.tre" ${FASTTREE} -lg -gamma "${RESULTS_DIR}/phylogenies/protein/lse_${level}/trimmed.fa"
-        run_command "lse_${level}_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/lse_${level}/trimmed.fa" -m "${IQTREE_MODEL}" -B "${IQTREE_BOOTSTRAP}" -T "${CPUS}" -t "${RESULTS_DIR}/phylogenies/protein/lse_${level}/fasttree.tre" --prefix "${RESULTS_DIR}/phylogenies/protein/lse_${level}"
+        run_command "lse_${level}_fasttree" --stdout="${RESULTS_DIR}/phylogenies/protein/lse_${level}/fasttree.tre" ${FASTTREE} -seed "${FASTTREE_SEED}" -lg -gamma "${RESULTS_DIR}/phylogenies/protein/lse_${level}/trimmed.fa"
+        run_command "lse_${level}_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/lse_${level}/trimmed.fa" -m "${IQTREE_MODEL_FIND}" -mset "${IQTREE_MODEL_SET}" -B "${IQTREE_BOOTSTRAP}" -alrt 1000 -seed "${IQTREE_SEED}" -T "${CPUS}" -t "${RESULTS_DIR}/phylogenies/protein/lse_${level}/fasttree.tre" --prefix "${RESULTS_DIR}/phylogenies/protein/lse_${level}"
 
         python3 "${SCRIPTS_DIR}/visualize_tree.py" "${RESULTS_DIR}/phylogenies/protein/lse_${level}.treefile" "${RESULTS_DIR}/phylogenies/visualizations/lse_${level}"
     fi
@@ -332,8 +332,8 @@ if [ ! -f "${RESULTS_DIR}/step_completed_${base}_iqtree.txt" ]; then
     run_command "${base}_trimal" ${TRIMAL} -in "${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" -out "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa" -automated1
 
     # FastTree seed strategy for orthogroup trees
-    run_command "${base}_fasttree" --stdout="${RESULTS_DIR}/phylogenies/protein/${base}_fasttree.tre" ${FASTTREE} -lg -gamma "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa"
-    run_command "${base}_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa" -m "${IQTREE_MODEL}" -B "${IQTREE_BOOTSTRAP}" -T "${CPUS}" -t "${RESULTS_DIR}/phylogenies/protein/${base}_fasttree.tre" --prefix "${RESULTS_DIR}/phylogenies/protein/${base}"
+    run_command "${base}_fasttree" --stdout="${RESULTS_DIR}/phylogenies/protein/${base}_fasttree.tre" ${FASTTREE} -seed "${FASTTREE_SEED}" -lg -gamma "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa"
+    run_command "${base}_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa" -m "${IQTREE_MODEL_FIND}" -mset "${IQTREE_MODEL_SET}" -B "${IQTREE_BOOTSTRAP}" -alrt 1000 -seed "${IQTREE_SEED}" -T "${CPUS}" -t "${RESULTS_DIR}/phylogenies/protein/${base}_fasttree.tre" --prefix "${RESULTS_DIR}/phylogenies/protein/${base}"
 
     # Create per-orthogroup completion flag
     touch "${RESULTS_DIR}/step_completed_${base}_iqtree.txt"

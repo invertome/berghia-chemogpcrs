@@ -115,7 +115,24 @@ export SEQ_LENGTH_FILTER_MAX_FLOOR=800      # Floor for computed upper bound
 # IQ-TREE model selection: Use standard amino acid models to reduce computation and overfitting
 # Options: "TEST" (all 286 models), "MFP" (ModelFinder Plus), or specific models
 # Recommended: Standard empirical AA models with gamma rate variation
-export IQTREE_MODEL="MFP -mset LG,WAG,JTT,Dayhoff,mtREV,cpREV"
+# Bead -ryr: split IQTREE_MODEL so '-mset' is a separate flag (recent IQ-TREE
+# 2.3+ requires this). Old IQTREE_MODEL string kept as a deprecated alias for
+# backwards compat — emits a warning if used.
+export IQTREE_MODEL_FIND="MFP"
+# Bead -5b0: GPCRtm is the empirical Class A GPCR matrix (Rios 2015) — testing
+# it is recommended for the global tree. Profile mixtures (LG+C20, LG+C60,
+# LG4X) often beat single-matrix on paralog-rich data.
+# Add LG+C20+R10 / LG+C60+R10 / LG4X+R10 via -madd in the HPC retest script.
+export IQTREE_MODEL_SET="LG,VT,WAG,JTT,Dayhoff,mtREV,cpREV"
+# Legacy combined form (deprecated; kept so older invocations don't break)
+export IQTREE_MODEL="${IQTREE_MODEL_FIND} -mset ${IQTREE_MODEL_SET}"
+# Bead -ryr: deterministic seeds for reproducibility (the 312h tree must be
+# re-derivable). Override per-run if needed; log to provenance.
+export IQTREE_SEED="${IQTREE_SEED:-12345}"
+export FASTTREE_SEED="${FASTTREE_SEED:-12345}"
+# Bead -m6k: TBE alongside UFBoot for rogue-taxon-robust support reporting.
+# Empty string means do not request TBE; iqtree2 only got --tbe in v2.3+.
+export IQTREE_TBE="${IQTREE_TBE:-1}"           # 1 to request TBE; 0 to skip
 export IQTREE_BOOTSTRAP=1000
 export ORTHOFINDER_INFLATION=1.5
 export FOLDTREE_METHOD="upgma"

@@ -1,7 +1,13 @@
 #!/bin/bash
-# run_local_tm.sh - Wrapper for predict_tm_helices.py matching DeepTMHMM interface
+# run_local_tm.sh - LEGACY wrapper for the Kyte-Doolittle TM predictor.
 # Usage: run_local_tm.sh -f input.fasta -o output_dir
 # Produces output_dir/prediction in the same format as DeepTMHMM
+#
+# DEPRECATED: Kyte-Doolittle is significantly less accurate than DeepTMHMM/TMbed
+# (see bead -6nh). Use scripts/run_deeptmhmm.sh instead, which prefers TMbed,
+# then DeepTMHMM, and only falls back to KD when ALLOW_KD_FALLBACK=1.
+#
+# This script is kept for explicit testing of the KD predictor only.
 
 set -euo pipefail
 
@@ -27,6 +33,6 @@ mkdir -p "$OUTDIR"
 
 echo "Running local TM helix prediction on $(grep -c '^>' "$FASTA") sequences..." >&2
 
-python3 "${SCRIPT_DIR}/predict_tm_helices.py" "$FASTA" "${OUTDIR}/prediction"
+python3 "${SCRIPT_DIR}/legacy/predict_tm_helices.py" "$FASTA" "${OUTDIR}/prediction"
 
 echo "TM prediction completed: ${OUTDIR}/prediction" >&2

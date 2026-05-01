@@ -247,7 +247,29 @@ record_provenance() {
 EOF
 )
 
-    # Append to provenance file (this is simplified; production would use jq)
+    # Bead -ryr: actually append step_record into the provenance JSON.
+    # Use Python (always available) since jq may not be installed on the HPC node.
+    if [ -f "$PROVENANCE_FILE" ]; then
+        python3 - "$PROVENANCE_FILE" <<PYEOF
+import json, sys
+prov_path = sys.argv[1]
+new_step_json = '''${step_record}'''
+try:
+    with open(prov_path) as f:
+        prov = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    prov = {"steps": []}
+if "steps" not in prov or not isinstance(prov["steps"], list):
+    prov["steps"] = []
+try:
+    prov["steps"].append(json.loads(new_step_json))
+except json.JSONDecodeError as e:
+    sys.stderr.write(f"WARNING: provenance step record could not be parsed: {e}\n")
+    sys.exit(0)
+with open(prov_path, "w") as f:
+    json.dump(prov, f, indent=2)
+PYEOF
+    fi
     log "Provenance recorded for: ${step_name}"
 }
 
