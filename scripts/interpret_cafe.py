@@ -51,8 +51,12 @@ def parse_arguments():
         help='P-value threshold for significant expansions (default: 0.05)'
     )
     parser.add_argument(
-        '--berghia-id', default='taxid_berghia',
-        help='Berghia taxon ID in tree (default: taxid_berghia)'
+        '--berghia-id',
+        default=os.environ.get('BERGHIA_FILE_PREFIX', '1287507_berghia_stephanieae'),
+        help=('Berghia taxon ID prefix in tree leaves (default: '
+              "$BERGHIA_FILE_PREFIX env var, falling back to "
+              "'1287507_berghia_stephanieae'). NCBI taxon ID for "
+              "B. stephanieae is 1287507.")
     )
     parser.add_argument(
         '--output', required=True,

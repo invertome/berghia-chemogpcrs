@@ -13,12 +13,34 @@ export GENOME_DIR="${BASE_DIR}/genomes"
 export LOGS_DIR="${RESULTS_DIR}/logs"
 
 # --- Input Files ---
-export TRANSCRIPTOME="${TRANSCRIPTOME_DIR}/taxid_berghia_berghia.aa"
+# Berghia identification: real NCBI taxid (Berghia stephanieae = 1287507) +
+# genus + species, used to build canonical file paths and as the leaf-id
+# prefix in headers. Previous "taxid_berghia_berghia" naming repeated genus
+# and used the literal string "taxid" instead of a real ID.
+export BERGHIA_TAXID="${BERGHIA_TAXID:-1287507}"
+export BERGHIA_GENUS="${BERGHIA_GENUS:-berghia}"
+export BERGHIA_SPECIES="${BERGHIA_SPECIES:-stephanieae}"
+# File-name prefix: e.g. "1287507_berghia_stephanieae"
+export BERGHIA_FILE_PREFIX="${BERGHIA_TAXID}_${BERGHIA_GENUS}_${BERGHIA_SPECIES}"
+# Header/leaf-id prefix kept identical to file prefix for cross-reference
+# (was previously "taxid_berghia"). Existing data files using the legacy name
+# are auto-symlinked at the new path by scripts/fetch_berghia_genome.sh.
+export BERGHIA_HEADER_PREFIX="${BERGHIA_FILE_PREFIX}"
+export TRANSCRIPTOME="${TRANSCRIPTOME_DIR}/${BERGHIA_FILE_PREFIX}.aa"
 export CONSERVED_HMM="${BASE_DIR}/custom_hmms/conserved.hmm"  # Optional
 export LSE_HMM="${BASE_DIR}/custom_hmms/lse.hmm"              # Optional
 export ID_MAP="${RESULTS_DIR}/reference_sequences/id_map.csv"
 export EXPRESSION_DATA="${BASE_DIR}/expression_data.csv"
-export GENOME="${GENOME_DIR}/taxid_berghia_berghia.fasta"
+export GENOME="${GENOME_DIR}/${BERGHIA_FILE_PREFIX}.fasta"
+# Bead -4nu: Berghia genome with RefSeq annotations (released 2026-01-29).
+# NCBI accession: GCF_034508935.2 (UCSD_Bste_1.3 / Goodheart 2024 BMC Biology
+# 22:9). Annotation is in the RefSeq GCF_* path, not the GenBank GCA_*.
+# 7713 scaffolds, ~1.13 Gb, 24594 genes, 43318 proteins/CDS.
+export GENOME_ACCESSION="${GENOME_ACCESSION:-GCF_034508935.2}"
+export GENOME_VERSION="${GENOME_VERSION:-UCSD_Bste_1.3}"
+export GENOME_GFF="${GENOME_DIR}/${BERGHIA_FILE_PREFIX}.gff3"
+export GENOME_PROTEIN="${GENOME_DIR}/${BERGHIA_FILE_PREFIX}.proteins.fa"
+export GENOME_CDS="${GENOME_DIR}/${BERGHIA_FILE_PREFIX}.cds.fna"
 
 # --- Tool Paths (update based on Conda environment) ---
 export HMMBUILD="hmmbuild"
@@ -57,8 +79,13 @@ export NOTUNG_JAR="${BASE_DIR}/tools/Notung-2.9.jar"
 export NOTUNG_THRESHOLD=90  # Bootstrap threshold for rearrangement
 
 # --- Pipeline Parameters ---
-export TAXA=("taxid1" "taxid2" "taxid_berghia")
-export BERGHIA_TAXID="taxid_berghia"
+# Project taxa (placeholder labels for non-Berghia samples; real Berghia taxid
+# is 1287507, defined above as BERGHIA_TAXID). Replace "taxid1"/"taxid2" with
+# real taxids if/when adding additional sequenced samples.
+export TAXA=("taxid1" "taxid2" "${BERGHIA_FILE_PREFIX}")
+# BERGHIA_TAXID is now the real NCBI ID (1287507), set above. The legacy
+# "taxid_berghia" string was a project-internal token, not an NCBI id, and is
+# replaced by BERGHIA_FILE_PREFIX (e.g. "1287507_berghia_stephanieae").
 export CPUS=16
 export GPU_ENABLED=false
 
