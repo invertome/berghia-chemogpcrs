@@ -360,16 +360,57 @@ if [ "$berghia_count" -gt 0 ] && [ "$seq_count" -gt 2 ]; then
                 fi
             fi
 
-            # ASR for deep nodes
-            deep_nodes=$(python3 "${SCRIPTS_DIR}/select_deep_nodes.py" "$tree" "${BERGHIA_TAXID}" "${MIN_ASR_DISTANCE}" 2>/dev/null)
+            # ASR for deep nodes — bead -mqt: pass full ${BERGHIA_FILE_PREFIX}
+            # (e.g. "1287507_berghia_stephanieae") so Berghia leaves match by
+            # exact prefix, not just taxid alone (which could spuriously match
+            # other species' references that happen to share an underscore-
+            # delimited substring).
+            # Bead -m6k: prefer null-calibrated cutoff if available.
+            DEPTH_CALIB_FILE="${RESULTS_DIR}/calibration/depth_thresholds.json"
+            DEPTH_CALIB_ARG=""
+            if [ -f "$DEPTH_CALIB_FILE" ]; then
+                DEPTH_CALIB_ARG="--null-threshold-file $DEPTH_CALIB_FILE"
+            fi
+            deep_nodes=$(python3 "${SCRIPTS_DIR}/select_deep_nodes.py" \
+                "$tree" "${BERGHIA_FILE_PREFIX}" "${MIN_ASR_DISTANCE}" \
+                $DEPTH_CALIB_ARG 2>/dev/null | head -1)
 
             if [ -n "$deep_nodes" ]; then
-                for node in $deep_nodes; do
-                    run_command "${base}_${node}_asr" ${FASTML} --seq "$nuc_align" --tree "$tree" \
-                        --out_seq "${RESULTS_DIR}/asr/${base}_${node}_asr.fa" \
-                        --out_tree "${RESULTS_DIR}/asr/${base}_${node}_asr.tree" \
-                        --node "$node" -t "${CPUS}" --verbose 2>/dev/null || log "Warning: FastML failed for ${base} node ${node}"
-                done
+                # Bead -j44: switch from FastML to IQ-TREE --ancestral (model-
+                # consistent with the inference tree, scales to thousands of
+                # taxa, avoids re-running ML under a different model). FastML
+                # is kept as a fallback when ASR_BACKEND=fastml.
+                ASR_BACKEND="${ASR_BACKEND:-iqtree}"
+                if [ "$ASR_BACKEND" = "iqtree" ]; then
+                    # IQ-TREE empirical-Bayes marginal ASR using the tree's
+                    # checkpoint. The .state file contains per-site per-node
+                    # marginal posterior probabilities for every state.
+                    asr_prefix="${RESULTS_DIR}/asr/${base}_asr"
+                    mkdir -p "${RESULTS_DIR}/asr"
+                    run_command "${base}_asr_iqtree" ${IQTREE} \
+                        -s "$nuc_align" -te "$tree" \
+                        --ancestral -seed "${IQTREE_SEED}" -T "${CPUS}" \
+                        --prefix "$asr_prefix" 2>/dev/null \
+                        || log "Warning: IQ-TREE ASR failed for ${base}"
+                    # Extract per-deep-node ancestral sequences for downstream use.
+                    if [ -f "${asr_prefix}.state" ]; then
+                        for node in $deep_nodes; do
+                            python3 "${SCRIPTS_DIR}/extract_iqtree_asr.py" \
+                                "${asr_prefix}.state" "$node" \
+                                "${RESULTS_DIR}/asr/${base}_${node}_asr.fa" \
+                                2>/dev/null \
+                                || log "Warning: ASR extract failed for ${base} ${node}"
+                        done
+                    fi
+                else
+                    for node in $deep_nodes; do
+                        run_command "${base}_${node}_asr" ${FASTML} --seq "$nuc_align" --tree "$tree" \
+                            --out_seq "${RESULTS_DIR}/asr/${base}_${node}_asr.fa" \
+                            --out_tree "${RESULTS_DIR}/asr/${base}_${node}_asr.tree" \
+                            --node "$node" -t "${CPUS}" --verbose 2>/dev/null \
+                            || log "Warning: FastML failed for ${base} node ${node}"
+                    done
+                fi
 
                 # Plot ASR for first deep node
                 first_node="${deep_nodes%% *}"

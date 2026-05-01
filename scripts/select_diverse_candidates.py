@@ -1,59 +1,115 @@
 #!/usr/bin/env python3
-# select_diverse_candidates.py
-# Purpose: Select diverse candidates from the phylogeny using hierarchical clustering.
-# Inputs: Tree file ($1), ranked candidates CSV ($2), num candidates ($3), output IDs ($4)
-# Outputs: File with selected IDs
-# Logic: Uses ete3 to compute tree distances, scipy for hierarchical clustering, and selects top-ranked candidate per cluster.
-# Author: Jorge L. Perez-Moreno, Ph.D.
+"""select_diverse_candidates.py — Select phylogenetically diverse candidates.
 
+Bead -mqt: previous version used `id in t` which is ete3's
+``__contains__`` (substring search by name) — this could match the wrong
+leaf when one candidate ID is a prefix of another (e.g.
+'TRINITY_DN1' would substring-match 'TRINITY_DN10', '...DN100', etc.).
+Now uses exact match via ``tree.search_nodes(name=id)``.
+
+Also asserts that the resulting condensed distance matrix has no missing
+pairs (all-pairs computed on the same set of leaves), so the
+``scipy.cluster.hierarchy.linkage`` doesn't get garbage input.
+
+Inputs : tree_file, ranked candidates CSV, num candidates, output IDs file
+Outputs: text file with one selected ID per line
+Author : Jorge L. Perez-Moreno, Ph.D.
+"""
 import sys
-from ete3 import Tree
+from typing import Dict, List
+
 import numpy as np
 import pandas as pd
+from ete3 import Tree
 from scipy.cluster.hierarchy import linkage, fcluster
 from scipy.spatial.distance import squareform
 
-tree_file = sys.argv[1]
-ranking_file = sys.argv[2]
-num_candidates = int(sys.argv[3])
-output_file = sys.argv[4]
 
-# Load tree and rankings
-t = Tree(tree_file)
-ranked_df = pd.read_csv(ranking_file)
-candidates_in_tree = [id for id in ranked_df['id'].tolist() if id in t]
+def find_leaf_node(tree: Tree, name: str):
+    """Return the ete3 leaf node with exact name == ``name``, or None.
 
-if len(candidates_in_tree) <= num_candidates:
-    selected_ids = candidates_in_tree
-else:
-    # Compute distance matrix from tree
-    n = len(candidates_in_tree)
-    dist_matrix = np.zeros((n, n))
-    for i in range(n):
-        for j in range(i + 1, n):
-            dist = t.get_distance(candidates_in_tree[i], candidates_in_tree[j])
-            dist_matrix[i, j] = dist
-            dist_matrix[j, i] = dist
+    Uses tree.search_nodes for exact match (not __contains__'s substring).
+    Returns the first leaf if the name is somehow duplicated (with a warning).
+    """
+    matches = tree.search_nodes(name=name)
+    leaves = [m for m in matches if m.is_leaf()]
+    if not leaves:
+        return None
+    if len(leaves) > 1:
+        print(f"WARN: {len(leaves)} leaves named {name!r}; using the first.",
+              file=sys.stderr)
+    return leaves[0]
 
-    # Convert to condensed distance matrix for scipy linkage
-    # linkage() expects a 1D condensed distance matrix, not a 2D square matrix
-    condensed_dist = squareform(dist_matrix)
 
-    # Perform hierarchical clustering
-    linkage_matrix = linkage(condensed_dist, method='average')
-    clusters = fcluster(linkage_matrix, t=num_candidates, criterion='maxclust')
-    
-    # Select highest-ranked candidate per cluster
-    cluster_dict = {}
-    for i, cluster_id in enumerate(clusters):
-        candidate_id = candidates_in_tree[i]
-        rank_score = ranked_df[ranked_df['id'] == candidate_id]['rank_score'].values[0]
-        if cluster_id not in cluster_dict or rank_score > cluster_dict[cluster_id][1]:
-            cluster_dict[cluster_id] = (candidate_id, rank_score)
-    
-    selected_ids = [id for id, _ in cluster_dict.values()]
+def main(argv: List[str]) -> int:
+    if len(argv) < 5:
+        print("Usage: select_diverse_candidates.py TREE RANKING_CSV N OUT", file=sys.stderr)
+        return 2
+    tree_file, ranking_file, num_candidates, output_file = argv[1:5]
+    num_candidates = int(num_candidates)
 
-# Write selected IDs
-with open(output_file, 'w') as f:
-    for id in selected_ids:
-        f.write(f"{id}\n")
+    t = Tree(tree_file, format=1)
+    ranked_df = pd.read_csv(ranking_file)
+    if "id" not in ranked_df.columns:
+        print("ERROR: ranking CSV must have an 'id' column", file=sys.stderr)
+        return 3
+
+    # Build map id -> leaf node (exact match)
+    id_to_leaf = {}
+    missing = []
+    for cand_id in ranked_df["id"].tolist():
+        leaf = find_leaf_node(t, cand_id)
+        if leaf is not None:
+            id_to_leaf[cand_id] = leaf
+        else:
+            missing.append(cand_id)
+    if missing:
+        print(f"WARN: {len(missing)} candidates not found in tree (first 5: "
+              f"{missing[:5]})", file=sys.stderr)
+
+    candidates_in_tree = list(id_to_leaf.keys())
+
+    if len(candidates_in_tree) <= num_candidates:
+        selected_ids = candidates_in_tree
+    else:
+        n = len(candidates_in_tree)
+        dist_matrix = np.zeros((n, n))
+        for i in range(n):
+            for j in range(i + 1, n):
+                dist = t.get_distance(id_to_leaf[candidates_in_tree[i]],
+                                      id_to_leaf[candidates_in_tree[j]])
+                dist_matrix[i, j] = dist
+                dist_matrix[j, i] = dist
+
+        # Sanity check: any zero off-diagonal indicates a missing pair
+        # (would silently merge those into one cluster).
+        off_diag = dist_matrix[np.triu_indices(n, k=1)]
+        if np.any(off_diag <= 0):
+            n_zero = int(np.sum(off_diag <= 0))
+            print(f"WARN: {n_zero} pairwise distances were zero or negative; "
+                  "duplicate or unresolvable leaves may collapse into one cluster.",
+                  file=sys.stderr)
+
+        condensed_dist = squareform(dist_matrix)
+        linkage_matrix = linkage(condensed_dist, method="average")
+        clusters = fcluster(linkage_matrix, t=num_candidates, criterion="maxclust")
+
+        # Pick highest-ranked candidate per cluster
+        cluster_dict: Dict[int, tuple[str, float]] = {}
+        for i, cluster_id in enumerate(clusters):
+            cid = candidates_in_tree[i]
+            score = ranked_df[ranked_df["id"] == cid]["rank_score"].values[0]
+            if cluster_id not in cluster_dict or score > cluster_dict[cluster_id][1]:
+                cluster_dict[cluster_id] = (cid, float(score))
+        selected_ids = [cid for cid, _ in cluster_dict.values()]
+
+    with open(output_file, "w") as f:
+        for cid in selected_ids:
+            f.write(f"{cid}\n")
+    print(f"Wrote {len(selected_ids)} diverse candidates to {output_file}",
+          file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

@@ -738,8 +738,12 @@ def get_og_confidence_score(candidate_id, gene_to_og, og_trees, bootstrap_thresh
     tree = og_trees[og]
     leaves = [l.name for l in tree]
 
-    # Find this candidate's leaf (Berghia IDs in OG trees use full OrthoFinder format)
-    cand_leaves = [l for l in leaves if candidate_id in l]
+    # Find this candidate's leaf (Berghia IDs in OG trees use full OrthoFinder
+    # format). Bead -mqt: previous version used substring match (`candidate_id in l`)
+    # which incorrectly matched any prefix-collision (e.g. 'TRINITY_DN1' would
+    # match 'TRINITY_DN10'). Use exact match plus underscore-separated prefix.
+    cand_leaves = [l for l in leaves
+                   if l == candidate_id or l.startswith(candidate_id + '_')]
     if not cand_leaves:
         return 0.0, False
     cand_leaf = cand_leaves[0]
