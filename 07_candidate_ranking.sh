@@ -20,7 +20,7 @@ source functions.sh
 mkdir -p "${RESULTS_DIR}/ranking" "${LOGS_DIR}" || { log "Error: Cannot create directories"; exit 1; }
 
 # Check required dependencies
-check_file "${RESULTS_DIR}/step_completed_extract_berghia.txt" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.treefile"
+check_file "${RESULTS_DIR}/step_completed_extract_berghia.txt" "${PHYLO_DIR}/${PHYLO_TREE_FILENAME}"
 
 # Check optional dependencies (warn but don't fail)
 check_file --warn-only "${RESULTS_DIR}/selective_pressure/absrel_results.csv"
@@ -97,7 +97,7 @@ awk '/^>/ {print substr($1,2)}' "${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa
 run_command "rank_candidates" python3 "${SCRIPTS_DIR}/rank_candidates.py" \
     "${RESULTS_DIR}/ranking/candidate_ids.txt" \
     "${EXPRESSION_DATA}" \
-    "${RESULTS_DIR}/phylogenies/protein" \
+    "${PHYLO_DIR}" \
     "${RESULTS_DIR}/selective_pressure" \
     "${RESULTS_DIR}/synteny" \
     "${RESULTS_DIR}/ranking/ranked_candidates_sorted.csv"

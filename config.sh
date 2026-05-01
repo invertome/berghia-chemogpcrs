@@ -134,6 +134,12 @@ export REF_CLUSTER_IDENTITY=0.7            # CD-HIT clustering identity threshol
 export REF_LSE_WEIGHT=1.5                  # Multiplier for LSE vs one-to-one orthologs
 export REF_TAXONOMY_WEIGHTS="gastropoda:3.0,cephalopoda:1.5,bivalvia:1.5,other_molluscan_classes:1.2,annelida:1.0,platyhelminthes:1.0,other_lophotrochozoan_phyla:1.0"
 
+# --- Phylogenetic Tree ---
+# Directory containing the tree file (override for versioned runs, e.g., protein/v2)
+export PHYLO_DIR="${RESULTS_DIR}/phylogenies/protein"
+# Tree filename (override if different from default IQ-TREE output)
+export PHYLO_TREE_FILENAME="all_berghia_refs.treefile"
+
 # --- Outgroup for Tree Rooting ---
 export OUTGROUP_FASTA="${REFERENCE_DIR}/outgroup.fa"
 

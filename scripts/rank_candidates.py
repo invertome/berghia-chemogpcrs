@@ -138,7 +138,8 @@ if ref_cat_path:
         print(f"Warning: Could not load reference categories: {e}", file=sys.stderr)
 
 # --- Load Phylogenetic Tree ---
-tree_file = f"{phylo_dir}/all_berghia_refs.treefile"
+tree_filename = os.environ.get("PHYLO_TREE_FILENAME", "all_berghia_refs.treefile")
+tree_file = f"{phylo_dir}/{tree_filename}"
 t = None
 ref_ids = []
 
@@ -356,8 +357,19 @@ def load_synteny_scores(synteny_dir):
 synteny_scores = load_synteny_scores(synteny_dir)
 
 # --- Derive results directory from phylo_dir ---
-# phylo_dir is typically {RESULTS_DIR}/phylogenies/protein
-results_dir = str(Path(phylo_dir).parent.parent)
+# Derive results_dir: walk up from phylo_dir until we find a known results structure
+# Handles both {RESULTS_DIR}/phylogenies/protein and .../protein/v2 etc.
+results_dir = os.environ.get("RESULTS_DIR", "")
+if not results_dir:
+    # Fallback: walk up from phylo_dir looking for ranking/ or chemogpcrs/ siblings
+    _p = Path(phylo_dir)
+    while _p != _p.parent:
+        if (_p / "ranking").exists() or (_p / "chemogpcrs").exists():
+            results_dir = str(_p)
+            break
+        _p = _p.parent
+    if not results_dir:
+        results_dir = str(Path(phylo_dir).parent.parent)
 
 # --- Scoring Functions ---
 
