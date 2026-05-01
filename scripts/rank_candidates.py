@@ -28,6 +28,18 @@ import itertools
 from pathlib import Path
 from scipy import stats
 
+# Import unit-tested pure functions from the library module
+# (see tests/unit/test_ranking_lib.py for coverage)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _rank_candidates_lib import (
+    benjamini_hochberg as _bh_corrected,
+    categorize_reference as _categorize_reference_corrected,
+    extract_branch_omega,
+    get_selection_scores as _get_selection_scores_corrected,
+    calculate_fair_rank_score as _calculate_fair_rank_score_corrected,
+    normalize_synteny_counts,
+)
+
 # Conditional ete3 import - may fail on Python 3.13+ due to removed cgi module
 try:
     from ete3 import Tree
@@ -201,22 +213,18 @@ def categorize_reference(ref_name):
 
     Returns weight for this reference type.
     Priority: (1) ref_categories_final.csv, (2) loaded JSON categories, (3) keyword heuristic.
+
+    Delegates to the unit-tested _rank_candidates_lib.categorize_reference,
+    which uses a word-boundary regex (no 'or' substring false-positives).
+    See bead -wux for the previous bug.
     """
-    # Check CSV-based category map first (from subsampling pipeline)
-    if ref_name in ref_category_weights:
-        return ref_category_weights[ref_name]
-
-    # Check against loaded JSON categories (legacy path)
-    if ref_name in chemoreceptor_refs:
-        return CHEMORECEPTOR_REF_WEIGHT
-
-    # Fallback: keyword heuristic (for non-subsampled refs)
-    chemoreceptor_keywords = ['olfr', 'or', 'taste', 'gust', 'odorant', 'chem', 'vomero']
-    name_lower = ref_name.lower()
-    if any(kw in name_lower for kw in chemoreceptor_keywords):
-        return CHEMORECEPTOR_REF_WEIGHT
-
-    return OTHER_GPCR_REF_WEIGHT
+    return _categorize_reference_corrected(
+        ref_name,
+        chemoreceptor_weight=CHEMORECEPTOR_REF_WEIGHT,
+        other_gpcr_weight=OTHER_GPCR_REF_WEIGHT,
+        explicit_category_map=ref_category_weights,
+        explicit_chemoreceptor_set=chemoreceptor_refs,
+    )
 
 
 # --- Load aBSREL dN/dS Results with FDR Correction ---
@@ -246,11 +254,21 @@ def load_absrel_with_fdr(selective_dir):
                     is_already_corrected = row.get('is_already_corrected', 0)
                     corrected_p_from_hyphy = row.get('corrected_p_value')
 
+                    # Read new omega_max / omega_mean / weight_at_max columns
+                    # (added 2026-05 to preserve aBSREL episodic-selection
+                    # signal; bead -ea9). Falls back to legacy 'omega' column.
+                    omega_max = row.get('omega_max', omega)
+                    omega_mean = row.get('omega_mean', omega)
+                    weight_at_max = row.get('weight_at_max', float('nan'))
+
                     if pd.notna(omega) and branch_id:
                         entry = {
                             'branch_id': str(branch_id),
-                            'omega': float(omega),
-                            'p_value': float(p_value) if pd.notna(p_value) else 1.0
+                            'omega': float(omega),                       # legacy
+                            'omega_max': float(omega_max) if pd.notna(omega_max) else float(omega),
+                            'omega_mean': float(omega_mean) if pd.notna(omega_mean) else float(omega),
+                            'weight_at_max': float(weight_at_max) if pd.notna(weight_at_max) else float('nan'),
+                            'p_value': float(p_value) if pd.notna(p_value) else 1.0,
                         }
 
                         # Check if HyPhy already provided corrected p-value
@@ -284,28 +302,12 @@ def benjamini_hochberg(pvalues):
     """
     Apply Benjamini-Hochberg FDR correction to a list of p-values.
 
-    Returns list of corrected p-values in the same order.
+    Returns list of corrected q-values in the same order. Delegates to
+    statsmodels.stats.multitest.multipletests via _rank_candidates_lib.
+    The previous hand-rolled implementation had a rank-indexing bug
+    producing non-monotonic q-values (bead -wux).
     """
-    n = len(pvalues)
-    if n == 0:
-        return []
-
-    # Sort p-values and track original indices
-    indexed_pvals = [(p, i) for i, p in enumerate(pvalues)]
-    indexed_pvals.sort(key=lambda x: x[0])
-
-    # Calculate corrected p-values
-    corrected = [0.0] * n
-    prev_corrected = 1.0
-
-    for rank, (pval, orig_idx) in enumerate(reversed(indexed_pvals), 1):
-        # BH formula: p_corrected = p * n / rank
-        # But we need to ensure monotonicity
-        corrected_p = min(pval * n / (n - rank + 1), prev_corrected)
-        corrected[orig_idx] = min(corrected_p, 1.0)
-        prev_corrected = corrected_p
-
-    return corrected
+    return _bh_corrected(pvalues)
 
 
 dnds_data = load_absrel_with_fdr(selective_dir)
@@ -556,41 +558,48 @@ def get_selection_scores(candidate_id, dnds_data):
 
     Returns: (purifying_score, positive_score, is_significant)
 
-    Biological interpretation:
-    - Purifying selection (omega < 1): Conserved function, constrained evolution
-    - Positive selection (omega > 1): Adaptive evolution, potential novel function
-    - Neutral (omega ~ 1): Relaxed constraint or pseudogenization
+    Biological interpretation for chemoreceptor identification (bead -ea9):
+    - Default PURIFYING_WEIGHT=0 (set in config.sh) because chemoreceptor
+      discovery rewards diversifying selection on extracellular loops, NOT
+      whole-gene purifying selection. A conserved housekeeping GPCR with
+      ω≪1 should not rank highly for the chemoreceptor question.
+    - Strong positive selection (ω≫1) is the chemoreceptor-relevant signal.
+    - Set PURIFYING_WEIGHT>0 only when looking for conserved-function GPCRs.
 
-    For chemoreceptor discovery:
-    - Strong purifying: likely functional receptor with conserved role
-    - Strong positive: potential lineage-specific adaptation/specialization
+    Uses omega_max from the aBSREL rate-class mixture (preserves the episodic
+    positive-selection signal that aBSREL detects), falling back to legacy
+    'omega' (weighted-mean) if omega_max is not available.
     """
     if candidate_id not in dnds_data:
         return 0.0, 0.0, False
 
     entry = dnds_data[candidate_id]
-    omega = entry['omega']
+    # Prefer omega_max (max across rate classes) to preserve episodic signal.
+    # Falls back to 'omega' for legacy aBSREL CSVs without the new column.
+    omega = entry.get('omega_max', entry.get('omega', float('nan')))
     is_significant = entry.get('significant', False)
+    corrected_p = entry.get('corrected_p', 1.0 if not is_significant else 0.0)
 
-    # Clamp omega to avoid extreme values
-    omega = max(omega, 0.001)
-    omega = min(omega, 100.0)
+    # Clamp to avoid extreme log values from edge-case mixture parameters.
+    if not (isinstance(omega, float) and np.isnan(omega)):
+        omega = max(min(float(omega), 100.0), 0.001)
 
-    if omega < 1.0:
-        # Purifying selection: score increases as omega decreases
-        purifying_score = abs(np.log(omega))
-        positive_score = 0.0
-    else:
-        # Positive selection: score increases as omega increases
-        purifying_score = 0.0
-        positive_score = np.log(omega)
-
-    # Boost scores if statistically significant
-    if is_significant:
-        purifying_score *= 1.5
-        positive_score *= 1.5
-
-    return purifying_score, positive_score, is_significant
+    # Pass weights=1 to get the unweighted raw signal (with the significance
+    # boost still applied). The caller in calculate_rank_score multiplies by
+    # PURIFYING_WEIGHT / POSITIVE_WEIGHT exactly once. Note: lib uses log10
+    # (more standard for ω); previous code used natural log. If you have
+    # tuned weights from before this change, multiply them by ~2.3 (=ln 10)
+    # to preserve absolute scale, OR retune. With PURIFYING_WEIGHT=0 (new
+    # default), purifying contributes nothing regardless.
+    result = _get_selection_scores_corrected(
+        omega=omega,
+        p_corrected=corrected_p,
+        purifying_weight=1.0,
+        positive_weight=1.0,
+        significance_threshold=ABSREL_FDR_THRESHOLD,
+        significance_boost=1.5,
+    )
+    return result["purifying_score"], result["positive_score"], result["is_significant"]
 
 
 def get_synteny_score(candidate_id, synteny_scores):
@@ -1542,72 +1551,46 @@ def calculate_fair_rank_score(row):
     """
     Calculate rank score with per-candidate weight normalization.
 
-    Candidates missing data (synteny, expression, chemosensory, etc.) are scored
-    only on available evidence, then normalized to be comparable with candidates
-    having full data.
+    Bead -ce4 fix: previously this function multiplied
+    (sum_weighted / available_weight) * max_possible_weight, which let a
+    candidate with one strong signal rank equal to a candidate with all
+    signals at the same per-axis score. The corrected behavior multiplies
+    by evidence_completeness (the fraction of weight that was available),
+    floored at 0.4 so a single very strong signal isn't zeroed.
 
-    Updated to include all new Phase 1-5 scoring components.
+    Includes all Phase 1-5 scoring components. Missing data is signaled
+    by has_*_data flags being False; the corresponding axis is then
+    excluded from BOTH the numerator and the available-weight denominator.
     """
-    # Base scores that are always available
-    score = (
-        row['phylo_score_norm'] * PHYLO_WEIGHT +
-        row['purifying_score_norm'] * PURIFYING_WEIGHT +
-        row['positive_score_norm'] * POSITIVE_WEIGHT +
-        row['lse_depth_score_norm'] * LSE_DEPTH_WEIGHT
-    )
-    total_weight = PHYLO_WEIGHT + PURIFYING_WEIGHT + POSITIVE_WEIGHT + LSE_DEPTH_WEIGHT
-
-    # Add synteny if data is available
-    if row['has_synteny_data']:
-        score += row['synteny_score_norm'] * SYNTENY_WEIGHT
-        total_weight += SYNTENY_WEIGHT
-
-    # Add expression if data is available
-    if row['has_expression_data']:
-        score += row['expression_score_norm'] * EXPR_WEIGHT
-        total_weight += EXPR_WEIGHT
-
-    # NEW: Add chemosensory expression if data is available (Phase 1)
-    if row.get('has_chemosensory_expr_data', False):
-        score += row['chemosensory_expr_score_norm'] * CHEMOSENSORY_EXPR_WEIGHT
-        total_weight += CHEMOSENSORY_EXPR_WEIGHT
-
-    # NEW: Add G-protein co-expression if data is available (Phase 2)
-    if row.get('has_gprotein_data', False):
-        score += row['gprotein_coexpr_score_norm'] * GPROTEIN_COEXPR_WEIGHT
-        total_weight += GPROTEIN_COEXPR_WEIGHT
-
-    # NEW: Add ECL divergence if data is available (Phase 3)
-    if row.get('has_ecl_data', False):
-        score += row['ecl_divergence_score_norm'] * ECL_DIVERGENCE_WEIGHT
-        total_weight += ECL_DIVERGENCE_WEIGHT
-
-    # NEW: Add CAFE expansion if data is available (Phase 5)
-    if row.get('has_expansion_data', False):
-        score += row['expansion_score_norm'] * EXPANSION_WEIGHT
-        total_weight += EXPANSION_WEIGHT
-
-    # Add orthogroup bootstrap confidence if data is available
-    if row.get('has_og_confidence_data', False):
-        score += row.get('og_confidence_score_norm', 0) * OG_CONFIDENCE_WEIGHT
-        total_weight += OG_CONFIDENCE_WEIGHT
-
-    # Normalize to max possible score (as if all weights were available)
-    max_possible_weight = (
-        PHYLO_WEIGHT + PURIFYING_WEIGHT + POSITIVE_WEIGHT +
-        SYNTENY_WEIGHT + EXPR_WEIGHT + LSE_DEPTH_WEIGHT +
-        CHEMOSENSORY_EXPR_WEIGHT + GPROTEIN_COEXPR_WEIGHT +
-        ECL_DIVERGENCE_WEIGHT + EXPANSION_WEIGHT +
-        OG_CONFIDENCE_WEIGHT
-    )
-
-    # Scale score to be comparable across candidates with different data availability
-    if total_weight > 0:
-        normalized_score = (score / total_weight) * max_possible_weight
-    else:
-        normalized_score = 0.0
-
-    return normalized_score
+    # Build scores/weights dicts; missing axes set to None so the lib's
+    # evidence-completeness multiplier applies correctly.
+    scores = {
+        'phylo': row.get('phylo_score_norm'),
+        'purifying': row.get('purifying_score_norm'),
+        'positive': row.get('positive_score_norm'),
+        'lse_depth': row.get('lse_depth_score_norm'),
+        'synteny': row.get('synteny_score_norm') if row.get('has_synteny_data') else None,
+        'expression': row.get('expression_score_norm') if row.get('has_expression_data') else None,
+        'chemosensory_expr': row.get('chemosensory_expr_score_norm') if row.get('has_chemosensory_expr_data') else None,
+        'gprotein_coexpr': row.get('gprotein_coexpr_score_norm') if row.get('has_gprotein_data') else None,
+        'ecl_divergence': row.get('ecl_divergence_score_norm') if row.get('has_ecl_data') else None,
+        'expansion': row.get('expansion_score_norm') if row.get('has_expansion_data') else None,
+        'og_confidence': row.get('og_confidence_score_norm') if row.get('has_og_confidence_data') else None,
+    }
+    weights = {
+        'phylo': PHYLO_WEIGHT,
+        'purifying': PURIFYING_WEIGHT,
+        'positive': POSITIVE_WEIGHT,
+        'lse_depth': LSE_DEPTH_WEIGHT,
+        'synteny': SYNTENY_WEIGHT,
+        'expression': EXPR_WEIGHT,
+        'chemosensory_expr': CHEMOSENSORY_EXPR_WEIGHT,
+        'gprotein_coexpr': GPROTEIN_COEXPR_WEIGHT,
+        'ecl_divergence': ECL_DIVERGENCE_WEIGHT,
+        'expansion': EXPANSION_WEIGHT,
+        'og_confidence': OG_CONFIDENCE_WEIGHT,
+    }
+    return _calculate_fair_rank_score_corrected(scores, weights, completeness_floor=0.4)
 
 
 df['rank_score'] = df.apply(calculate_fair_rank_score, axis=1, result_type='reduce')

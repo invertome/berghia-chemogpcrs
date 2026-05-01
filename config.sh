@@ -176,12 +176,23 @@ export RUN_MODE="${RUN_MODE:-slurm}"
 # These weights control how different evidence types contribute to candidate ranking.
 # Higher weights give more importance to that criterion.
 export PHYLO_WEIGHT=2           # Weight for phylogenetic distance to references
-export PURIFYING_WEIGHT=1       # Weight for purifying selection (omega < 1)
-export POSITIVE_WEIGHT=1        # Weight for positive selection (omega > 1)
-export SYNTENY_WEIGHT=3         # Weight for synteny conservation
-                                # NOTE: Set to 0 if you don't have multiple genomes for synteny analysis.
-                                # Synteny analysis requires genome assemblies + annotations for comparison species.
-export EXPR_WEIGHT=1            # Weight for expression data (tissue-specific enrichment)
+# Bead -ea9: PURIFYING_WEIGHT defaults to 0 because chemoreceptor identification
+# rewards diversifying selection on extracellular loops, not whole-gene
+# purifying selection. Conserved housekeeping GPCRs (rhodopsin, GABA receptors,
+# etc.) should NOT rank highly for the chemoreceptor question. Set this >0
+# only when looking for CONSERVED-function GPCRs.
+export PURIFYING_WEIGHT=0       # Weight for purifying selection (omega < 1)
+export POSITIVE_WEIGHT=1        # Weight for positive selection (omega > 1, primary chemoreceptor signal)
+# Bead -e59 / -ar8: with the Berghia genome (GCA_034508935.3) now available,
+# real synteny against Aplysia/Lottia/Biomphalaria can run; the previous
+# concern about degenerate scores when no genome was available is resolved
+# by the log-scale + min_max_anchors=5 normalization in _rank_candidates_lib.
+export SYNTENY_WEIGHT=2         # Weight for synteny conservation (intra-genome anchors)
+export TANDEM_CLUSTER_WEIGHT=2.5  # Weight for intra-genome tandem clusters (the field's signature chemoreceptor signal)
+# Bead -qu9: rhinophore RNA-seq has known confounds (low depth + starvation
+# artifact, e.g. Galpha_olf absent in seq but expressed by HCR in fed slugs).
+# Treat expression as a SOFT signal only; never as a hard gate.
+export EXPR_WEIGHT=1            # Weight for expression data (tissue-specific enrichment) — soft signal
 export LSE_DEPTH_WEIGHT=1       # Weight for lineage-specific expansion depth
 
 # --- Reference Weighting (for phylogenetic distance) ---
