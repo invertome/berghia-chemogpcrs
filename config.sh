@@ -4,7 +4,10 @@
 # Usage: Source this file in all pipeline scripts (source config.sh).
 
 # --- Base Directories ---
-export BASE_DIR=$(realpath "$(dirname "$0")")
+# BASE_DIR resolves to the directory containing config.sh, regardless of
+# how config.sh is sourced. Using BASH_SOURCE[0] (vs $0) makes this work
+# whether config.sh is sourced from the project root or from scripts/.
+export BASE_DIR="$(realpath "$(dirname "${BASH_SOURCE[0]}")")"
 export RESULTS_DIR="${BASE_DIR}/results"
 export SCRIPTS_DIR="${BASE_DIR}/scripts"
 export REFERENCE_DIR="${BASE_DIR}/references"
@@ -233,6 +236,11 @@ export POSITIVE_WEIGHT=1        # Weight for positive selection (omega > 1, prim
 # by the log-scale + min_max_anchors=5 normalization in _rank_candidates_lib.
 export SYNTENY_WEIGHT=2         # Weight for synteny conservation (intra-genome anchors)
 export TANDEM_CLUSTER_WEIGHT=2.5  # Weight for intra-genome tandem clusters (the field's signature chemoreceptor signal)
+# Bead -ar8: tandem-cluster sliding-window detection parameters.
+export TANDEM_WINDOW_KB="${TANDEM_WINDOW_KB:-100}"   # Max gap between consecutive cluster members (kb)
+export TANDEM_MIN_SIZE="${TANDEM_MIN_SIZE:-3}"       # Minimum cluster size to flag
+# CSV produced by scripts/compute_tandem_clusters.py
+export TANDEM_CLUSTERS_FILE="${TANDEM_CLUSTERS_FILE:-${RESULTS_DIR}/synteny/tandem_clusters.csv}"
 # Bead -qu9: rhinophore RNA-seq has known confounds (low depth + starvation
 # artifact, e.g. Galpha_olf absent in seq but expressed by HCR in fed slugs).
 # Treat expression as a SOFT signal only; never as a hard gate.

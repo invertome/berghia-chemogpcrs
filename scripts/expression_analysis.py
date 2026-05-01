@@ -284,8 +284,12 @@ def generate_expression_score(row: pd.Series) -> float:
     elif row['chemosensory_fold_change'] > 1.5:
         chemo_bonus = 0.1
 
-    # Combine components
-    score = 0.4 * min(expr_component, 1.0) + 0.4 * tau_component + 0.2 + chemo_bonus
+    # Bead -qu9: dropped the +0.2 bare bias term that compressed the score
+    # range and gave every gene a 0.2 floor. Expression is a SOFT signal in
+    # this dataset (rhinophore RNA-seq has known confounds: low depth +
+    # starvation artifact, e.g. Galpha_olf absent in seq but expressed by
+    # HCR in fed slugs). Treat zero expression as 'unknown', not 'absent'.
+    score = 0.4 * min(expr_component, 1.0) + 0.4 * tau_component + chemo_bonus
 
     return min(score, 1.0)
 

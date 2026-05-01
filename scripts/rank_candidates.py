@@ -90,6 +90,13 @@ ECL_DIVERGENCE_WEIGHT = float(os.getenv('ECL_DIVERGENCE_WEIGHT', 1.5))
 EXPANSION_WEIGHT = float(os.getenv('EXPANSION_WEIGHT', 1.5))
 PREFERRED_EXPANSION_LEVELS = os.getenv('PREFERRED_EXPANSION_LEVELS', 'Aeolid-specific').split(',')
 
+# Bead -ar8: Intra-genome tandem-cluster weight. The field's signature
+# evidence type for chemoreceptor claims (Cummins 2009, Vogt 2023, Robertson
+# 2015, Nath 2025). Especially important since rhinophore RNA-seq has known
+# confounds (starvation + low depth, bead -qu9). Default weight set high.
+TANDEM_CLUSTER_WEIGHT = float(os.getenv('TANDEM_CLUSTER_WEIGHT', 2.5))
+TANDEM_CLUSTERS_FILE = os.getenv('TANDEM_CLUSTERS_FILE', '')
+
 # Reference weighting
 CHEMORECEPTOR_REF_WEIGHT = float(os.getenv('CHEMORECEPTOR_REF_WEIGHT', 2.0))  # New
 OTHER_GPCR_REF_WEIGHT = float(os.getenv('OTHER_GPCR_REF_WEIGHT', 1.0))        # New
@@ -357,6 +364,46 @@ def load_synteny_scores(synteny_dir):
 
 
 synteny_scores = load_synteny_scores(synteny_dir)
+
+
+# --- Tandem-cluster scoring (bead -ar8) ---
+def load_tandem_cluster_data(path):
+    """Load tandem-cluster CSV produced by compute_tandem_clusters.py.
+
+    Returns dict: candidate_id -> (cluster_size, cluster_id) (None if missing).
+    Also computes a per-candidate score in [0, 1] = log1p(size)/log1p(20).
+    """
+    if not path or not os.path.exists(path):
+        return {}, {}
+    try:
+        df_tc = pd.read_csv(path)
+    except Exception as e:
+        print(f"Warning: could not read tandem-cluster CSV at {path}: {e}",
+              file=sys.stderr)
+        return {}, {}
+    info = {}
+    scores = {}
+    for _, r in df_tc.iterrows():
+        cid = r.get('candidate_id', '')
+        if not cid or pd.isna(cid):
+            continue
+        size = r.get('tandem_cluster_size')
+        cluster_id = r.get('tandem_cluster_id', '') or None
+        if pd.isna(size):
+            info[cid] = (None, cluster_id)
+            continue
+        info[cid] = (int(size), cluster_id if cluster_id else None)
+        # Score: log1p-scale capped at cluster size 20
+        scores[cid] = float(np.log1p(int(size)) / np.log1p(20.0))
+    return info, scores
+
+
+tandem_cluster_info, tandem_cluster_scores = load_tandem_cluster_data(TANDEM_CLUSTERS_FILE)
+if tandem_cluster_info:
+    print(f"Loaded tandem-cluster info for {len(tandem_cluster_info)} candidates "
+          f"({sum(1 for v in tandem_cluster_info.values() if v[0] and v[0] >= 3)} "
+          f"in clusters of size >=3)", file=sys.stderr)
+
 
 # --- Derive results directory from phylo_dir ---
 # Derive results_dir: walk up from phylo_dir until we find a known results structure
@@ -1472,6 +1519,11 @@ for cand_id in candidates['id']:
         cand_id, gene_to_orthogroup, og_trees, BOOTSTRAP_THRESHOLD
     )
 
+    # Bead -ar8: tandem-cluster score
+    tandem_score = tandem_cluster_scores.get(cand_id, 0.0)
+    has_tandem = cand_id in tandem_cluster_info
+    tandem_size, tandem_cluster_label = tandem_cluster_info.get(cand_id, (None, None))
+
     # Track evidence completeness (based on data availability, not just score > 0)
     # Updated to include new score sources
     evidence_sources = [
@@ -1484,7 +1536,8 @@ for cand_id in candidates['id']:
         has_gprotein,
         has_ecl,
         has_expansion,
-        has_og_data
+        has_og_data,
+        has_tandem,
     ]
     evidence_count = sum(evidence_sources)
     evidence_completeness = evidence_count / len(evidence_sources)
@@ -1512,6 +1565,11 @@ for cand_id in candidates['id']:
         'has_expansion_data': has_expansion,
         'og_confidence_score': og_conf,
         'has_og_confidence_data': has_og_data,
+        # Bead -ar8: tandem cluster
+        'tandem_cluster_score': tandem_score,
+        'tandem_cluster_size': tandem_size if tandem_size is not None else 0,
+        'tandem_cluster_id': tandem_cluster_label or '',
+        'has_tandem_cluster_data': has_tandem,
         'evidence_completeness': evidence_completeness
     })
 
@@ -1541,6 +1599,11 @@ for col in normalize_cols:
 if 'synteny_score' not in df.columns:
     df['synteny_score'] = 0.0
 df['synteny_score_norm'] = df['synteny_score']
+
+# Tandem-cluster score is already 0-1 (log1p-scaled in load_tandem_cluster_data)
+if 'tandem_cluster_score' not in df.columns:
+    df['tandem_cluster_score'] = 0.0
+df['tandem_cluster_score_norm'] = df['tandem_cluster_score']
 
 # --- Calculate Final Rank Score with Fair Missing Data Handling ---
 # For candidates missing synteny or expression data, we normalize by available weights
@@ -1576,6 +1639,8 @@ def calculate_fair_rank_score(row):
         'ecl_divergence': row.get('ecl_divergence_score_norm') if row.get('has_ecl_data') else None,
         'expansion': row.get('expansion_score_norm') if row.get('has_expansion_data') else None,
         'og_confidence': row.get('og_confidence_score_norm') if row.get('has_og_confidence_data') else None,
+        # Bead -ar8: tandem-cluster score (intra-genome paralog clustering)
+        'tandem_cluster': row.get('tandem_cluster_score_norm') if row.get('has_tandem_cluster_data') else None,
     }
     weights = {
         'phylo': PHYLO_WEIGHT,
@@ -1589,6 +1654,7 @@ def calculate_fair_rank_score(row):
         'ecl_divergence': ECL_DIVERGENCE_WEIGHT,
         'expansion': EXPANSION_WEIGHT,
         'og_confidence': OG_CONFIDENCE_WEIGHT,
+        'tandem_cluster': TANDEM_CLUSTER_WEIGHT,
     }
     return _calculate_fair_rank_score_corrected(scores, weights, completeness_floor=0.4)
 
