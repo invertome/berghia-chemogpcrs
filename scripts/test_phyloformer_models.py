@@ -13,7 +13,12 @@ output_prefix = sys.argv[2]
 threads = sys.argv[3]
 
 models = ['LG', 'WAG', 'JTT']
-cmd = ["iqtree2", "-s", fasta_file, "-m", "TESTONLY", "-mset", ",".join(models), "-nt", threads, "-pre", f"{output_prefix}_modeltest"]
+# Bead -ryr / user direction: use iqtree3 (config.sh's IQTREE var) — both
+# 'iqtree2' and 'iqtree3' alias to IQ-TREE 3 in the active env, but invoke
+# the canonical name explicitly. Allow override via $IQTREE.
+import os
+iqtree_bin = os.environ.get("IQTREE", "iqtree3")
+cmd = [iqtree_bin, "-s", fasta_file, "-m", "TESTONLY", "-mset", ",".join(models), "-nt", threads, "-pre", f"{output_prefix}_modeltest"]
 subprocess.run(cmd, check=True)
 
 with open(f"{output_prefix}_modeltest.log", 'r') as f:

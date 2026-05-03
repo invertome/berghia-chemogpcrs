@@ -54,7 +54,7 @@ get_tool_versions_json() {
         ["hmmsearch"]="hmmsearch -h | head -2 | tail -1"
         ["hhblits"]="hhblits -h 2>&1 | head -1"
         ["mafft"]="mafft --version 2>&1"
-        ["iqtree"]="iqtree2 --version 2>&1 | head -1"
+        ["iqtree"]="${IQTREE:-iqtree3} --version 2>&1 | head -1"
         ["fasttree"]="FastTree 2>&1 | head -1"
         ["orthofinder"]="orthofinder -h 2>&1 | grep -i version | head -1"
         ["python"]="python3 --version 2>&1"
