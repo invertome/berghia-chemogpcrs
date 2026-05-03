@@ -1776,19 +1776,21 @@ sensitivity_results = None
 if RUN_SENSITIVITY:
     print(f"\nRunning sensitivity analysis ({SENSITIVITY_ITERATIONS} iterations)...", file=sys.stderr)
 
+    # Bead -j6f: complete weight dict (previously omitted half the
+    # contributing axes from sensitivity analysis).
     base_weights = {
         'phylo': PHYLO_WEIGHT,
         'purifying': PURIFYING_WEIGHT,
         'positive': POSITIVE_WEIGHT,
         'synteny': SYNTENY_WEIGHT,
-        'expr': EXPR_WEIGHT,
+        'expression': EXPR_WEIGHT,
         'lse_depth': LSE_DEPTH_WEIGHT,
-        # NEW: Phase 1-5 weights
         'chemosensory_expr': CHEMOSENSORY_EXPR_WEIGHT,
         'gprotein_coexpr': GPROTEIN_COEXPR_WEIGHT,
         'ecl_divergence': ECL_DIVERGENCE_WEIGHT,
         'expansion': EXPANSION_WEIGHT,
-        'og_confidence': OG_CONFIDENCE_WEIGHT
+        'og_confidence': OG_CONFIDENCE_WEIGHT,
+        'tandem_cluster': TANDEM_CLUSTER_WEIGHT,
     }
 
     sensitivity_results = run_sensitivity_analysis(
@@ -1827,6 +1829,86 @@ if RUN_SENSITIVITY:
     for weight, importance in sorted(sensitivity_results['weight_importance'].items(),
                                      key=lambda x: x[1], reverse=True):
         print(f"    {weight}: {importance:.3f}", file=sys.stderr)
+
+    # Bead -j6f: Latin Hypercube sweep over weight ORDERINGS (not just
+    # ±50% magnitude perturbation). Generates n_lhs random weight schemes
+    # uniformly from [0.5, 3.0] for each component, recomputes the rank,
+    # and reports top-50 Jaccard-similarity stability across schemes.
+    try:
+        from scipy.stats import qmc as _qmc
+        n_lhs = int(os.getenv('SENSITIVITY_LHS_N', 100))
+        if n_lhs > 0 and len(df) > 0:
+            sampler = _qmc.LatinHypercube(d=len(base_weights), seed=42)
+            sample = sampler.random(n=n_lhs)
+            lo, hi = 0.5, 3.0
+            lhs_weights_matrix = lo + sample * (hi - lo)
+            keys = list(base_weights.keys())
+            top_n = min(50, len(df))
+            top_sets = []
+            for row in lhs_weights_matrix:
+                w = dict(zip(keys, row.tolist()))
+                # Recompute rank under this weight scheme
+                tmp_scores = df.apply(
+                    lambda r: _calculate_fair_rank_score_corrected(
+                        scores={
+                            'phylo': r.get('phylo_score_norm'),
+                            'purifying': r.get('purifying_score_norm'),
+                            'positive': r.get('positive_score_norm'),
+                            'lse_depth': r.get('lse_depth_score_norm'),
+                            'synteny': r.get('synteny_score_norm') if r.get('has_synteny_data') else None,
+                            'expression': r.get('expression_score_norm') if r.get('has_expression_data') else None,
+                            'chemosensory_expr': r.get('chemosensory_expr_score_norm') if r.get('has_chemosensory_expr_data') else None,
+                            'gprotein_coexpr': r.get('gprotein_coexpr_score_norm') if r.get('has_gprotein_data') else None,
+                            'ecl_divergence': r.get('ecl_divergence_score_norm') if r.get('has_ecl_data') else None,
+                            'expansion': r.get('expansion_score_norm') if r.get('has_expansion_data') else None,
+                            'og_confidence': r.get('og_confidence_score_norm') if r.get('has_og_confidence_data') else None,
+                            'tandem_cluster': r.get('tandem_cluster_score_norm') if r.get('has_tandem_cluster_data') else None,
+                        },
+                        weights=w,
+                        completeness_floor=0.4,
+                    ),
+                    axis=1,
+                )
+                tmp_top = set(df.assign(_s=tmp_scores)
+                              .nlargest(top_n, '_s')['id'].tolist())
+                top_sets.append(tmp_top)
+
+            # Pairwise Jaccard
+            jaccards = []
+            for i in range(len(top_sets)):
+                for j in range(i + 1, len(top_sets)):
+                    a, b = top_sets[i], top_sets[j]
+                    if a or b:
+                        jaccards.append(len(a & b) / len(a | b))
+            median_jaccard = float(np.median(jaccards)) if jaccards else float('nan')
+            min_jaccard = float(np.min(jaccards)) if jaccards else float('nan')
+
+            # Frequency table: how often each candidate appears in any top-N
+            freq = {}
+            for s in top_sets:
+                for cid in s:
+                    freq[cid] = freq.get(cid, 0) + 1
+            freq_df = pd.DataFrame([(k, v / len(top_sets)) for k, v in freq.items()],
+                                   columns=['id', 'lhs_top50_frequency'])
+
+            output_dir = Path(output_file).parent
+            with open(output_dir / 'weight_sensitivity.json', 'w') as f:
+                json.dump({
+                    'method': 'latin_hypercube',
+                    'n_schemes': n_lhs,
+                    'weight_range_low': lo,
+                    'weight_range_high': hi,
+                    'top_n': top_n,
+                    'median_jaccard_topN': median_jaccard,
+                    'min_jaccard_topN': min_jaccard,
+                    'n_pairs_compared': len(jaccards),
+                }, f, indent=2)
+            freq_df.to_csv(output_dir / 'weight_sensitivity_topN_freq.csv', index=False)
+            print(f"  LHS sensitivity: median top-{top_n} Jaccard={median_jaccard:.3f} "
+                  f"(min={min_jaccard:.3f}, n_pairs={len(jaccards)})",
+                  file=sys.stderr)
+    except Exception as e:
+        print(f"  LHS sensitivity skipped: {e}", file=sys.stderr)
 
 # --- Run Cross-Validation ---
 cv_results = None

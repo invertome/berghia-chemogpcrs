@@ -1,0 +1,6 @@
+gene_name,aplysia_protein_id,aplysia_genome_id,subfamily,tissue,notes
+ApGPCR-A1,,,Apgr.A,rhinophore,"Cummins et al. 2009 BMC Biology 7:28 (PMC2693106) describes three rhinophore-enriched Class A GPCR subfamilies (Apgr.A, Apgr.B, Apgr.C). This CSV is a STARTER/PROVISIONAL list — the original supplementary table requires manual curation against current NCBI Aplysia californica annotation (GCF_000002075.2). Add accurate aplysia_protein_id values from RefSeq once verified."
+ApGPCR-A2,,,Apgr.A,rhinophore,"Provisional — see notes for ApGPCR-A1."
+ApGPCR-B1,,,Apgr.B,rhinophore,"Provisional — see notes for ApGPCR-A1."
+ApGPCR-B2,,,Apgr.B,oral_tentacle,"Provisional — Cummins 2009 reports rhinophore + oral-tentacle expression for Apgr.B family."
+ApGPCR-C1,,,Apgr.C,rhinophore,"Provisional — see notes for ApGPCR-A1."
