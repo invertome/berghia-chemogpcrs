@@ -191,8 +191,20 @@ ref_category_weights = {}  # ref_id -> weight (from ref_categories_final.csv)
 
 REF_CATEGORIES_CSV = os.getenv('REF_CATEGORIES_CSV', '')
 if not REF_CATEGORIES_CSV:
-    # Try default location
-    potential = os.path.join(results_dir, 'reference_sequences', 'ref_categories_final.csv')
+    # Bead -o7k: results_dir is computed later from phylo_dir; here we must
+    # resolve a temporary candidate from $RESULTS_DIR (env) or by walking up
+    # from phylo_dir.
+    _provisional_results = os.environ.get('RESULTS_DIR', '')
+    if not _provisional_results:
+        _p = Path(phylo_dir)
+        while _p != _p.parent:
+            if (_p / 'reference_sequences').exists() or (_p / 'ranking').exists():
+                _provisional_results = str(_p)
+                break
+            _p = _p.parent
+        if not _provisional_results:
+            _provisional_results = str(Path(phylo_dir).parent.parent)
+    potential = os.path.join(_provisional_results, 'reference_sequences', 'ref_categories_final.csv')
     if os.path.exists(potential):
         REF_CATEGORIES_CSV = potential
 
@@ -1758,7 +1770,10 @@ output_cols = [
     'gprotein_coexpr_score', 'has_gprotein_data',
     'ecl_divergence_score', 'has_ecl_data',
     'expansion_score', 'has_expansion_data',
-    'og_confidence_score', 'has_og_confidence_data'
+    'og_confidence_score', 'has_og_confidence_data',
+    # Bead -ar8: tandem cluster columns
+    'tandem_cluster_score', 'tandem_cluster_size', 'tandem_cluster_id',
+    'has_tandem_cluster_data',
 ]
 
 # Ensure all output columns exist (fill missing with defaults)
@@ -1962,7 +1977,10 @@ output_cols = [
     'gprotein_coexpr_score', 'has_gprotein_data',
     'ecl_divergence_score', 'has_ecl_data',
     'expansion_score', 'has_expansion_data',
-    'og_confidence_score', 'has_og_confidence_data'
+    'og_confidence_score', 'has_og_confidence_data',
+    # Bead -ar8: tandem cluster columns
+    'tandem_cluster_score', 'tandem_cluster_size', 'tandem_cluster_id',
+    'has_tandem_cluster_data',
 ]
 
 if sensitivity_results and 'rank_stability' in df_sorted.columns:
