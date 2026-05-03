@@ -344,6 +344,17 @@ if [ ! -f "${RESULTS_DIR}/step_completed_${base}_iqtree.txt" ]; then
     run_command "${base}_fasttree" --stdout="${RESULTS_DIR}/phylogenies/protein/${base}_fasttree.tre" ${FASTTREE} -seed "${FASTTREE_SEED}" -lg -gamma "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa"
     run_command "${base}_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa" -m "${IQTREE_MODEL_FIND}" -mset "${IQTREE_MODEL_SET}" ${IQTREE_BOOT_FLAGS} -seed "${IQTREE_SEED}" -T "${CPUS}" -t "${RESULTS_DIR}/phylogenies/protein/${base}_fasttree.tre" --prefix "${RESULTS_DIR}/phylogenies/protein/${base}"
 
+    # Bead -iof: TreeShrink rogue-taxon cleaning. Replaces the tree in place
+    # and leaves a rollback copy at <tree>.original.treefile.
+    if [ "${RUN_TREESHRINK:-1}" = "1" ] && [ -f "${RESULTS_DIR}/phylogenies/protein/${base}.treefile" ]; then
+        bash "${SCRIPTS_DIR}/run_treeshrink.sh" \
+            --single-tree="${RESULTS_DIR}/phylogenies/protein/${base}.treefile" \
+            --output-dir="${RESULTS_DIR}/phylogenies/protein/treeshrink/${base}" \
+            --quantile="${TREESHRINK_QUANTILE:-0.05}" \
+            2>> "${LOGS_DIR}/treeshrink_${base}.err" \
+            || log --level=WARN "TreeShrink failed for ${base} (kept original tree)"
+    fi
+
     # Create per-orthogroup completion flag
     touch "${RESULTS_DIR}/step_completed_${base}_iqtree.txt"
 

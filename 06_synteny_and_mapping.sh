@@ -24,10 +24,81 @@ check_file "${RESULTS_DIR}/step_completed_extract_berghia.txt"
 
 log "Starting synteny and mapping analysis."
 
-# --- Validate genome count for synteny analysis ---
+# Bead -e59: SYNTENY_BACKEND=jcvi (default) uses JCVI MCscan against close
+# mollusc genomes (Aplysia first-tier); SYNTENY_BACKEND=mcscanx falls back
+# to the legacy MCScanX path. Both paths produce a per-Berghia-gene CSV
+# at ${RESULTS_DIR}/synteny/jcvi_anchors_per_gene.csv consumed by
+# rank_candidates.py via TANDEM_CLUSTERS_FILE-style env var SYNTENY_ANCHORS_CSV.
+SYNTENY_BACKEND="${SYNTENY_BACKEND:-jcvi}"
+SYNTENY_ANCHORS_CSV="${RESULTS_DIR}/synteny/jcvi_anchors_per_gene.csv"
+
+# --- JCVI MCscan branch (preferred when annotated genomes available) ---
+if [ "$SYNTENY_BACKEND" = "jcvi" ]; then
+    if [ ! -f "${GENOME_GFF:-}" ] || [ ! -f "${GENOME_PROTEIN:-}" ]; then
+        log --level=WARN "JCVI synteny requires GENOME_GFF and GENOME_PROTEIN; falling back to MCScanX backend"
+        SYNTENY_BACKEND="mcscanx"
+    fi
+fi
+
+if [ "$SYNTENY_BACKEND" = "jcvi" ]; then
+    # Discover target species: any *.proteins.fa in GENOME_DIR that is NOT
+    # the Berghia file. Pair each with its corresponding .gff3.
+    JCVI_OUT="${RESULTS_DIR}/synteny/jcvi"
+    mkdir -p "$JCVI_OUT"
+    > "$SYNTENY_ANCHORS_CSV"
+    JCVI_HEADER_WRITTEN=0
+    for tgt_pep in "${GENOME_DIR}"/*.proteins.fa; do
+        [ -f "$tgt_pep" ] || continue
+        # Skip Berghia itself (the symlink and the canonical name both point at it)
+        if [ "$(realpath "$tgt_pep")" = "$(realpath "$GENOME_PROTEIN" 2>/dev/null || echo $tgt_pep)" ]; then
+            continue
+        fi
+        tgt_base=$(basename "$tgt_pep" .proteins.fa)
+        tgt_gff="${GENOME_DIR}/${tgt_base}.gff3"
+        if [ ! -f "$tgt_gff" ]; then
+            log --level=WARN "Skipping JCVI for $tgt_base — no matching .gff3"
+            continue
+        fi
+        log "JCVI MCscan: ${BERGHIA_FILE_PREFIX} vs ${tgt_base}"
+        bash "${SCRIPTS_DIR}/run_jcvi_synteny.sh" \
+            --berghia-prefix="berghia" \
+            --berghia-gff="$GENOME_GFF" --berghia-pep="$GENOME_PROTEIN" \
+            --target="$tgt_pep" --target-gff="$tgt_gff" \
+            --target-prefix="$tgt_base" \
+            --output-dir="$JCVI_OUT/berghia_vs_${tgt_base}" \
+            2> "${LOGS_DIR}/jcvi_berghia_vs_${tgt_base}.err" || \
+            log --level=WARN "JCVI failed for ${tgt_base} (see logs)"
+        anc="$JCVI_OUT/berghia_vs_${tgt_base}/berghia.${tgt_base}.lifted.anchors"
+        [ -s "$anc" ] || anc="$JCVI_OUT/berghia_vs_${tgt_base}/berghia.${tgt_base}.anchors"
+        if [ -s "$anc" ]; then
+            tmp_csv="${JCVI_OUT}/berghia_vs_${tgt_base}/per_gene.csv"
+            python3 "${SCRIPTS_DIR}/parse_jcvi_anchors.py" \
+                --anchors "$anc" --target-species "$tgt_base" --out "$tmp_csv" \
+                && {
+                    if [ "$JCVI_HEADER_WRITTEN" -eq 0 ]; then
+                        cp "$tmp_csv" "$SYNTENY_ANCHORS_CSV"
+                        JCVI_HEADER_WRITTEN=1
+                    else
+                        tail -n +2 "$tmp_csv" >> "$SYNTENY_ANCHORS_CSV"
+                    fi
+                }
+        fi
+    done
+    if [ ! -s "$SYNTENY_ANCHORS_CSV" ]; then
+        log --level=WARN "No JCVI anchors produced (no target genomes? all failed?). " \
+            "Drop SYNTENY_WEIGHT=0 in config.sh if you want to disable synteny scoring entirely."
+        # Touch empty placeholder so downstream stages don't fail on file-not-found
+        echo "candidate_id,n_anchor_blocks,total_anchor_genes,target_species" > "$SYNTENY_ANCHORS_CSV"
+    fi
+    touch "${RESULTS_DIR}/step_completed_synteny.txt"
+    log "JCVI synteny step completed → $SYNTENY_ANCHORS_CSV"
+    exit 0
+fi
+
+# --- Validate genome count for legacy MCScanX backend ---
 genome_count=$(find "${GENOME_DIR}" -name "*.fasta" -type f 2>/dev/null | wc -l)
 if [ "$genome_count" -lt 2 ]; then
-    log --level=WARN "Synteny analysis requires at least 2 genomes, found ${genome_count}"
+    log --level=WARN "MCScanX synteny analysis requires at least 2 genomes, found ${genome_count}"
     log --level=WARN "Skipping synteny analysis. Set SYNTENY_WEIGHT=0 in config.sh to disable synteny scoring."
     # Create empty output files to prevent downstream failures
     touch "${RESULTS_DIR}/synteny/synteny_ids.txt"

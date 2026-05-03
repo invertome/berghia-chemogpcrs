@@ -58,6 +58,15 @@ export FASTML="fastml"
 export MINIMAP2="minimap2"
 export SAMTOOLS="samtools"
 export MCSCANX="MCScanX"
+# Bead -e59: JCVI MCscan (Tang et al. 2024) entry point. Invoked as a Python
+# module so that we always use the version installed via pip in the active
+# environment (pip install jcvi). Override only if you've put a custom
+# wrapper on PATH.
+export JCVI_PYTHON="${JCVI_PYTHON:-python3}"
+# Bead -iof: TreeShrink (Mai & Mirarab 2018) — single-tree outlier-long-
+# branch removal. Distributed via pip as `treeshrink` which installs a
+# `run_treeshrink.py` shim on PATH.
+export TREESHRINK="${TREESHRINK:-run_treeshrink.py}"
 export ALPHAFOLD="run_alphafold.sh"
 export FOLDTREE="foldtree"
 export TMALIGN="TMalign"
@@ -186,6 +195,30 @@ export REF_TAXONOMY_WEIGHTS="gastropoda:3.0,cephalopoda:1.5,bivalvia:1.5,other_m
 export PHYLO_DIR="${RESULTS_DIR}/phylogenies/protein"
 # Tree filename (override if different from default IQ-TREE output)
 export PHYLO_TREE_FILENAME="all_berghia_refs.treefile"
+
+# --- Synteny Backend (Bead -e59) ---
+# `jcvi`     = JCVI MCscan (Tang et al. 2024 iMeta 3:e211) — preferred default.
+# `mcscanx`  = legacy MCScanX path (kept as fallback; pre-existing pipeline runs
+#              expect this and the AWK-based GFF parsing in 06_synteny_and_mapping.sh).
+export SYNTENY_BACKEND="${SYNTENY_BACKEND:-jcvi}"
+# Comma-separated list of close-mollusc target species available for JCVI
+# synteny. The wrapper expects, for each <species>, files of the form
+# ${GENOME_DIR}/<species>.proteins.fa and ${GENOME_DIR}/<species>.gff3.
+# Aplysia is the highest-priority reference per Nath et al. 2025; Lottia and
+# Biomphalaria are second-tier additions (set up files and add here).
+export JCVI_SYNTENY_TARGETS="${JCVI_SYNTENY_TARGETS:-aplysia_californica}"
+
+# --- TreeShrink (Bead -iof) ---
+# Run TreeShrink on per-OG IQ-TREE outputs and the global tree before
+# downstream selection analysis. Cleaned trees are written next to the
+# originals as <prefix>.treefile.shrunk; the original is preserved as
+# <prefix>.original.treefile. Set to 0 to skip TreeShrink entirely.
+export RUN_TREESHRINK="${RUN_TREESHRINK:-1}"
+# False-positive tolerance for the per-clade outlier test. q=0.05 is the
+# permissive setting recommended for paralog-rich Class A GPCR families
+# (Mai & Mirarab 2018) — keeps legitimate LSE bursts but trims contamination
+# / mis-annotation artefacts.
+export TREESHRINK_QUANTILE="${TREESHRINK_QUANTILE:-0.05}"
 
 # --- Outgroup for Tree Rooting ---
 export OUTGROUP_FASTA="${REFERENCE_DIR}/outgroup.fa"

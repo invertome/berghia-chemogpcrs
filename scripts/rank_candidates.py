@@ -321,46 +321,83 @@ dnds_data = load_absrel_with_fdr(selective_dir)
 
 # --- Load Synteny Data (Quantitative) ---
 def load_synteny_scores(synteny_dir):
+    """Load synteny anchor counts and produce per-gene scores in (0, 1].
+
+    Bead -e59 fix: prefer the JCVI MCscan per-gene CSV (canonical) when
+    available; fall back to MCScanX `.collinearity` files for legacy runs.
+    Drops the previous synteny_ids.txt line-count input (counted any
+    minimap2 hit, not actual collinearity blocks — bead -ce4/-mqt).
+
+    Bead -ce4 fix: log-scale via _rank_candidates_lib.normalize_synteny_counts;
+    returns ``None`` per gene when max anchor count is degenerate (<5),
+    so the composite-score evidence-completeness multiplier handles it
+    correctly (no spurious 1.0 scores for trivial mapping hits).
     """
-    Load synteny data and compute quantitative scores.
+    counts: dict = {}
 
-    Returns dict: gene_id -> synteny_score (0.0 to 1.0)
-    """
-    synteny_scores = {}
-    anchor_counts = {}
-    max_anchors = 1
+    # Preferred: JCVI per-gene anchors CSV (produced by 06_synteny_and_mapping.sh)
+    jcvi_csv_env = os.getenv("SYNTENY_ANCHORS_CSV", "")
+    candidate_csvs = []
+    if jcvi_csv_env:
+        candidate_csvs.append(jcvi_csv_env)
+    if synteny_dir:
+        candidate_csvs.append(os.path.join(synteny_dir, "jcvi_anchors_per_gene.csv"))
 
-    # Load synteny IDs file
-    synteny_ids_file = os.path.join(synteny_dir, 'synteny_ids.txt')
-    if os.path.exists(synteny_ids_file):
-        with open(synteny_ids_file) as f:
-            for line in f:
-                gene_id = line.strip()
-                if gene_id:
-                    anchor_counts[gene_id] = anchor_counts.get(gene_id, 0) + 1
-                    max_anchors = max(max_anchors, anchor_counts[gene_id])
-
-    # Load collinearity files for more detailed scoring
-    for collin_file in Path(synteny_dir).glob('*.collinearity'):
+    for csv_path in candidate_csvs:
+        if not csv_path or not os.path.exists(csv_path):
+            continue
         try:
-            with open(collin_file) as f:
-                for line in f:
-                    if line.startswith('#') or not line.strip():
-                        continue
-                    parts = line.strip().split()
-                    if len(parts) >= 3:
-                        gene1, gene2 = parts[1], parts[2]
-                        anchor_counts[gene1] = anchor_counts.get(gene1, 0) + 1
-                        anchor_counts[gene2] = anchor_counts.get(gene2, 0) + 1
-                        max_anchors = max(max_anchors, anchor_counts[gene1], anchor_counts[gene2])
+            df_anch = pd.read_csv(csv_path)
         except Exception as e:
-            print(f"Warning: Could not parse {collin_file}: {e}", file=sys.stderr)
+            print(f"Warning: Could not parse JCVI anchors CSV {csv_path}: {e}",
+                  file=sys.stderr)
+            continue
+        if "candidate_id" not in df_anch.columns:
+            continue
+        # Aggregate over all target species (per-Berghia-gene n_anchor_blocks
+        # summed across targets if multiple). Use total_anchor_genes as the
+        # raw count proxy.
+        agg_col = "total_anchor_genes" if "total_anchor_genes" in df_anch.columns \
+            else "n_anchor_blocks"
+        for _, row in df_anch.iterrows():
+            gid = row.get("candidate_id")
+            if not gid or pd.isna(gid):
+                continue
+            v = row.get(agg_col, 0)
+            if pd.isna(v):
+                continue
+            counts[gid] = counts.get(gid, 0) + int(v)
+        if counts:
+            print(f"Loaded JCVI synteny anchors for {len(counts)} candidates "
+                  f"from {csv_path}", file=sys.stderr)
+            break  # first non-empty CSV wins
 
-    # Normalize to 0-1 range
-    for gene_id, count in anchor_counts.items():
-        synteny_scores[gene_id] = count / max_anchors
+    # Legacy fallback: MCScanX .collinearity files
+    if not counts and synteny_dir:
+        for collin_file in Path(synteny_dir).glob('*.collinearity'):
+            try:
+                with open(collin_file) as f:
+                    for line in f:
+                        if line.startswith('#') or not line.strip():
+                            continue
+                        parts = line.strip().split()
+                        if len(parts) >= 3:
+                            gene1, gene2 = parts[1], parts[2]
+                            counts[gene1] = counts.get(gene1, 0) + 1
+                            counts[gene2] = counts.get(gene2, 0) + 1
+            except Exception as e:
+                print(f"Warning: Could not parse {collin_file}: {e}", file=sys.stderr)
 
-    return synteny_scores
+    if not counts:
+        return {}
+
+    # Use the unit-tested log-scale normalizer; returns None per gene when
+    # the dataset is degenerate (max < 5 anchors).
+    normalized = normalize_synteny_counts(counts, min_max_anchors=5)
+    # Filter out None values; the composite-score function treats absence
+    # as "no synteny data" via has_synteny_data flag, so we only return
+    # genes with concrete scores here.
+    return {k: v for k, v in normalized.items() if v is not None}
 
 
 synteny_scores = load_synteny_scores(synteny_dir)
