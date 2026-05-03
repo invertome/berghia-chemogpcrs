@@ -102,8 +102,39 @@ run_command "rank_candidates" python3 "${SCRIPTS_DIR}/rank_candidates.py" \
     "${RESULTS_DIR}/synteny" \
     "${RESULTS_DIR}/ranking/ranked_candidates_sorted.csv"
 
+# Bead -xqz: HCR-friendliness diagnostic columns (cds_length_bp,
+# paralog_min_identity, hcr_probe_friendly). Augments the ranked CSV in place.
+HCR_AUG_INPUT="${RESULTS_DIR}/ranking/ranked_candidates_sorted.csv"
+if [ -f "$HCR_AUG_INPUT" ]; then
+    HCR_ALIGNMENT="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa"
+    [ -f "$HCR_ALIGNMENT" ] || HCR_ALIGNMENT=""
+    HCR_CDS="${GENOME_CDS:-}"
+    [ -f "$HCR_CDS" ] || HCR_CDS=""
+    python3 "${SCRIPTS_DIR}/add_hcr_columns.py" \
+        --ranked-csv "$HCR_AUG_INPUT" \
+        --cds-fasta "$HCR_CDS" \
+        --alignment "$HCR_ALIGNMENT" \
+        --out "$HCR_AUG_INPUT" \
+        2>> "${LOGS_DIR}/hcr_columns.err" \
+        || log --level=WARN "HCR-friendliness column augmentation failed (kept original CSV)"
+fi
+
 # Generate plots
 python3 "${SCRIPTS_DIR}/plot_ranking.py" "${RESULTS_DIR}/ranking/ranked_candidates_sorted.csv" "${RESULTS_DIR}/ranking/ranking_plot" || log "Warning: Ranking plot failed"
+
+# Bead -edx: positive-control HCR-validated genes sanity check.
+# Non-fatal — pipeline continues regardless of result, but the alert is
+# logged + emitted to results/ranking/positive_controls_check.tsv.
+HCR_CONTROLS_CSV="${REFERENCE_DIR}/hcr_positive_controls.csv"
+if [ -f "$HCR_CONTROLS_CSV" ]; then
+    log "Running positive-control HCR sanity check..."
+    python3 "${SCRIPTS_DIR}/check_positive_controls.py" \
+        --ranked-csv "${RESULTS_DIR}/ranking/ranked_candidates_sorted.csv" \
+        --controls-csv "$HCR_CONTROLS_CSV" \
+        --out "${RESULTS_DIR}/ranking/positive_controls_check.tsv" \
+        --alert-percentile 50 \
+        || log --level=WARN "Positive-control check returned a non-zero exit"
+fi
 
 # Create completion flag
 touch "${RESULTS_DIR}/step_completed_07.txt"

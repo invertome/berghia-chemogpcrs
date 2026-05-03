@@ -1,0 +1,2 @@
+gene_name,aliases,refseq_protein,expected_tissue,validation_method,notes
+Galpha_olf,GNAL;Gαolf;G-alpha-olf,,rhinophore,HCR,"User example: highly expressed in rhinophores of fed slugs by HCR; absent from this dataset's starved-slug RNA-seq. Functions as olfactory G-protein alpha subunit. Add Berghia RefSeq protein ID once annotated. Append future HCR-validated chemoreceptors here as wet-lab data accumulates."

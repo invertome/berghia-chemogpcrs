@@ -27,7 +27,12 @@ databases/
 custom_hmms/
 
 # Reference sequences (large, user-provided)
-references/
+# Use glob (not bare dirname) so individual exception files below can match.
+references/*
+references/**/*
+# Exceptions: small curated reference CSVs maintained in-repo
+!references/hcr_positive_controls.csv
+!references/cummins2009_aplysia_chemoreceptors.csv
 
 # Transcriptomes and genomes (large, user-provided)
 transcriptomes/

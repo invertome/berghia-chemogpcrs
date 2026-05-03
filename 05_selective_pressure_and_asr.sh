@@ -303,7 +303,19 @@ if [ "$taxa_count" -gt 1 ] && [ "$HYPHY_AVAILABLE" = true ]; then
         if find_nucleotide_sequences "$protein_align" "$nuc_align"; then
             # Create codon alignment
             codon_file="${RESULTS_DIR}/selective_pressure/${base}_codon.phy"
-            run_command "${base}_codon" --stdout="$codon_file" pal2nal.pl "$protein_align" "$nuc_align" -output paml
+            # Bead -i61: codon-aware MSA via MACSE v2 (preferred for
+            # frame-fragile miniprot-recovered CDS), falling back to pal2nal
+            # naive back-translation if MACSE unavailable / disabled.
+            if [ "${RUN_MACSE:-1}" = "1" ] \
+               && [ -n "${MACSE_JAR:-}" ] && [ -f "${MACSE_JAR:-}" ]; then
+                bash "${SCRIPTS_DIR}/run_macse.sh" \
+                    --input="$nuc_align" --output="$codon_file" \
+                    2>> "${LOGS_DIR}/macse_${base}.err" \
+                    || run_command "${base}_codon" --stdout="$codon_file" \
+                        pal2nal.pl "$protein_align" "$nuc_align" -output paml
+            else
+                run_command "${base}_codon" --stdout="$codon_file" pal2nal.pl "$protein_align" "$nuc_align" -output paml
+            fi
 
             # Validate codon alignment (checks PAML format, codon structure, internal stops)
             if validate_codon_alignment "$codon_file"; then

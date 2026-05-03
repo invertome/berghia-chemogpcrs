@@ -236,6 +236,14 @@ with open('${REF_CATEGORIES_FINAL}', 'a') as f:
         log --level=WARN "Proceeding despite alignment resource warning"
 
     run_command "all_berghia_refs_mafft" --stdout="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" ${MAFFT} --retree 2 --thread "${CPUS}" "$COMBINED"
+    # Bead -i61: per-sequence segment cleaning before column-trimming.
+    if [ "${RUN_HMMCLEANER:-1}" = "1" ]; then
+        bash "${SCRIPTS_DIR}/run_hmmcleaner.sh" \
+            --input="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" \
+            --output="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" \
+            2>> "${LOGS_DIR}/hmmcleaner_global.err" \
+            || log --level=WARN "HmmCleaner failed for global alignment (continuing with un-cleaned)"
+    fi
     check_alignment "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" || { log "Error: Alignment quality check failed"; exit 1; }
     run_command "all_berghia_refs_clipkit" ${CLIPKIT} "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" -m smart-gap -o "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa"
 
@@ -337,6 +345,14 @@ og=$(find "${RESULTS_DIR}/orthogroups" -name "${base}.fa" -type f 2>/dev/null | 
 
 if [ ! -f "${RESULTS_DIR}/step_completed_${base}_iqtree.txt" ]; then
     run_command "${base}_mafft" --stdout="${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" ${MAFFT} --retree 2 --thread "${CPUS}" "$og"
+    # Bead -i61: HmmCleaner segment-clean per OG before column-trim.
+    if [ "${RUN_HMMCLEANER:-1}" = "1" ]; then
+        bash "${SCRIPTS_DIR}/run_hmmcleaner.sh" \
+            --input="${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" \
+            --output="${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" \
+            2>> "${LOGS_DIR}/hmmcleaner_${base}.err" \
+            || log --level=WARN "HmmCleaner failed for ${base} (continuing with un-cleaned)"
+    fi
     check_alignment "${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" || { log "Error: Alignment quality check failed for ${base}"; exit 1; }
     run_command "${base}_trimal" ${TRIMAL} -in "${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" -out "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa" -automated1
 
