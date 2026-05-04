@@ -37,10 +37,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Set
 from dataclasses import dataclass
 from collections import defaultdict
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
+# dotenv is optional: only needed to load NCBI_API_KEY / NCBI_EMAIL from a
+# local .env file. On HPC, those should be set as env vars in the sbatch
+# script directly, so we make the import tolerant of missing dotenv.
+try:
+    from dotenv import load_dotenv  # noqa: F401
+    load_dotenv()
+except ImportError:
+    pass  # No .env support; rely on os.environ values set by the shell.
 
 
 @dataclass

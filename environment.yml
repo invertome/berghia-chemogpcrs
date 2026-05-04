@@ -73,6 +73,9 @@ dependencies:
     - scipy>=1.11
     - requests>=2.28.0
     - statsmodels>=0.13
+    # Used by scripts/fetch_reference_cds.py to load NCBI_API_KEY / NCBI_EMAIL
+    # from a local .env file. Optional (script falls back to plain os.environ).
+    - python-dotenv>=1.0
     # Bead -ar8: gffutils for tandem-cluster GFF parsing
     - gffutils>=0.13
     # Bead -e59: JCVI MCscan (Tang et al. 2024 iMeta 3:e211) — synteny via
