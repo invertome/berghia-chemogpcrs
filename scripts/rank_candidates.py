@@ -331,6 +331,99 @@ def benjamini_hochberg(pvalues):
 
 dnds_data = load_absrel_with_fdr(selective_dir)
 
+
+# --- Load BUSTED-S / BUSTED-MH / MEME OG-level signals (bead -urk) ---
+def load_busted_signals(selective_dir):
+    """Load per-OG BUSTED-S, BUSTED-MH, and MEME aggregate CSVs.
+
+    Returns dict: og_name -> {
+        busted_s_p, busted_s_significant,
+        busted_mh_p, busted_mh_significant,
+        meme_n_episodic, meme_fraction_episodic, meme_n_total,
+    }
+    Missing files / OGs default to NaN / False.
+    """
+    out = {}
+    for fname, key_p, key_sig in [
+        ('busted_s_results.csv', 'busted_s_p', 'busted_s_significant'),
+        ('busted_mh_results.csv', 'busted_mh_p', 'busted_mh_significant'),
+    ]:
+        path = os.path.join(selective_dir, fname)
+        if not os.path.exists(path):
+            continue
+        try:
+            df_b = pd.read_csv(path)
+        except Exception as e:
+            print(f"Warning: could not parse {path}: {e}", file=sys.stderr)
+            continue
+        for _, r in df_b.iterrows():
+            og = r.get('og_name', '')
+            if not og or pd.isna(og):
+                continue
+            entry = out.setdefault(og, {})
+            entry[key_p] = float(r.get('p_value')) if pd.notna(r.get('p_value')) else float('nan')
+            entry[key_sig] = bool(int(r.get('is_significant', 0)))
+
+    meme_path = os.path.join(selective_dir, 'meme_results.csv')
+    if os.path.exists(meme_path):
+        try:
+            df_m = pd.read_csv(meme_path)
+            for _, r in df_m.iterrows():
+                og = r.get('og_name', '')
+                if not og or pd.isna(og):
+                    continue
+                entry = out.setdefault(og, {})
+                entry['meme_n_total'] = int(r.get('n_sites_total', 0) or 0)
+                entry['meme_n_episodic'] = int(r.get('n_sites_episodic', 0) or 0)
+                entry['meme_fraction_episodic'] = float(r.get('fraction_episodic', 0.0) or 0.0)
+        except Exception as e:
+            print(f"Warning: could not parse {meme_path}: {e}", file=sys.stderr)
+
+    if out:
+        n_busted_s_sig = sum(1 for v in out.values() if v.get('busted_s_significant'))
+        n_busted_mh_sig = sum(1 for v in out.values() if v.get('busted_mh_significant'))
+        n_meme_pos = sum(1 for v in out.values() if v.get('meme_n_episodic', 0) > 0)
+        print(f"Loaded BUSTED/MEME signals for {len(out)} OGs "
+              f"(BUSTED-S sig: {n_busted_s_sig}, BUSTED-MH sig: {n_busted_mh_sig}, "
+              f"MEME with >=1 episodic site: {n_meme_pos})", file=sys.stderr)
+    return out
+
+
+busted_meme_signals = load_busted_signals(selective_dir)
+
+
+# --- Load CDS provenance manifest (bead -325) ---
+def load_cds_provenance_map(path):
+    """Return dict seq_id -> source ('native' | 'miniprot' | 'unknown')."""
+    if not path or not os.path.exists(path):
+        return {}
+    try:
+        df_prov = pd.read_csv(path)
+    except Exception as e:
+        print(f"Warning: could not parse CDS provenance {path}: {e}",
+              file=sys.stderr)
+        return {}
+    out = {}
+    for _, r in df_prov.iterrows():
+        sid = r.get('seq_id', '')
+        src = r.get('source', '')
+        if sid and not pd.isna(sid):
+            out[str(sid)] = str(src) if src and not pd.isna(src) else 'unknown'
+    if out:
+        n_miniprot = sum(1 for v in out.values() if v == 'miniprot')
+        n_native = sum(1 for v in out.values() if v == 'native')
+        print(f"Loaded CDS provenance for {len(out)} sequences "
+              f"(native={n_native}, miniprot={n_miniprot})", file=sys.stderr)
+    return out
+
+
+CDS_PROVENANCE_CSV = os.environ.get(
+    'CDS_PROVENANCE_CSV',
+    os.path.join(os.environ.get('RESULTS_DIR', ''),
+                 'reference_sequences', 'cds_provenance.csv') if os.environ.get('RESULTS_DIR') else ''
+)
+cds_provenance_map = load_cds_provenance_map(CDS_PROVENANCE_CSV)
+
 # --- Load Synteny Data (Quantitative) ---
 def load_synteny_scores(synteny_dir):
     """Load synteny anchor counts and produce per-gene scores in (0, 1].
@@ -1536,6 +1629,43 @@ for cand_id in candidates['id']:
     # Selection scores (separate purifying and positive)
     purifying_score, positive_score, selection_significant = get_selection_scores(cand_id, dnds_data)
 
+    # Bead -urk: BUSTED-S/MH gene-wide signal + MEME site-level signal for
+    # this candidate's OG. These are SUPPLEMENTARY to the per-branch aBSREL
+    # signal — they don't get their own axis weight (which would compound
+    # with positive_score), but a small multiplicative boost (up to 1.3x) is
+    # applied to positive_score when the gene-wide BUSTED tests independently
+    # confirm aBSREL's branch-level signal. This is the "two-test agreement"
+    # heuristic — credible only when both tests fire.
+    cand_og = gene_to_orthogroup.get(cand_id, None)
+    # Bead -325: CDS provenance — Berghia gets 'native' (RefSeq genome
+    # annotation); reference candidates get whatever the manifest says.
+    if cds_provenance_map:
+        cds_source = cds_provenance_map.get(cand_id, 'native')
+    else:
+        cds_source = 'unknown'
+    busted_s_p = float('nan')
+    busted_mh_p = float('nan')
+    busted_s_sig = False
+    busted_mh_sig = False
+    meme_n_episodic = 0
+    meme_fraction_episodic = 0.0
+    if cand_og and cand_og in busted_meme_signals:
+        sig = busted_meme_signals[cand_og]
+        busted_s_p = float(sig.get('busted_s_p', float('nan')))
+        busted_mh_p = float(sig.get('busted_mh_p', float('nan')))
+        busted_s_sig = bool(sig.get('busted_s_significant', False))
+        busted_mh_sig = bool(sig.get('busted_mh_significant', False))
+        meme_n_episodic = int(sig.get('meme_n_episodic', 0))
+        meme_fraction_episodic = float(sig.get('meme_fraction_episodic', 0.0))
+        # Boost: BUSTED-MH is the strictest test; positive selection that
+        # survives MH correction is the most credible. aBSREL alone can be
+        # tricked by short branches; BUSTED + MEME confirmation is the
+        # paper-publishable signal.
+        if selection_significant and busted_mh_sig:
+            positive_score *= 1.3
+        elif selection_significant and busted_s_sig:
+            positive_score *= 1.15
+
     # Synteny score (quantitative)
     synteny_score, has_synteny = get_synteny_score(cand_id, synteny_scores)
 
@@ -1601,6 +1731,14 @@ for cand_id in candidates['id']:
         'purifying_score': purifying_score,
         'positive_score': positive_score,
         'selection_significant': selection_significant,
+        # Bead -urk: BUSTED/MEME diagnostic columns (read from selection-stack
+        # outputs; used to boost positive_score on two-test agreement).
+        'busted_s_p': busted_s_p,
+        'busted_s_significant': busted_s_sig,
+        'busted_mh_p': busted_mh_p,
+        'busted_mh_significant': busted_mh_sig,
+        'meme_n_episodic_sites': meme_n_episodic,
+        'meme_fraction_episodic_sites': meme_fraction_episodic,
         'synteny_score': synteny_score,
         'has_synteny_data': has_synteny,
         'expression_score': expr_score,
@@ -1623,6 +1761,8 @@ for cand_id in candidates['id']:
         'tandem_cluster_size': tandem_size if tandem_size is not None else 0,
         'tandem_cluster_id': tandem_cluster_label or '',
         'has_tandem_cluster_data': has_tandem,
+        # Bead -325: CDS provenance
+        'cds_source': cds_source,
         'evidence_completeness': evidence_completeness
     })
 
@@ -1763,6 +1903,9 @@ df_sorted = df.sort_values('rank_score', ascending=False)
 output_cols = [
     'id', 'rank_score', 'confidence_tier', 'evidence_completeness',
     'phylo_score', 'purifying_score', 'positive_score', 'selection_significant',
+    # Bead -urk: BUSTED/MEME diagnostic columns
+    'busted_s_p', 'busted_s_significant', 'busted_mh_p', 'busted_mh_significant',
+    'meme_n_episodic_sites', 'meme_fraction_episodic_sites',
     'synteny_score', 'has_synteny_data', 'expression_score', 'has_expression_data',
     'lse_depth_score', 'raw_tree_depth',
     # NEW: Phase 1-5 scores
@@ -1774,6 +1917,8 @@ output_cols = [
     # Bead -ar8: tandem cluster columns
     'tandem_cluster_score', 'tandem_cluster_size', 'tandem_cluster_id',
     'has_tandem_cluster_data',
+    # Bead -325: CDS provenance (native vs miniprot-recovered)
+    'cds_source',
 ]
 
 # Ensure all output columns exist (fill missing with defaults)
@@ -1970,6 +2115,9 @@ if RUN_CROSSVAL and len(ref_ids) >= CROSSVAL_FOLDS:
 output_cols = [
     'id', 'rank_score', 'confidence_tier', 'evidence_completeness',
     'phylo_score', 'purifying_score', 'positive_score', 'selection_significant',
+    # Bead -urk: BUSTED/MEME diagnostic columns
+    'busted_s_p', 'busted_s_significant', 'busted_mh_p', 'busted_mh_significant',
+    'meme_n_episodic_sites', 'meme_fraction_episodic_sites',
     'synteny_score', 'has_synteny_data', 'expression_score', 'has_expression_data',
     'lse_depth_score', 'raw_tree_depth',
     # NEW: Phase 1-5 scores
@@ -1981,6 +2129,8 @@ output_cols = [
     # Bead -ar8: tandem cluster columns
     'tandem_cluster_score', 'tandem_cluster_size', 'tandem_cluster_id',
     'has_tandem_cluster_data',
+    # Bead -325: CDS provenance (native vs miniprot-recovered)
+    'cds_source',
 ]
 
 if sensitivity_results and 'rank_stability' in df_sorted.columns:

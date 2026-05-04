@@ -95,3 +95,55 @@ hyphy meme \
     || log --level=WARN "MEME failed for ${OG_BASE}"
 
 log "Selection stack complete for ${OG_BASE}"
+
+# Auto-parse BUSTED-S, BUSTED-MH, MEME JSONs to per-OG CSVs, appended to
+# the cumulative results files that rank_candidates.py reads. Each parser
+# is idempotent (atomic per-OG; concat happens here).
+SCRIPTS_DIR="${SCRIPTS_DIR:-${PROJECT_DIR}/scripts}"
+
+if [ -f "$OUT_DIR/${OG_BASE}_busted_s.json" ]; then
+    python3 "$SCRIPTS_DIR/parse_busted.py" \
+        --json "$OUT_DIR/${OG_BASE}_busted_s.json" \
+        --og-name "$OG_BASE" --variant S \
+        --out "$OUT_DIR/${OG_BASE}_busted_s.csv" \
+        2>>"$OUT_DIR/parse_busted_s.log" || true
+fi
+if [ -f "$OUT_DIR/${OG_BASE}_busted_mh.json" ]; then
+    python3 "$SCRIPTS_DIR/parse_busted.py" \
+        --json "$OUT_DIR/${OG_BASE}_busted_mh.json" \
+        --og-name "$OG_BASE" --variant MH \
+        --out "$OUT_DIR/${OG_BASE}_busted_mh.csv" \
+        2>>"$OUT_DIR/parse_busted_mh.log" || true
+fi
+if [ -f "$OUT_DIR/${OG_BASE}_meme.json" ]; then
+    python3 "$SCRIPTS_DIR/parse_meme.py" \
+        --json "$OUT_DIR/${OG_BASE}_meme.json" \
+        --og-name "$OG_BASE" \
+        --out-og "$OUT_DIR/${OG_BASE}_meme.csv" \
+        --out-sites "$OUT_DIR/${OG_BASE}_meme_sites.csv" \
+        2>>"$OUT_DIR/parse_meme.log" || true
+fi
+
+# Concatenate per-OG CSVs into the cumulative results consumed by
+# rank_candidates.py (fast, atomic; safe to redo each invocation).
+for variant in busted_s busted_mh meme; do
+    cum="$OUT_DIR/${variant}_results.csv"
+    : > "${cum}.tmp"
+    first=1
+    for csv in "$OUT_DIR"/*_${variant}.csv; do
+        [ -f "$csv" ] || continue
+        # Skip sites variant of MEME (different schema)
+        case "$csv" in *_meme_sites.csv) continue ;; esac
+        if [ "$first" = "1" ]; then
+            cat "$csv" >> "${cum}.tmp"
+            first=0
+        else
+            tail -n +2 "$csv" >> "${cum}.tmp"
+        fi
+    done
+    if [ -s "${cum}.tmp" ]; then
+        mv "${cum}.tmp" "$cum"
+    else
+        rm -f "${cum}.tmp"
+    fi
+done
