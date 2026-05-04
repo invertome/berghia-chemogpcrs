@@ -111,6 +111,15 @@ export ASR_BACKEND="${ASR_BACKEND:-iqtree}"
 export SYNTENY_BACKEND="${SYNTENY_BACKEND:-jcvi}"
 # Bead -6nh: TM predictor primary
 export TM_PREDICTOR_PRIMARY="${TM_PREDICTOR_PRIMARY:-tmbed}"
+
+# --- Local overrides (gitignored) ---
+# Allow per-machine config (real SLURM_EMAIL, custom paths, etc.) without
+# committing personal info to public git history. Source last so it
+# overrides anything defined above.
+if [ -f "${BASE_DIR}/config.local.sh" ]; then
+    # shellcheck disable=SC1091
+    source "${BASE_DIR}/config.local.sh"
+fi
 export RSCRIPT="Rscript"
 export INTERPROSCAN="interproscan.sh"
 
@@ -139,9 +148,15 @@ export MCL="mcl"
 
 # --- SLURM Configuration ---
 # Basic job parameters
-export DEFAULT_TIME="24:00:00"
-export DEFAULT_MEM="64G"
-export SLURM_EMAIL="your.email@example.com"
+export DEFAULT_TIME="${DEFAULT_TIME:-24:00:00}"
+export DEFAULT_MEM="${DEFAULT_MEM:-64G}"
+# Bead -unity: QOS for long-running jobs on Unity. 'long' QOS allows up to
+# 14 days on the cpu partition (default 2 days). Always give jobs more
+# walltime than estimated to absorb transient slowdowns.
+export SLURM_QOS="${SLURM_QOS:-long}"
+# Override via config.local.sh (gitignored) or env var to avoid putting
+# personal email in public git history.
+export SLURM_EMAIL="${SLURM_EMAIL:-your.email@example.com}"
 
 # Cluster-specific options (leave empty to omit from sbatch)
 export SLURM_PARTITION=""           # Partition/queue name, e.g., "cpu", "gpu", "highmem"

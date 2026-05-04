@@ -68,6 +68,9 @@ __pycache__/
 # API keys and credentials
 credentials/
 secrets/
+
+# Local-only config overrides (e.g. real SLURM_EMAIL, machine-specific paths)
+config.local.sh
 docs/plans/2026-02-26-pipeline-improvements-design.md
 docs/plans/2026-02-26-pipeline-improvements.md
 tools/deeptmhmm/
