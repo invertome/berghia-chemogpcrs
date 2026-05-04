@@ -9,7 +9,7 @@
 #   1. Apptainer SIF container (DEEPTMHMM_SIF or containers/deeptmhmm.sif)
 #   2. Local venv installation (tools/deeptmhmm with .venv)
 #   3. System deeptmhmm binary
-#   4. biolib CLI
+#   4. Phobius (HMM-based, local, bioconda)
 #   5. Kyte-Doolittle fallback — DISABLED by default (set
 #      ALLOW_KD_FALLBACK=1 to opt in; produces less accurate results,
 #      should NEVER be the silent default in a production pipeline run).
@@ -167,25 +167,46 @@ if command -v deeptmhmm &>/dev/null; then
     rm -rf "$DTMHMM_OUT"
 fi
 
-# --- Strategy 4: biolib CLI ---
-if command -v biolib &>/dev/null; then
-    echo "Using biolib DeepTMHMM" >&2
-    BIOLIB_OUT="${OUTPUT_DIR}/biolib_output"
-    mkdir -p "$BIOLIB_OUT"
-    (cd "$BIOLIB_OUT" && biolib run DTU/DeepTMHMM --fasta "$FASTA") 2>/dev/null
-    if [ -f "$BIOLIB_OUT/predicted_topologies.3line" ]; then
-        cp "$BIOLIB_OUT/predicted_topologies.3line" "$OUTPUT_DIR/predicted_topologies.3line"
-        [ -f "$BIOLIB_OUT/TMRs.gff3" ] && \
-            cp "$BIOLIB_OUT/TMRs.gff3" "$OUTPUT_DIR/TMRs.gff3"
-        generate_prediction_tsv "$OUTPUT_DIR/predicted_topologies.3line" "$OUTPUT_DIR/prediction"
-        if [ -f "$OUTPUT_DIR/prediction" ]; then
-            record_predictor "deeptmhmm-biolib"
-            rm -rf "$BIOLIB_OUT"
+# --- Strategy 4: Phobius (HMM-based; bioconda; fast local fallback) ---
+# DROPPED: biolib CLI (it makes a remote API call to biolib.com — slow,
+# rate-limited, network-dependent). For batch HPC use we want only LOCAL
+# predictors. Phobius (Käll et al. 2007) is HMM-based — older but reliable
+# and trivial to install via bioconda.
+if command -v phobius &>/dev/null; then
+    echo "Using Phobius (HMM-based, local)" >&2
+    PHOBIUS_OUT="${OUTPUT_DIR}/phobius.txt"
+    if phobius -short "$FASTA" > "$PHOBIUS_OUT" 2>"${OUTPUT_DIR}/phobius.log"; then
+        # Phobius -short emits one line per sequence: NAME TM SP PREDICTION
+        # Convert to DeepTMHMM-compatible 3-line + prediction TSV.
+        python3 - "$PHOBIUS_OUT" "$OUTPUT_DIR/prediction" "$OUTPUT_DIR/predicted_topologies.3line" <<'PYEOF'
+import sys
+short, pred_tsv, three_line = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(short) as f, open(pred_tsv, 'w') as out_pred, open(three_line, 'w') as out_3l:
+    for line in f:
+        line = line.strip()
+        if not line or line.startswith('SEQENCE'):
+            continue
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        name, tm_count, sp = parts[0], parts[1], parts[2]
+        topology_str = ' '.join(parts[3:])
+        # DeepTMHMM-compatible 5-col TSV
+        try:
+            n_tm = int(tm_count)
+        except ValueError:
+            n_tm = 0
+        pred_type = 'TM' if n_tm > 0 else 'GLOB'
+        out_pred.write(f"{name}\t{pred_type}\t1.0\t\t{n_tm}\n")
+        # 3-line approximation: header / sequence (unknown) / topology-string
+        out_3l.write(f">{name}\nN\n{topology_str}\n")
+PYEOF
+        if [ -s "$OUTPUT_DIR/prediction" ]; then
+            record_predictor "phobius"
             exit 0
         fi
     fi
-    echo "Warning: biolib DeepTMHMM output not in expected format" >&2
-    rm -rf "$BIOLIB_OUT"
+    echo "Warning: Phobius failed; trying next strategy" >&2
 fi
 
 # --- Strategy 5: Kyte-Doolittle (DISABLED unless explicitly opted in) ---
@@ -210,16 +231,18 @@ fi
 # --- No predictor available ---
 echo "" >&2
 echo "ERROR: No TM predictor available. Tried (in order):" >&2
-[ "$TM_PREDICTOR_PRIMARY" = "tmbed" ] && echo "  - TMbed (preferred)" >&2
+[ "$TM_PREDICTOR_PRIMARY" = "tmbed" ] && echo "  - TMbed (preferred, local)" >&2
 echo "  - Apptainer DeepTMHMM container ($SIF)" >&2
 echo "  - Local DeepTMHMM venv ($DTMHMM_INSTALL)" >&2
 echo "  - System 'deeptmhmm' binary" >&2
-echo "  - biolib CLI" >&2
+echo "  - Phobius (HMM-based, local)" >&2
 echo "" >&2
-echo "Install one of the following:" >&2
-echo "  pip install tmbed   # Preferred (current SOTA, +9pp recall)" >&2
-echo "  pip install pybiolib && biolib run DTU/DeepTMHMM ..." >&2
-echo "  Or build the Apptainer SIF (see docs/installation.md)" >&2
+echo "Install one of the following (LOCAL — no remote APIs):" >&2
+echo "  # TMbed (preferred, current SOTA, +9pp recall):" >&2
+echo "  git clone https://github.com/BernhoferM/TMbed && pip install ./TMbed" >&2
+echo "  # Phobius (fast HMM-based fallback, bioconda):" >&2
+echo "  conda install -c bioconda phobius" >&2
+echo "  # DeepTMHMM Apptainer (build SIF — see docs/installation_hpc.md)" >&2
 echo "" >&2
 echo "If you absolutely must run without a real predictor for testing," >&2
 echo "set ALLOW_KD_FALLBACK=1 (Kyte-Doolittle is significantly less accurate" >&2
