@@ -35,7 +35,23 @@ if [ "$FORCE_RERUN" = false ]; then
     skip_if_completed "notung_reconciliation"
 fi
 
-log "Starting NOTUNG gene tree reconciliation"
+log "Starting gene tree reconciliation"
+
+# Bead -30g: RECONCILIATION_BACKEND=generax (default) uses GeneRax
+# (Morel 2020 MBE 37:2763) which estimates joint phylogenetic +
+# reconciliation likelihoods. RECONCILIATION_BACKEND=notung is the legacy
+# parsimony-style fallback. We auto-fall-back to Notung when GeneRax
+# is not installed.
+RECONCILIATION_BACKEND="${RECONCILIATION_BACKEND:-generax}"
+GENERAX_BIN="${GENERAX:-generax}"
+if [ "$RECONCILIATION_BACKEND" = "generax" ]; then
+    if ! command -v "$GENERAX_BIN" &>/dev/null; then
+        log --level=WARN "GeneRax binary '$GENERAX_BIN' not found; falling back to Notung."
+        log --level=WARN "Install GeneRax: see docs/installation_hpc.md"
+        RECONCILIATION_BACKEND="notung"
+    fi
+fi
+log "Reconciliation backend: $RECONCILIATION_BACKEND"
 
 # --- Check Dependencies ---
 # Step 04 creates step_completed_04.txt
@@ -75,7 +91,45 @@ fi
 TREE_COUNT=$(echo "$GENE_TREES" | wc -l)
 log "Found ${TREE_COUNT} gene trees to reconcile"
 
-# --- Check for NOTUNG ---
+# --- GeneRax branch (preferred when binary available) ---
+if [ "$RECONCILIATION_BACKEND" = "generax" ]; then
+    GENERAX_OUT="${RESULTS_DIR}/reconciliation/generax"
+    mkdir -p "$GENERAX_OUT"
+    # Build a minimal families.txt: one entry per gene tree.
+    FAMILIES_TXT="$GENERAX_OUT/families.txt"
+    {
+        echo "[FAMILIES]"
+        for tree in $GENE_TREES; do
+            base=$(basename "$tree" .treefile)
+            base="${base%.tre}"
+            # Locate matching alignment + gene-species mapping
+            aln=""
+            for cand in "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa" \
+                        "${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa"; do
+                [ -f "$cand" ] && { aln="$cand"; break; }
+            done
+            [ -z "$aln" ] && continue
+            echo "- $base"
+            echo "starting_gene_tree = $tree"
+            echo "alignment = $aln"
+            echo "subst_model = LG+G"
+        done
+    } > "$FAMILIES_TXT"
+    log "Submitting GeneRax with $TREE_COUNT families"
+    bash "${SCRIPTS_DIR}/hpc/run_generax.sh" "$FAMILIES_TXT" \
+        2>> "${LOGS_DIR}/generax.err" \
+        || { log --level=WARN "GeneRax failed; falling back to Notung."; \
+             RECONCILIATION_BACKEND="notung"; }
+    if [ "$RECONCILIATION_BACKEND" = "generax" ]; then
+        # Success — emit completion flag and exit
+        touch "${RESULTS_DIR}/step_completed_notung_reconciliation.txt"
+        create_checkpoint "notung_reconciliation"
+        log "GeneRax reconciliation complete -> $GENERAX_OUT"
+        exit 0
+    fi
+fi
+
+# --- Check for NOTUNG (legacy fallback) ---
 NOTUNG_JAR=""
 if [ -f "${BASE_DIR}/tools/Notung-2.9.jar" ]; then
     NOTUNG_JAR="${BASE_DIR}/tools/Notung-2.9.jar"

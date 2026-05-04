@@ -319,15 +319,26 @@ if [ "$taxa_count" -gt 1 ] && [ "$HYPHY_AVAILABLE" = true ]; then
 
             # Validate codon alignment (checks PAML format, codon structure, internal stops)
             if validate_codon_alignment "$codon_file"; then
-                # Run aBSREL
-                run_command "${base}_absrel" hyphy aBSREL --alignment "$codon_file" --tree "$tree" --output "${RESULTS_DIR}/selective_pressure/${base}_absrel.json"
+                # Bead -urk: SELECTION_BACKEND=stack (default) runs the modern
+                # HyPhy stack: GARD → BUSTED-S → BUSTED-MH → aBSREL → MEME.
+                # SELECTION_BACKEND=absrel falls back to legacy aBSREL-only
+                # (~5x faster, but no recombination screen / synonymous-rate
+                # variation / multi-hit correction / site-level inference).
+                if [ "${SELECTION_BACKEND:-stack}" = "stack" ]; then
+                    bash "${SCRIPTS_DIR}/hpc/run_selection_stack.sh" \
+                        "$codon_file" "$tree" "${base}" \
+                        2>> "${LOGS_DIR}/selection_stack_${base}.err" \
+                        || log --level=WARN "Selection stack failed for ${base} (continuing — partial outputs may be present)"
+                else
+                    run_command "${base}_absrel" hyphy aBSREL --alignment "$codon_file" --tree "$tree" --output "${RESULTS_DIR}/selective_pressure/${base}_absrel.json"
+                fi
 
-                # Parse results
+                # Parse aBSREL JSON (always — both backends produce it)
                 if [ -f "${RESULTS_DIR}/selective_pressure/${base}_absrel.json" ]; then
                     python3 "${SCRIPTS_DIR}/parse_absrel.py" "${RESULTS_DIR}/selective_pressure/${base}_absrel.json" "${RESULTS_DIR}/selective_pressure/absrel_results.csv" || log "Warning: Failed to parse aBSREL for $base"
                 fi
             else
-                log "Warning: pal2nal produced invalid codon alignment for ${base}, skipping aBSREL"
+                log "Warning: pal2nal produced invalid codon alignment for ${base}, skipping selection analysis"
             fi
         else
             log "Warning: Could not find nucleotide sequences for ${base}, skipping dN/dS analysis"

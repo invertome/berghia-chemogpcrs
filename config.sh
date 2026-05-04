@@ -83,6 +83,24 @@ export CLIPKIT="clipkit"
 export CDHIT="cd-hit"
 export CAFE="cafe5"
 export NOTUNG="java -jar ${BASE_DIR}/tools/Notung-2.9.jar"
+# Bead -30g: GeneRax (Morel 2020) replaces Notung as default reconciliation;
+# auto-falls-back to Notung when the binary is missing.
+export GENERAX="${GENERAX:-generax}"
+export RECONCILIATION_BACKEND="${RECONCILIATION_BACKEND:-generax}"
+# Bead -urk: SELECTION_BACKEND=stack runs GARD → BUSTED-S → BUSTED-MH →
+# aBSREL → MEME (modern HyPhy stack); =absrel runs aBSREL only (legacy,
+# ~5x faster but no recombination/SRV/multi-hit/site-level inference).
+export SELECTION_BACKEND="${SELECTION_BACKEND:-stack}"
+# Bead -i61: gating env vars for new alignment/cleaning tools (default ON).
+export RUN_HMMCLEANER="${RUN_HMMCLEANER:-1}"
+export RUN_MACSE="${RUN_MACSE:-1}"
+export RUN_TREESHRINK="${RUN_TREESHRINK:-1}"
+# Bead -j44: ASR backend
+export ASR_BACKEND="${ASR_BACKEND:-iqtree}"
+# Bead -e59: synteny backend
+export SYNTENY_BACKEND="${SYNTENY_BACKEND:-jcvi}"
+# Bead -6nh: TM predictor primary
+export TM_PREDICTOR_PRIMARY="${TM_PREDICTOR_PRIMARY:-tmbed}"
 export RSCRIPT="Rscript"
 export INTERPROSCAN="interproscan.sh"
 
