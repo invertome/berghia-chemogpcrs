@@ -44,6 +44,8 @@ dependencies:
   - ncbi-datasets-cli>=16.0
   # Bead -m6k null-distribution simulator
   - dendropy>=5.0
+  # Bead -iof: TreeShrink — bioconda, not PyPI (no pip wheel available)
+  - treeshrink>=1.3.9
 
   # R and packages
   - r-base>=4.3
@@ -78,7 +80,4 @@ dependencies:
     # 06_synteny_and_mapping.sh. Requires `last` and `texlive-latex-base`
     # at the system level for the catalog ortholog command and figures.
     - jcvi>=1.4.15
-    # Bead -iof: TreeShrink (Mai & Mirarab 2018, BMC Genomics 19:272) —
-    # rogue-taxon / outlier-long-branch removal applied to per-OG and
-    # global gene trees before downstream selection analysis.
-    - treeshrink>=1.3.9
+    # (Bead -iof TreeShrink moved to conda section above — no PyPI wheel.)
