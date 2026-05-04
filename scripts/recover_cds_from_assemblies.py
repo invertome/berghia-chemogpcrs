@@ -439,6 +439,12 @@ def main():
                        help='Directory for genome downloads (default: output-dir/genomes)')
     parser.add_argument('--keep-genomes', action='store_true',
                        help='Keep genome files after processing (default: delete to save space)')
+    parser.add_argument('--manifest', type=str, default=None,
+                       help='Optional CSV manifest of per-sequence CDS provenance '
+                            '(seq_id, source=miniprot, species_prefix, assembly_accession). '
+                            'Rank_candidates / parse_absrel can join on this to flag '
+                            'miniprot-recovered branches in dN/dS results (literature '
+                            'review noted potential frameshift/splice-site bias).')
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -505,6 +511,32 @@ def main():
             info = SPECIES_MAP.get(prefix, ("", "unknown", "unknown"))
             f.write(f'{prefix}\t{info[1]}\t{info[2]}\t{n}\n')
     print(f'  Report: {report}')
+
+    # Per-sequence provenance manifest (bead -325 follow-up). Rank_candidates
+    # / parse_absrel can join on this to flag miniprot-recovered branches
+    # in dN/dS results (literature review flagged frameshift / splice-site
+    # bias risk for back-translated CDS).
+    if args.manifest:
+        os.makedirs(os.path.dirname(args.manifest) or '.', exist_ok=True)
+        # Append-mode if file exists with the right header (multi-run safe);
+        # otherwise create.
+        write_header = not (os.path.exists(args.manifest)
+                            and open(args.manifest).readline().startswith('seq_id'))
+        with open(args.manifest, 'a') as out:
+            if write_header:
+                out.write('seq_id,source,species_prefix,assembly_accession,recovery_method\n')
+            for prefix, n in results:
+                if n <= 0:
+                    continue
+                info = SPECIES_MAP.get(prefix, ("", "", ""))
+                species_cds = os.path.join(args.output_dir, f'{prefix}_cds.fna')
+                if not os.path.exists(species_cds):
+                    continue
+                for line in open(species_cds):
+                    if line.startswith('>'):
+                        sid = line[1:].split()[0]
+                        out.write(f'{sid},miniprot,{prefix},{info[2]},miniprot+ncbi-datasets\n')
+        print(f'  Manifest: {args.manifest}')
 
 
 if __name__ == '__main__':

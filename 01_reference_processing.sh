@@ -79,6 +79,39 @@ if [ "${USE_NATH_ET_AL}" = true ] && [ "${FETCH_REFERENCE_CDS:-true}" = true ]; 
     fi
 fi
 
+# --- Step 2b: CDS coverage sanity check (bead -325) ---
+# We do NOT auto-download non-Berghia reference genomes during stage 01 —
+# that would re-download multiple GB on every run and block the pipeline
+# on transient network failures. Miniprot recovery is a one-shot
+# preprocessing step:
+#
+#   bash scripts/run_cds_preprocess.sh
+#
+# which runs scripts/recover_cds_from_assemblies.py once, persists genomes
+# under genomes/ref_assemblies/ (kept across runs), and writes the merged
+# CDS to ${RESULTS_DIR}/reference_sequences/cds/all_references_cds.fna
+# plus the per-sequence provenance manifest at cds_provenance.csv.
+#
+# Stage 01 just checks whether the merged CDS file is present + has
+# reasonable coverage; it WARNS but does not fail when missing, so the
+# rest of the pipeline still runs and stage 05 simply skips dN/dS for
+# orthogroups without recovered CDS.
+if [ "${USE_NATH_ET_AL}" = true ]; then
+    ALL_REF_CDS="${RESULTS_DIR}/reference_sequences/cds/all_references_cds.fna"
+    if [ -f "$ALL_REF_CDS" ] && [ -s "$ALL_REF_CDS" ]; then
+        n_cds=$(grep -c '^>' "$ALL_REF_CDS" 2>/dev/null || echo 0)
+        log "Reference CDS coverage: ${n_cds} sequences in ${ALL_REF_CDS}"
+        if [ "${n_cds}" -lt 5000 ]; then
+            log --level=WARN "Only ${n_cds} reference CDS present — stage 05 dN/dS will be sparse."
+            log --level=WARN "Run 'bash scripts/run_cds_preprocess.sh' to recover the remaining ~22k CDS via miniprot."
+        fi
+    else
+        log --level=WARN "No merged reference CDS at ${ALL_REF_CDS}."
+        log --level=WARN "Run 'bash scripts/run_cds_preprocess.sh' as a one-shot preprocessing step BEFORE this pipeline run."
+        log --level=WARN "Without recovered CDS, stage 05 dN/dS will only run for orthogroups whose references happen to have efetch-fetched CDS (~4k of ~26k references)."
+    fi
+fi
+
 # --- Step 3: Combine reference sequences by category ---
 if [ "${USE_NATH_ET_AL}" = true ]; then
     # New structure: combine by LSE vs conserved (one_to_one_ortholog)

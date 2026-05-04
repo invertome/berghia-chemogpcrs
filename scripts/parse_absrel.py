@@ -44,10 +44,38 @@ FIELDNAMES = [
     'corrected_p_value',
     'is_already_corrected',
     'is_selected',
+    'cds_source',           # bead -325: native | miniprot | unknown
+                            #   (joined from cds_provenance.csv if available)
 ]
 
 
-def parse_absrel_json(json_file, output_csv, append_mode='atomic'):
+def load_cds_provenance(path):
+    """Return dict seq_id -> source (native|miniprot|unknown).
+
+    Reads the CSV produced by recover_cds_from_assemblies.py --manifest.
+    Sequences not in the manifest default to 'native' (i.e. they came from
+    the original efetch / fetch_reference_cds.py path or the Berghia genome
+    annotation, both of which are considered native).
+    """
+    if not path or not os.path.exists(path):
+        return {}
+    out = {}
+    try:
+        with open(path) as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                sid = row.get('seq_id', '').strip()
+                src = row.get('source', '').strip() or 'unknown'
+                if sid:
+                    out[sid] = src
+    except Exception as e:
+        print(f"Warning: could not read CDS provenance manifest {path}: {e}",
+              file=sys.stderr)
+    return out
+
+
+def parse_absrel_json(json_file, output_csv, append_mode='atomic',
+                       cds_provenance=None):
     """Parse one aBSREL JSON file and write a per-OG CSV.
 
     Args:
@@ -134,6 +162,8 @@ def parse_absrel_json(json_file, output_csv, append_mode='atomic'):
         # Use omega_max for "is_selected" (chemoreceptor-relevant signal)
         is_selected = 1 if (corrected_p < 0.05 and omega_max > 1.0) else 0
 
+        cds_source = ((cds_provenance or {}).get(branch_id, 'native')
+                      if cds_provenance is not None else 'unknown')
         results.append({
             'branch_id': branch_id,
             'omega': omega,
@@ -145,6 +175,7 @@ def parse_absrel_json(json_file, output_csv, append_mode='atomic'):
             'corrected_p_value': corrected_p,
             'is_already_corrected': is_already_corrected,
             'is_selected': is_selected,
+            'cds_source': cds_source,
         })
 
     # Also check legacy "tested" section
@@ -174,6 +205,8 @@ def parse_absrel_json(json_file, output_csv, append_mode='atomic'):
             corrected_p = raw_p
             is_already_corrected = 0
 
+        cds_source = ((cds_provenance or {}).get(branch_id, 'native')
+                      if cds_provenance is not None else 'unknown')
         results.append({
             'branch_id': branch_id,
             'omega': omega,
@@ -185,6 +218,7 @@ def parse_absrel_json(json_file, output_csv, append_mode='atomic'):
             'corrected_p_value': corrected_p,
             'is_already_corrected': is_already_corrected,
             'is_selected': 1 if (corrected_p < 0.05 and omega > 1) else 0,
+            'cds_source': cds_source,
         })
 
     # Write CSV. Atomic mode: per-OG file, no append (avoids schema-drift bug).
@@ -224,10 +258,18 @@ if __name__ == '__main__':
     ap.add_argument('--append-mode', choices=['atomic', 'append'], default='atomic',
                     help="atomic = per-OG CSV (recommended; concatenate later); "
                          "append = legacy in-place append (validates schema first)")
+    ap.add_argument('--cds-provenance',
+                    default=os.environ.get('CDS_PROVENANCE_CSV', ''),
+                    help="Optional path to cds_provenance.csv (from "
+                         "recover_cds_from_assemblies.py --manifest). When given, "
+                         "each output row carries a cds_source column "
+                         "(native | miniprot) so dN/dS results can be stratified.")
     args = ap.parse_args()
 
     if not os.path.exists(args.json_file):
         print(f"Error: Input file {args.json_file} not found", file=sys.stderr)
         sys.exit(1)
 
-    parse_absrel_json(args.json_file, args.output_csv, append_mode=args.append_mode)
+    cds_prov = load_cds_provenance(args.cds_provenance) if args.cds_provenance else None
+    parse_absrel_json(args.json_file, args.output_csv,
+                       append_mode=args.append_mode, cds_provenance=cds_prov)
