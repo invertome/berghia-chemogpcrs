@@ -252,5 +252,22 @@ mv "${RESULTS_DIR}/synteny/synteny_ids_unique.txt" "${RESULTS_DIR}/synteny/synte
 # --- Plot synteny at different taxonomic levels ---
 python3 "${SCRIPTS_DIR}/plot_synteny.py" "${RESULTS_DIR}/synteny" "${RESULTS_DIR}/synteny/synteny_plot" || log "Warning: Synteny plotting failed"
 
+# Bead -ar8: intra-genome tandem-cluster detection on Berghia GPCR candidates.
+# Reads $GENOME_GFF + the candidate FASTA, writes per-candidate cluster size +
+# ID to $TANDEM_CLUSTERS_FILE (consumed by rank_candidates.py in stage 07).
+# Gated on RUN_TANDEM_DETECTION (default 1). Cheap (~seconds) given gffutils
+# SQLite caching; safe to re-run.
+if [ "${RUN_TANDEM_DETECTION:-1}" = "1" ] && [ -f "${GENOME_GFF:-}" ]; then
+    CANDIDATES_FA="${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa"
+    if [ -f "$CANDIDATES_FA" ]; then
+        log "Running intra-genome tandem-cluster detection on Berghia candidates..."
+        bash "${SCRIPTS_DIR}/run_tandem_detection.sh" "$CANDIDATES_FA" \
+            2>> "${LOGS_DIR}/tandem_detection.err" \
+            || log --level=WARN "Tandem-cluster detection failed (rank_candidates will skip the tandem axis)"
+    else
+        log --level=WARN "No candidate FASTA at $CANDIDATES_FA — skipping tandem-cluster detection"
+    fi
+fi
+
 touch "${RESULTS_DIR}/step_completed_synteny.txt"
 log "Synteny and mapping analysis completed."
