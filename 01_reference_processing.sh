@@ -229,9 +229,12 @@ if [ "${USE_NATH_ET_AL}" = true ]; then
         fi
 
         local aligned="${hmm_out%.hmm}_aligned.fa"
-        # --retree 1 is much faster than --auto for HMM building (accuracy
-        # difference is negligible since hmmbuild re-weights columns anyway)
-        ${MAFFT} --retree 1 --thread "${MAFFT_THREADS}" "$align_input" > "$aligned" 2>/dev/null
+        # Bead -align: regime-based aligner. Was --retree 1 (fastest, lowest
+        # accuracy); the new wrapper picks MAFFT L-INS-i / --auto / FAMSA 2
+        # by N. Better alignment -> better HMM -> better stage-02 detection.
+        bash "${SCRIPTS_DIR}/run_aligner.sh" \
+            --input="$align_input" --output="$aligned" \
+            --threads="${MAFFT_THREADS}" 2>/dev/null
         [ -s "$aligned" ] || return 1
 
         ${HMMBUILD} --cpu "${MAFFT_THREADS}" "$hmm_out" "$aligned" > /dev/null 2>&1

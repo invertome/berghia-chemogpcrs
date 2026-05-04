@@ -13,6 +13,12 @@ dependencies:
   - hmmer=3.3.2
   - hhsuite=3.3.0
   - mafft=7.520
+  # Bead -align: FAMSA 2 (Deorowicz et al. 2024 NAR 52:e30) — best aligner for
+  # large protein families (N>=1000). scripts/run_aligner.sh dispatches based
+  # on input N: <200 -> MAFFT L-INS-i (gold-standard small),
+  # 200-999 -> MAFFT --auto, >=1000 -> FAMSA 2. Auto-falls-back to MAFFT --auto
+  # when FAMSA missing.
+  - famsa>=2.2
   - iqtree=2.2.2
   - fasttree=2.1.11
   - trimal=1.4.1

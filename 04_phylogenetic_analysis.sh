@@ -235,7 +235,13 @@ with open('${REF_CATEGORIES_FINAL}', 'a') as f:
     check_resource_requirements "$COMBINED" alignment || \
         log --level=WARN "Proceeding despite alignment resource warning"
 
-    run_command "all_berghia_refs_mafft" --stdout="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" ${MAFFT} --retree 2 --thread "${CPUS}" "$COMBINED"
+    # Bead -align: regime-based aligner — large N (>=1000) uses FAMSA 2,
+    # mid (200-999) uses MAFFT --auto, small (<200) uses MAFFT L-INS-i.
+    # The global Berghia+refs alignment is ~2400 seqs → FAMSA 2 (when installed).
+    run_command "all_berghia_refs_aligner" bash "${SCRIPTS_DIR}/run_aligner.sh" \
+        --input="$COMBINED" \
+        --output="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" \
+        --threads="${CPUS}"
     # Bead -i61: per-sequence segment cleaning before column-trimming.
     if [ "${RUN_HMMCLEANER:-1}" = "1" ]; then
         bash "${SCRIPTS_DIR}/run_hmmcleaner.sh" \
@@ -289,7 +295,11 @@ done
 for level in "${!lse_taxids[@]}"; do
     if [ -f "${RESULTS_DIR}/lse_classification/lse_${level}.fa" ] && [ ! -f "${RESULTS_DIR}/step_completed_lse_${level}_iqtree.txt" ]; then
         mkdir -p "${RESULTS_DIR}/phylogenies/protein/lse_${level}"
-        run_command "lse_${level}_mafft" --stdout="${RESULTS_DIR}/phylogenies/protein/lse_${level}/aligned.fa" ${MAFFT} --retree 2 --thread "${CPUS}" "${RESULTS_DIR}/lse_classification/lse_${level}.fa"
+        # Bead -align: regime-based aligner.
+        run_command "lse_${level}_aligner" bash "${SCRIPTS_DIR}/run_aligner.sh" \
+            --input="${RESULTS_DIR}/lse_classification/lse_${level}.fa" \
+            --output="${RESULTS_DIR}/phylogenies/protein/lse_${level}/aligned.fa" \
+            --threads="${CPUS}"
         check_alignment "${RESULTS_DIR}/phylogenies/protein/lse_${level}/aligned.fa" || { log "Error: Alignment quality check failed for lse_${level}"; exit 1; }
         run_command "lse_${level}_trimal" ${TRIMAL} -in "${RESULTS_DIR}/phylogenies/protein/lse_${level}/aligned.fa" -out "${RESULTS_DIR}/phylogenies/protein/lse_${level}/trimmed.fa" -automated1
 
@@ -344,7 +354,12 @@ og=$(find "${RESULTS_DIR}/orthogroups" -name "${base}.fa" -type f 2>/dev/null | 
 [ -z "$og" ] || [ ! -f "$og" ] && { log "Skipping missing orthogroup: ${base}"; exit 0; }
 
 if [ ! -f "${RESULTS_DIR}/step_completed_${base}_iqtree.txt" ]; then
-    run_command "${base}_mafft" --stdout="${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" ${MAFFT} --retree 2 --thread "${CPUS}" "$og"
+    # Bead -align: regime-based aligner. Per-OG is typically <500 seqs →
+    # MAFFT L-INS-i (gold-standard accuracy for downstream dN/dS).
+    run_command "${base}_aligner" bash "${SCRIPTS_DIR}/run_aligner.sh" \
+        --input="$og" \
+        --output="${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" \
+        --threads="${CPUS}"
     # Bead -i61: HmmCleaner segment-clean per OG before column-trim.
     if [ "${RUN_HMMCLEANER:-1}" = "1" ]; then
         bash "${SCRIPTS_DIR}/run_hmmcleaner.sh" \

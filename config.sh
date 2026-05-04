@@ -51,6 +51,16 @@ export HMMSEARCH="hmmsearch"
 export HHMAKE="hhmake"
 export HHBLITS="hhblits"
 export MAFFT="mafft"
+# Bead -align: regime-based aligner dispatch. scripts/run_aligner.sh picks:
+#   N <  ALIGNER_LINSI_THRESHOLD (200)   -> MAFFT L-INS-i (gold-standard small)
+#   N <  ALIGNER_FAMSA_THRESHOLD (1000)  -> MAFFT --auto (MAFFT picks mode)
+#   N >= ALIGNER_FAMSA_THRESHOLD         -> FAMSA 2 (best for large)
+# Override via ALIGNER_BACKEND={auto,mafft_linsi,mafft_auto,mafft_retree2,famsa}.
+# Falls back to MAFFT --retree 2 when preferred backend unavailable.
+export FAMSA="${FAMSA:-famsa}"
+export ALIGNER_BACKEND="${ALIGNER_BACKEND:-auto}"
+export ALIGNER_LINSI_THRESHOLD="${ALIGNER_LINSI_THRESHOLD:-200}"
+export ALIGNER_FAMSA_THRESHOLD="${ALIGNER_FAMSA_THRESHOLD:-1000}"
 export IQTREE="iqtree3"
 export FASTTREE="FastTree"
 export TRIMAL="trimal"

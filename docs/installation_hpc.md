@@ -25,6 +25,28 @@ System-level prereqs for JCVI MCscan: `last` aligner and `texlive-latex-base` (f
 
 ## Tools that require manual install
 
+### FAMSA 2 — large-family MSA (bead -align)
+
+Required by `scripts/run_aligner.sh` when N ≥ 1000 sequences. Auto-falls-back
+to MAFFT --auto if missing. Available via bioconda:
+
+```bash
+conda install -c bioconda famsa>=2.2
+# or build from source:
+git clone https://github.com/refresh-bio/FAMSA && cd FAMSA && make -j
+export FAMSA="$PWD/famsa"
+```
+
+Verify: `famsa --help | head -3` should show "FAMSA (Fast and Accurate
+Multiple Sequence Alignment) v2.x.x".
+
+Selection rationale (per `run_aligner.sh`):
+- N < 200 → MAFFT L-INS-i (gold-standard accuracy small)
+- 200 ≤ N < 1000 → MAFFT --auto (MAFFT picks mode)
+- N ≥ 1000 → FAMSA 2 (5-10× faster than MAFFT --retree 2; HomFam SP ≈ MAFFT --auto +3pp)
+
+Override via `ALIGNER_BACKEND` env var or `--force-backend` flag.
+
 ### MACSE v2 — codon-aware MSA (bead -i61)
 
 Required by `scripts/run_macse.sh` (invoked from `05_selective_pressure_and_asr.sh`).

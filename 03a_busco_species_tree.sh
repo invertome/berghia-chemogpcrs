@@ -76,7 +76,13 @@ for busco_id in "${!busco_files[@]}"; do
             sed "s/^>/>${sample}_/" "$faa" >> "$combined_file"
         done
 
-        run_command "align_busco_${busco_id}" --stdout="${RESULTS_DIR}/busco/alignments/${busco_id}.afa" ${MAFFT} --auto --thread "${CPUS}" "$combined_file"
+        # Bead -align: regime-based aligner. BUSCO per-gene alignments have
+        # one sequence per species (~hundreds), so the wrapper picks
+        # MAFFT L-INS-i (<200) or MAFFT --auto (200-999) automatically.
+        run_command "align_busco_${busco_id}" bash "${SCRIPTS_DIR}/run_aligner.sh" \
+            --input="$combined_file" \
+            --output="${RESULTS_DIR}/busco/alignments/${busco_id}.afa" \
+            --threads="${CPUS}"
         run_command "trim_busco_${busco_id}" ${TRIMAL} -in "${RESULTS_DIR}/busco/alignments/${busco_id}.afa" -out "${RESULTS_DIR}/busco/alignments/${busco_id}_trimmed.afa" -automated1
     fi
 done
