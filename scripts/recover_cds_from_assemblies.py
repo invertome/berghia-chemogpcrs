@@ -83,10 +83,27 @@ SPECIES_MAP = {
     "raau": ("52793", "Radix_auricularia", "GCA_002072015.1"),
     "rave": ("55521", "Rapana_venosa", "GCA_028751875.1"),
     "trte": ("2780533", "Tritonia_tetraquetra", "GCA_030265355.1"),
+    # --- LSE annelid + non-mollusc lophotrochozoan models (added 2026-05-05) ---
+    # Curated keep-list after bead -lfy (Sanger ToL OX/LR-prefix annelid
+    # genomes don't have efetchable protein records and were producing
+    # whole-contig garbage). These have downloadable reference assemblies
+    # whose Nath et al. proteins can be miniprot-recovered to CDS.
+    "pldu": ("6359",    "Platynereis_dumerilii",    "GCA_043381215.1"),
+    "cate": ("283909",  "Capitella_teleta",         "GCA_000328365.1"),
+    "hero": ("6412",    "Helobdella_robusta",       "GCF_000326865.2"),
+    "owfu": ("6347",    "Owenia_fusiformis",        "GCA_903813345.2"),
+    "digy": ("2664684", "Dimorphilus_gyrociliatus", "GCA_904063045.1"),
+    "lian": ("7574",    "Lingula_anatina",          "GCF_001039355.2"),
+    "lilo": ("88925",   "Lineus_longissimus",       "GCF_910592395.1"),
+    "noge": ("416868",  "Notospermus_geniculatus",  "GCA_002633025.1"),
 }
 
-# Phoronis australis shares "phau" prefix but different taxid
-# Handle separately — its proteins have NMRA scaffold patterns
+# Phoronis australis shares "phau" prefix with Physella acuta but different
+# taxid; properly handling it requires prefix-disambiguation logic that
+# get_missing_proteins doesn't currently have. The "phau" entry above
+# resolves to Physella acuta; "phau2" here is a placeholder for Phoronis
+# but won't be matched by the prefix scan until disambiguation is added.
+# TODO: see follow-up bead for prefix-disambiguation work.
 SPECIES_MAP["phau2"] = ("115415", "Phoronis_australis", "GCA_055505105.1")
 
 CODON_TABLE = {
