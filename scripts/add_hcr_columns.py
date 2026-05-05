@@ -58,13 +58,25 @@ def cds_lengths_from_fasta(cds_fasta: str) -> dict[str, int]:
     We index by the first whitespace token AND by [gene=...] / [protein_id=...]
     extracted via simple substring scans, so the lookup matches whichever
     naming convention the rank_candidates 'id' column uses.
+
+    Note: ``fasta_records`` strips the header after the first whitespace token,
+    which would discard the bracketed metadata. We therefore parse the FASTA
+    here directly so the full header line is available for bracket-aliasing.
     """
     out: dict[str, int] = {}
-    for header, seq in fasta_records(cds_fasta):
+    if not cds_fasta:
+        return out
+    h_full: str | None = None
+    parts: list[str] = []
+
+    def _flush(header: str | None, seq: str) -> None:
+        if header is None:
+            return
         ln = len(seq)
-        out[header] = ln
-        # Extract bracketed key=value pairs
-        # (this avoids a regex dependency for a tiny grammar)
+        first_token = header.split()[0] if header else ""
+        if first_token:
+            out[first_token] = ln
+        # Extract bracketed key=value pairs from the FULL header.
         i = 0
         while True:
             lb = header.find("[", i)
@@ -78,8 +90,21 @@ def cds_lengths_from_fasta(cds_fasta: str) -> dict[str, int]:
             if "=" in kv:
                 k, v = kv.split("=", 1)
                 out.setdefault(v.strip(), ln)
-                # Also index "gene=X" without the prefix for convenience
+                # Also index "k=v" for convenience.
                 out.setdefault(f"{k.strip()}={v.strip()}", ln)
+
+    with open(cds_fasta) as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            if line.startswith(">"):
+                _flush(h_full, "".join(parts))
+                h_full = line[1:]
+                parts = []
+            else:
+                parts.append(line)
+    _flush(h_full, "".join(parts))
     return out
 
 
