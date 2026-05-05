@@ -200,18 +200,21 @@ cat >> "${RESULTS_DIR}/report/report.tex" <<'EOF'
 
 \subsection{Pipeline Architecture}
 
-The analysis pipeline consists of nine sequential stages:
+The analysis pipeline consists of these sequential stages (May 2026 stack):
 
 \begin{enumerate}
-    \item \textbf{Reference Processing}: Build HMMs from known GPCR sequences
-    \item \textbf{GPCR Identification}: HHblits homology search + DeepTMHMM transmembrane prediction (6+ TM filter)
-    \item \textbf{Orthology Clustering}: OrthoFinder for gene family assignment
-    \item \textbf{Phylogenetic Analysis}: FastTree seed + IQ-TREE maximum likelihood inference
-    \item \textbf{Selective Pressure}: HyPhy aBSREL for branch-specific dN/dS estimation
-    \item \textbf{Ancestral Reconstruction}: FastML for deep node sequences
-    \item \textbf{Synteny Analysis}: MCScanX for conserved gene arrangement
-    \item \textbf{Candidate Ranking}: Multi-criteria weighted scoring
-    \item \textbf{Structural Analysis}: AlphaFold prediction + FoldTree comparison
+    \item \textbf{Reference Processing}: Build per-orthogroup HMMs from Nath et al. references.
+    \item \textbf{GPCR Identification}: HHblits homology + TMbed transmembrane prediction (DeepTMHMM / Phobius / Kyte--Doolittle as graded fallbacks; 6+ TM filter). Predictor provenance recorded per run.
+    \item \textbf{Orthology Clustering}: OrthoFinder (Diamond mode).
+    \item \textbf{Phylogenetic Analysis}: regime-based MAFFT/FAMSA alignment $\to$ HmmCleaner (segment) $\to$ ClipKit (column) $\to$ FastTree seed $\to$ IQ-TREE 3 (ModelFinder; UFBoot+SH-aLRT+TBE; deterministic seed) $\to$ TreeShrink rogue-taxon removal.
+    \item \textbf{Selective Pressure}: HyPhy stack — GARD recombination breakpoints $\to$ BUSTED-S (gene-wide) $\to$ BUSTED-MH (multi-hit-aware) $\to$ aBSREL (branch-specific) $\to$ MEME (episodic site-level). MACSE v2 for codon alignment.
+    \item \textbf{Ancestral Reconstruction}: IQ-TREE 3 \texttt{-{}-ancestral} (FastML fallback).
+    \item \textbf{Reconciliation}: GeneRax (Notung fallback).
+    \item \textbf{Synteny}: JCVI MCscan (MCScanX fallback); per-gene anchor counts feed the ranking.
+    \item \textbf{Tandem-cluster Detection}: sliding-window clustering of sibling paralogs --- the field's signature chemoreceptor signal.
+    \item \textbf{Candidate Ranking}: Multi-criteria weighted scoring (see Section~\ref{sec:weights}).
+    \item \textbf{HCR Augmentation}: per-candidate \texttt{cds\_length\_bp}, closest-paralog identity, and \texttt{hcr\_probe\_friendly} boolean for wet-lab probe design.
+    \item \textbf{Structural Analysis}: AlphaFold prediction + Foldseek vs.\ GPCRdb (P3).
 \end{enumerate}
 
 \subsection{Ranking Algorithm}
@@ -219,12 +222,19 @@ The analysis pipeline consists of nine sequential stages:
 Candidates are scored using a weighted combination of:
 
 \begin{itemize}
-    \item \textbf{Phylogenetic Score}: Inverse weighted distance to reference chemoreceptors
-    \item \textbf{Selection Scores}: Separate purifying (conserved function) and positive (adaptive evolution) components
-    \item \textbf{Synteny Score}: Quantitative measure of conserved gene arrangement
-    \item \textbf{Expression Score}: Tissue-specific expression (if available)
-    \item \textbf{LSE Depth Score}: Position in lineage-specific expansion clades
+    \item \textbf{Phylogenetic proximity} to known chemoreceptors (inverse weighted distance).
+    \item \textbf{Positive selection}: \texttt{omega\_max} from aBSREL (was weighted-mean prior to May 2026 --- fixed to preserve the episodic-positive-selection signal).
+    \item \textbf{Purifying selection}: \emph{disabled by default} (\texttt{PURIFYING\_WEIGHT=0} in \texttt{config.sh}) --- chemoreceptor identification rewards diversifying, not housekeeping conservation.
+    \item \textbf{Synteny}: JCVI per-gene anchor count (replaces the broken ID-count input).
+    \item \textbf{Tandem cluster}: sibling-paralog clustering signal (chemoreceptor-defining).
+    \item \textbf{LSE depth}: position in lineage-specific expansion clades (75\textsuperscript{th}-percentile threshold).
+    \item \textbf{Chemosensory expression}: tissue-specific signal where available.
+    \item \textbf{G-protein coexpression}: G$\alpha$ family coexpression with the candidate (orthogroup-level).
+    \item \textbf{ECL divergence}: extracellular-loop sequence divergence vs.\ paralogs.
+    \item \textbf{Family expansion} and \textbf{orthogroup confidence} (auxiliary).
 \end{itemize}
+
+P-values from BUSTED-S, BUSTED-MH, aBSREL, and MEME are FDR-corrected via \texttt{statsmodels.multipletests} (Benjamini--Hochberg, $\alpha=0.05$). The composite score is multiplied by an \texttt{evidence\_completeness} factor (floor 0.4) so sparse-data candidates do not co-rank with complete-data candidates.
 
 EOF
 
@@ -457,42 +467,55 @@ cat >> "${RESULTS_DIR}/report/report.tex" <<'LATEX_FOOTER'
 
 \begin{table}[H]
 \centering
-\caption{Key Software Tools}
+\caption{Key Software Tools (May 2026)}
 \begin{tabular}{ll}
 \toprule
 \textbf{Tool} & \textbf{Purpose} \\
 \midrule
-HHblits & Remote homology detection \\
-DeepTMHMM & Transmembrane topology prediction \\
+HHblits / HMMER & Remote homology / HMM search \\
+TMbed (Bernhofer 2022) & Transmembrane topology (primary) \\
+DeepTMHMM / Phobius & TM topology (fallbacks) \\
 OrthoFinder & Orthology inference \\
-FastTree & Approximate ML tree \\
-IQ-TREE & Maximum likelihood phylogenetics \\
-HyPhy aBSREL & Branch-site selection analysis \\
-FastML & Ancestral sequence reconstruction \\
-MCScanX & Synteny detection \\
+MAFFT / FAMSA & Multiple sequence alignment \\
+HmmCleaner & Per-sequence segment cleaning \\
+ClipKit & Column trimming \\
+MACSE v2 & Frameshift-aware codon alignment \\
+FastTree & Approximate-ML seed tree \\
+IQ-TREE 3 & ML phylogeny + ancestral reconstruction \\
+TreeShrink & Rogue-taxon removal \\
+HyPhy: GARD / BUSTED-S / BUSTED-MH / aBSREL / MEME & Selection-stack analysis \\
+GeneRax & Gene-tree / species-tree reconciliation \\
+JCVI MCscan & Synteny / collinearity \\
 AlphaFold & Protein structure prediction \\
-TM-align & Structural alignment \\
+Foldseek & Structural search vs.\ GPCRdb \\
+TM-align & Pairwise structural alignment \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\subsection{Scoring Weights}
+\subsection{Scoring Weights}\label{sec:weights}
 
-The ranking algorithm uses the following default weights (configurable via environment variables):
+The ranking algorithm uses the following default weights (overridable via environment variables; values shown reflect \texttt{config.sh} defaults at the time of report generation):
 
 \begin{table}[H]
 \centering
 \caption{Ranking Score Weights}
 \begin{tabular}{lcc}
 \toprule
-\textbf{Component} & \textbf{Weight} & \textbf{Variable} \\
+\textbf{Component} & \textbf{Default Weight} & \textbf{Variable} \\
 \midrule
 Phylogenetic proximity & 2.0 & PHYLO\_WEIGHT \\
-Purifying selection & 1.0 & PURIFYING\_WEIGHT \\
 Positive selection & 1.0 & POSITIVE\_WEIGHT \\
+Purifying selection & 0.0 & PURIFYING\_WEIGHT \\
 Synteny conservation & 3.0 & SYNTENY\_WEIGHT \\
-Expression & 1.0 & EXPR\_WEIGHT \\
+Tandem cluster & 2.5 & TANDEM\_CLUSTER\_WEIGHT \\
 LSE depth & 1.0 & LSE\_DEPTH\_WEIGHT \\
+Chemosensory expression & 3.0 & CHEMOSENSORY\_EXPR\_WEIGHT \\
+G-protein coexpression & 2.0 & GPROTEIN\_COEXPR\_WEIGHT \\
+ECL divergence & 1.5 & ECL\_DIVERGENCE\_WEIGHT \\
+Family expansion & 1.5 & EXPANSION\_WEIGHT \\
+Orthogroup confidence & 1.0 & OG\_CONFIDENCE\_WEIGHT \\
+Expression (legacy) & 1.0 & EXPR\_WEIGHT \\
 \bottomrule
 \end{tabular}
 \end{table}
