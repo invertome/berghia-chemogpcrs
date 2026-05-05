@@ -1,0 +1,15 @@
+{
+  "planPath": "docs/plans/2026-05-05-stage09-report-refresh.md",
+  "tasks": [
+    {"id": 0, "subject": "Task 0: Fixture for May-2026 ranked-CSV schema", "status": "pending"},
+    {"id": 1, "subject": "Task 1: csv_col_idx + count_by_value + sum_column helpers + tests", "status": "pending", "blockedBy": [0]},
+    {"id": 2, "subject": "Task 2: Wire helpers into 09_report_generation.sh", "status": "pending", "blockedBy": [1]},
+    {"id": 3, "subject": "Task 3: Refresh Executive-Summary table", "status": "pending", "blockedBy": [2]},
+    {"id": 4, "subject": "Task 4: Refresh Methods/Tools/Weights for May-2026 stack", "status": "pending", "blockedBy": [2]},
+    {"id": 5, "subject": "Task 5: HCR section + extended Top-N table", "status": "pending", "blockedBy": [2]},
+    {"id": 6, "subject": "Task 6: Positive-control sanity-check section", "status": "pending", "blockedBy": [2]},
+    {"id": 7, "subject": "Task 7: Recommendations -> HCR wet-lab shortlist", "status": "pending", "blockedBy": [5]},
+    {"id": 8, "subject": "Task 8: Final verification + bead update", "status": "pending", "blockedBy": [3, 4, 5, 6, 7]}
+  ],
+  "lastUpdated": "2026-05-05T00:00:00Z"
+}
