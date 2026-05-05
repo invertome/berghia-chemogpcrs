@@ -599,22 +599,24 @@ Expression (legacy) & 1.0 & EXPR\_WEIGHT \\
 
 \section{Recommendations}
 
-\subsection{High Priority Candidates}
+\subsection{High-Priority Wet-Lab Shortlist}
 
-High confidence candidates should be prioritized for:
+For HCR (in situ hybridization chain reaction) probe design, prioritize candidates satisfying \emph{all three}:
 \begin{itemize}
-    \item Experimental validation (e.g., in situ hybridization, functional assays)
-    \item Detailed structural analysis
-    \item Ligand binding prediction
+    \item \texttt{confidence\_tier = High}
+    \item \texttt{hcr\_probe\_friendly = True}
+    \item Either \texttt{tandem\_cluster\_size > 1} \emph{or} \texttt{selection\_significant = True} (i.e.\ at least one chemoreceptor-signature corroborator).
 \end{itemize}
+
+Secondary candidates (Medium confidence, HCR-friendly, with one signature corroborator) are good targets for second-round screens.
 
 \subsection{Follow-up Analyses}
 
 \begin{itemize}
-    \item Expression profiling across tissues/conditions
-    \item Comparative genomics with additional mollusc species
-    \item Molecular dynamics simulations for top structural candidates
-    \item Deorphanization screens for ligand identification
+    \item Expression profiling across head / foot / digestive / sensory tissues --- the current expression-based scores carry the starvation+depth confound noted in the project memory.
+    \item Comparative genomics with chromosome-level mollusc assemblies (the synteny weight is highest at 3.0 for a reason).
+    \item AlphaFold + Foldseek structural placement against GPCRdb for top-ranked candidates.
+    \item Deorphanization / ligand-binding prediction once HCR localization narrows the functional candidate set.
 \end{itemize}
 
 \section{Data Availability}
