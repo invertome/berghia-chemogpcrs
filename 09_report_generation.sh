@@ -366,36 +366,66 @@ if [ -n "$RANKING_IMG" ] && [ -f "$RANKING_IMG" ]; then
 EOF
 fi
 
-# Add top candidates table if data available
+# --- HCR probe-friendliness explainer (always emit; columns may be 0 if not run) ---
+cat >> "${RESULTS_DIR}/report/report.tex" <<'EOF'
+
+\subsubsection{HCR Probe-Friendliness}
+
+For each candidate, \texttt{hcr\_probe\_friendly} is a boolean derived from CDS length and the closest-paralog identity (windowed). True iff:
+\begin{itemize}
+  \item \texttt{cds\_length\_bp} $\geq$ 600 bp (HCR\_DEFAULT\_MIN\_CDS\_LENGTH\_BP)
+  \item \texttt{paralog\_min\_identity} $\leq$ 0.80 (HCR\_DEFAULT\_MAX\_PARALOG\_IDENTITY)
+\end{itemize}
+Candidates marked True are recommended for first-round HCR design without further filtering. False candidates are not disqualified, but require either probe-design effort against a divergent region or a discriminating split-probe strategy.
+
+EOF
+
+# --- Top-N ranked candidates table (header-aware) ---
 if [ -f "$RANKED_FILE" ]; then
     cat >> "${RESULTS_DIR}/report/report.tex" <<'EOF'
 
 \subsubsection{Top Ranked Candidates}
 
-\begin{longtable}{llccc}
-\caption{Top 15 Ranked GPCR Candidates} \\
+\begin{longtable}{rlrlcccr}
+\caption{Top 20 ranked GPCR candidates. \textbf{Sel}=aBSREL branch-significant; \textbf{B-MH}=BUSTED-MH gene-significant; \textbf{HCR}=probe-friendly; \textbf{TC size}=tandem-cluster size.} \\
 \toprule
-\textbf{Rank} & \textbf{ID} & \textbf{Score} & \textbf{Confidence} & \textbf{Sig. Selection} \\
+\textbf{\#} & \textbf{ID} & \textbf{Score} & \textbf{Conf} & \textbf{Sel} & \textbf{B-MH} & \textbf{HCR} & \textbf{TC size} \\
 \midrule
 \endfirsthead
-\multicolumn{5}{c}{\tablename\ \thetable\ -- continued} \\
+\multicolumn{8}{c}{\tablename\ \thetable\ -- continued} \\
 \toprule
-\textbf{Rank} & \textbf{ID} & \textbf{Score} & \textbf{Confidence} & \textbf{Sig. Selection} \\
+\textbf{\#} & \textbf{ID} & \textbf{Score} & \textbf{Conf} & \textbf{Sel} & \textbf{B-MH} & \textbf{HCR} & \textbf{TC size} \\
 \midrule
 \endhead
 \bottomrule
 \endfoot
 EOF
 
-    # Add top 15 candidates
-    awk -F',' 'NR>1 && NR<=16 {
-        conf = $3
-        if (conf == "High") conf_color = "highconf"
-        else if (conf == "Medium") conf_color = "medconf"
-        else conf_color = "lowconf"
-        sig = ($8 == "True") ? "Yes" : "No"
-        printf "%d & %s & %.3f & \\textcolor{%s}{%s} & %s \\\\\n", NR-1, $1, $2, conf_color, conf, sig
-    }' "$RANKED_FILE" >> "${RESULTS_DIR}/report/report.tex"
+    python3 - "$RANKED_FILE" >> "${RESULTS_DIR}/report/report.tex" <<'PY'
+import csv, sys
+
+def yn(v):
+    return "Y" if str(v).strip().lower() in ("true", "1", "yes", "y") else "N"
+
+with open(sys.argv[1]) as fh:
+    r = csv.DictReader(fh)
+    for i, row in enumerate(r, start=1):
+        if i > 20:
+            break
+        conf = row.get("confidence_tier", "")
+        color = {"High": "highconf", "Medium": "medconf", "Low": "lowconf"}.get(conf, "lowconf")
+        try:
+            score = float(row.get("rank_score", "0") or 0)
+        except ValueError:
+            score = 0.0
+        tc = row.get("tandem_cluster_size", "0") or "0"
+        rid = row.get("id", "").replace("_", r"\_")
+        print(rf"{i} & {rid} & {score:.3f} & "
+              rf"\textcolor{{{color}}}{{{conf}}} & "
+              rf"{yn(row.get('selection_significant'))} & "
+              rf"{yn(row.get('busted_mh_significant'))} & "
+              rf"{yn(row.get('hcr_probe_friendly'))} & {tc} \\")
+PY
 
     cat >> "${RESULTS_DIR}/report/report.tex" <<'EOF'
 \end{longtable}
