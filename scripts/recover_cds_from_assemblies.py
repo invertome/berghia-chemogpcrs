@@ -93,18 +93,23 @@ SPECIES_MAP = {
     "hero": ("6412",    "Helobdella_robusta",       "GCF_000326865.2"),
     "owfu": ("6347",    "Owenia_fusiformis",        "GCA_903813345.2"),
     "digy": ("2664684", "Dimorphilus_gyrociliatus", "GCA_904063045.1"),
-    "lian": ("7574",    "Lingula_anatina",          "GCF_001039355.2"),
-    "lilo": ("88925",   "Lineus_longissimus",       "GCF_910592395.1"),
-    "noge": ("416868",  "Notospermus_geniculatus",  "GCA_002633025.1"),
+    "lian":   ("7574",    "Lingula_anatina",         "GCF_001039355.2"),
+    "lilo":   ("88925",   "Lineus_longissimus",      "GCF_910592395.1"),
+    "noge":   ("416868",  "Notospermus_geniculatus", "GCA_002633025.1"),
+    # Bryozoa (added 2026-05-05 to cover the previously-missing phylum;
+    # both have NCBI chromosome-level reference assemblies).
+    "bune":   ("10212",   "Bugula_neritina",         "GCA_964035545.1"),
+    "memmem": ("95170",   "Membranipora_membranacea", "GCA_914767715.1"),
+    # Phoronis australis. Renamed from prefix "phau" -> "phaust" because
+    # the original Nath et al. headers used "phau_" which collides with
+    # Physella acuta (gastropod, taxid 109671 — see "phau" entry above).
+    # The Phoronis .faa headers must be rewritten "phau_" -> "phaust_"
+    # before stage 02 orthology so get_missing_proteins resolves to the
+    # right assembly. One-time rename on Unity (idempotent sed):
+    #   sed -i 's/^>phau_/>phaust_/' \
+    #     references/nath_et_al/lse/other_lophotrochozoan_phyla/115415_Phoronis_australis.faa
+    "phaust": ("115415",  "Phoronis_australis",      "GCA_055505105.1"),
 }
-
-# Phoronis australis shares "phau" prefix with Physella acuta but different
-# taxid; properly handling it requires prefix-disambiguation logic that
-# get_missing_proteins doesn't currently have. The "phau" entry above
-# resolves to Physella acuta; "phau2" here is a placeholder for Phoronis
-# but won't be matched by the prefix scan until disambiguation is added.
-# TODO: see follow-up bead for prefix-disambiguation work.
-SPECIES_MAP["phau2"] = ("115415", "Phoronis_australis", "GCA_055505105.1")
 
 CODON_TABLE = {
     'TTT': 'F', 'TTC': 'F', 'TTA': 'L', 'TTG': 'L',
