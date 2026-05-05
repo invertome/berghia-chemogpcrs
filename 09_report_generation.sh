@@ -433,6 +433,53 @@ PY
 EOF
 fi
 
+# --- Positive-control sanity check (HCR-validated markers e.g. Galpha_olf) ---
+POSCTRL_TSV="${RANKING_DIR}/positive_controls_check.tsv"
+if [ -f "$POSCTRL_TSV" ]; then
+    cat >> "${RESULTS_DIR}/report/report.tex" <<'EOF'
+
+\subsection{Positive-Control Sanity Check}
+
+HCR-validated chemoreceptor controls (e.g.\ G$\alpha_{\text{olf}}$) are scored by the same pipeline. A control falling below the 50\textsuperscript{th} percentile is a red flag for the ranking weights, not the control. \textcolor{lowconf}{ALERT} rows indicate either a missing control or one below the alert percentile.
+
+\begin{table}[H]
+\centering
+\caption{Positive controls — pipeline rank, percentile, and alert status.}
+\begin{tabular}{llrrl}
+\toprule
+\textbf{Control} & \textbf{Found} & \textbf{Rank} & \textbf{Percentile} & \textbf{Status} \\
+\midrule
+EOF
+    python3 - "$POSCTRL_TSV" >> "${RESULTS_DIR}/report/report.tex" <<'PY'
+import csv, sys
+
+def truthy(v):
+    return str(v).strip().lower() in ("true", "1", "yes", "y")
+
+with open(sys.argv[1], newline="") as fh:
+    r = csv.DictReader(fh, delimiter="\t")
+    for row in r:
+        name = (row.get("gene_name") or "").replace("_", r"\_")
+        found = "Y" if truthy(row.get("found")) else "N"
+        rank = row.get("rank", "") or "-"
+        pct_raw = row.get("percentile", "")
+        try:
+            pct = f"{float(pct_raw):.1f}" if pct_raw not in ("", None) else "-"
+        except ValueError:
+            pct = "-"
+        alert = truthy(row.get("alert"))
+        status = (r"\textcolor{lowconf}{ALERT}" if alert
+                  else r"\textcolor{highconf}{OK}")
+        print(rf"{name} & {found} & {rank} & {pct} & {status} \\")
+PY
+    cat >> "${RESULTS_DIR}/report/report.tex" <<'EOF'
+\bottomrule
+\end{tabular}
+\end{table}
+
+EOF
+fi
+
 # Add structural analysis section
 cat >> "${RESULTS_DIR}/report/report.tex" <<'EOF'
 
