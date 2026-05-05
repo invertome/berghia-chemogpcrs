@@ -84,6 +84,13 @@ SEL_PRESS_IMG=$(find_image "$SEL_PRESS_DIR" "selective_pressure_plot.png" "")
 HEATMAP_IMG=$(find_image "$STRUCT_DIR" "tmalign_heatmap.png" "")
 PCA_IMG=$(find_image "$STRUCT_DIR" "tmalign_pca.png" "")
 
+# Tandem-cluster plot (May-2026 stack; bead -ar8). Emitted by run_tandem_detection.sh.
+TANDEM_IMG=$(find_image "$SYNTENY_DIR" "tandem_clusters_plot.png" "")
+
+# JCVI synteny dotplot (May-2026 stack; bead -e59). One PDF per Berghia-vs-target run
+# under ${SYNTENY_DIR}/jcvi/<run>/<a>.<b>.pdf — surface the first match.
+JCVI_IMG=$(find_image "$SYNTENY_DIR/jcvi" "*/*.pdf" "")
+
 # --- Collect statistics (header-aware; tolerates schema additions) ---
 TOTAL_CANDIDATES=$(count_lines "${RESULTS_DIR}/candidates/chemogpcr_candidates.txt")
 RANKED_FILE="${RANKING_DIR}/ranked_candidates_sorted.csv"
@@ -322,7 +329,7 @@ Deep ancestral nodes (top 10\% by tree distance) were reconstructed using FastML
 EOF
 fi
 
-# Add synteny section
+# Add synteny section (legacy MCScanX visualization)
 if [ -n "$SYNTENY_IMG" ] && [ -f "$SYNTENY_IMG" ]; then
     cp "$SYNTENY_IMG" "${RESULTS_DIR}/report/"
     SYNTENY_BASENAME=$(basename "$SYNTENY_IMG")
@@ -330,13 +337,49 @@ if [ -n "$SYNTENY_IMG" ] && [ -f "$SYNTENY_IMG" ]; then
 
 \subsection{Synteny Analysis}
 
-Conserved gene arrangements were identified using MCScanX to provide additional evidence for orthology relationships.
+Conserved gene arrangements were identified using MCScanX (legacy visualization) and JCVI MCscan (May 2026 default) to provide additional evidence for orthology relationships.
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.8\textwidth]{${SYNTENY_BASENAME}}
-\caption{Synteny analysis showing conserved gene blocks across species.}
+\caption{Synteny analysis showing conserved gene blocks across species (MCScanX collinearity visualization).}
 \label{fig:synteny}
+\end{figure}
+
+EOF
+fi
+
+# JCVI MCscan dotplot (May-2026 default backend; bead -e59).
+if [ -n "$JCVI_IMG" ] && [ -f "$JCVI_IMG" ]; then
+    cp "$JCVI_IMG" "${RESULTS_DIR}/report/"
+    JCVI_BASENAME=$(basename "$JCVI_IMG")
+    cat >> "${RESULTS_DIR}/report/report.tex" <<EOF
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.7\textwidth]{${JCVI_BASENAME}}
+\caption{JCVI MCscan dotplot (Berghia vs.\ a representative target genome). Diagonals indicate conserved synteny blocks; broken / scattered points indicate rearrangements. Per-gene anchor counts derived from these alignments feed the synteny axis of the ranking algorithm.}
+\label{fig:jcvi_dotplot}
+\end{figure}
+
+EOF
+fi
+
+# Tandem-cluster figure (May-2026 stack; bead -ar8).
+if [ -n "$TANDEM_IMG" ] && [ -f "$TANDEM_IMG" ]; then
+    cp "$TANDEM_IMG" "${RESULTS_DIR}/report/"
+    TANDEM_BASENAME=$(basename "$TANDEM_IMG")
+    cat >> "${RESULTS_DIR}/report/report.tex" <<EOF
+
+\subsection{Tandem-Cluster Detection}
+
+Intra-genome tandem-cluster detection scans the Berghia GFF for sliding-window clusters (default 100\,kb gap, $\geq$3 members) of paralogous chemoreceptor candidates. Tandem clustering is the field's signature chemoreceptor signal.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{${TANDEM_BASENAME}}
+\caption{Berghia GPCR tandem-cluster summary. Panel A: distribution of tandem-cluster sizes across all candidates (singletons through largest). Panel B: top distinct tandem clusters by size.}
+\label{fig:tandem}
 \end{figure}
 
 EOF

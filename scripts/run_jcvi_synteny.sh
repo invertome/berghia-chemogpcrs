@@ -157,7 +157,6 @@ LIFTED_OUT="${BERGHIA_PREFIX}.${TARGET_PREFIX}.lifted.anchors"
 "$PYTHON_BIN" -m jcvi.compara.catalog ortholog \
     --no_strip_names \
     --cscore="$CSCORE" \
-    --no_dotplot \
     "$BERGHIA_PREFIX" "$TARGET_PREFIX" \
     > "${OUTPUT_DIR}/jcvi_ortholog.log" 2>&1
 ORTH_RC=$?
