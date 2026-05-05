@@ -1,0 +1,79 @@
+# CPAN dependency order for Bio::MUST::Apps::HmmCleaner
+#
+# Why an explicit ordered list:
+#   `cpanm Bio::MUST::Apps::HmmCleaner` (and even `cpanm --installdeps ...`)
+#   trips on the deep transitive graph: cpanm picks one prereq, recursively
+#   resolves it mid-build, and bails when an inner test fails (most often
+#   Bio::MUST::Drivers::t/exo_aligned.t hanging on an exonerate sanity test).
+#   PhyloSuite issue #67 documents zero successes on the standard one-liner.
+#
+# Strategy:
+#   1. Install heavy infra modules first (Moose, MooseX::*, Modern::Perl,
+#      Path::Class, Tie::IxHash, Template) — each of these is a "fan-in"
+#      node, and cpanm handles them cleanly when called individually.
+#   2. Then BioPerl prerequisites that Bio::MUST::Core needs at runtime
+#      (Bio::Perl, Bio::LITE::Taxonomy, Bio::Phylo).
+#   3. Then the Bio::MUST stack bottom-up: Bio::FastParsers → Bio::MUST::Core
+#      → Bio::MUST::Drivers → Bio::MUST::Apps::HmmCleaner.
+#   4. Throughout, use --notest --no-man-pages so that one flaky test
+#      file (e.g. exo_aligned.t looking for exonerate ≥ a specific minor
+#      version) cannot block the whole tree. Bio::MUST::Drivers's runtime
+#      smoke test is run separately at the end.
+#
+# Sources for the order:
+#   - https://metacpan.org/dist/Bio-MUST-Apps-HmmCleaner (Requires lists)
+#   - https://metacpan.org/release/DBAURAIN/Bio-MUST-Core-0.250380 (deps)
+#   - https://metacpan.org/pod/Bio::MUST::Core (states "depends on
+#     Bio::LITE::Taxonomy and Bio::Phylo, not BioPerl per se")
+#   - https://github.com/dongzhang0725/PhyloSuite/issues/67 (failure mode)
+
+# ---- Tier 1: low-level Perl infra ----
+local::lib
+ExtUtils::MakeMaker
+Module::Build
+Module::Build::Tiny
+Test::Files
+Test::Most
+Test::Deep
+Test::Warnings
+Try::Tiny
+
+# ---- Tier 2: Moose stack ----
+Moose
+MooseX::App::Cmd
+MooseX::SemiAffordanceAccessor
+MooseX::Types
+MooseX::Types::Path::Class
+MooseX::StrictConstructor
+MooseX::ClassAttribute
+namespace::autoclean
+
+# ---- Tier 3: utility / templating ----
+Modern::Perl
+Path::Class
+List::AllUtils
+Tie::IxHash
+Template
+File::Slurp
+File::Find::Rule
+Carp::Assert
+JSON
+YAML::XS
+Const::Fast
+LWP::Simple
+LWP::Protocol::https
+HTTP::Tiny
+
+# ---- Tier 4: BioPerl + biology helpers (Bio::MUST::Core uses these at runtime) ----
+Bio::Perl
+Bio::LITE::Taxonomy
+Bio::LITE::Taxonomy::NCBI
+Bio::LITE::Taxonomy::NCBI::Gi2taxid
+Bio::Phylo
+Bio::Phylo::IO
+
+# ---- Tier 5: Bio::MUST stack bottom-up ----
+Bio::FastParsers
+Bio::MUST::Core
+Bio::MUST::Drivers
+Bio::MUST::Apps::HmmCleaner
