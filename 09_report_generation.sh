@@ -156,16 +156,28 @@ cat >> "${RESULTS_DIR}/report/report.tex" <<EOF
 
 \begin{table}[H]
 \centering
-\caption{Pipeline Summary Statistics}
+\caption{Pipeline Summary Statistics (May 2026 schema)}
 \begin{tabular}{lr}
 \toprule
 \textbf{Metric} & \textbf{Value} \\\\
 \midrule
 Total GPCR Candidates Identified & ${TOTAL_CANDIDATES:-N/A} \\\\
-High Confidence Candidates & \textcolor{highconf}{${HIGH_CONF:-N/A}} \\\\
-Medium Confidence Candidates & \textcolor{medconf}{${MED_CONF:-N/A}} \\\\
-Low Confidence Candidates & \textcolor{lowconf}{${LOW_CONF:-N/A}} \\\\
-Candidates with Significant Selection & ${SIG_SELECTION:-N/A} \\\\
+Ranked Candidates & ${TOP_N_RANKED:-N/A} \\\\
+\midrule
+High Confidence & \textcolor{highconf}{${HIGH_CONF:-0}} \\\\
+Medium Confidence & \textcolor{medconf}{${MED_CONF:-0}} \\\\
+Low Confidence & \textcolor{lowconf}{${LOW_CONF:-0}} \\\\
+\midrule
+aBSREL branch-significant & ${SIG_SELECTION:-0} \\\\
+BUSTED-S gene-significant & ${BUSTED_S_SIG:-0} \\\\
+BUSTED-MH gene-significant & ${BUSTED_MH_SIG:-0} \\\\
+MEME episodic sites (sum) & ${MEME_TOTAL:-0} \\\\
+\midrule
+HCR probe-friendly & ${HCR_FRIENDLY:-0} \\\\
+In tandem cluster & ${TANDEM_MEMBERS:-0} \\\\
+\midrule
+CDS source: native & ${CDS_NATIVE:-0} \\\\
+CDS source: miniprot-recovered & ${CDS_MINIPROT:-0} \\\\
 \bottomrule
 \end{tabular}
 \end{table}
