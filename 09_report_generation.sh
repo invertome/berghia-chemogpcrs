@@ -15,6 +15,8 @@
 
 source config.sh
 source functions.sh
+# shellcheck source=scripts/_report_summary_lib.sh
+source "${SCRIPTS_DIR}/_report_summary_lib.sh"
 
 # Create report directory
 mkdir -p "${RESULTS_DIR}/report" "${LOGS_DIR}" || { log "Error: Cannot create directories"; exit 1; }
@@ -50,15 +52,8 @@ count_lines() {
     fi
 }
 
-# --- Helper function to safely read CSV value ---
-read_csv_value() {
-    local file="$1"
-    local col="$2"
-    local row="${3:-2}"  # Default to second row (first data row)
-    if [ -f "$file" ]; then
-        awk -F',' -v col="$col" -v row="$row" 'NR==1{for(i=1;i<=NF;i++)if($i==col)c=i} NR==row&&c{print $c}' "$file"
-    fi
-}
+# Header-aware CSV helpers (csv_col_idx, count_by_value, sum_column, read_csv_value)
+# come from scripts/_report_summary_lib.sh sourced above.
 
 # --- Find directories ---
 PHYLO_VIZ_DIR="${RESULTS_DIR}/phylogenies/visualizations"
@@ -89,20 +84,29 @@ SEL_PRESS_IMG=$(find_image "$SEL_PRESS_DIR" "selective_pressure_plot.png" "")
 HEATMAP_IMG=$(find_image "$STRUCT_DIR" "tmalign_heatmap.png" "")
 PCA_IMG=$(find_image "$STRUCT_DIR" "tmalign_pca.png" "")
 
-# --- Collect statistics ---
+# --- Collect statistics (header-aware; tolerates schema additions) ---
 TOTAL_CANDIDATES=$(count_lines "${RESULTS_DIR}/candidates/chemogpcr_candidates.txt")
-RANKED_FILE="${RANKING_DIR}/ranked_candidates.csv"
+RANKED_FILE="${RANKING_DIR}/ranked_candidates_sorted.csv"
 
-# Get ranking statistics if available
-HIGH_CONF=""
-MED_CONF=""
-LOW_CONF=""
-SIG_SELECTION=""
+HIGH_CONF=""; MED_CONF=""; LOW_CONF=""; SIG_SELECTION=""
+BUSTED_S_SIG=""; BUSTED_MH_SIG=""; MEME_TOTAL=""
+HCR_FRIENDLY=""; TANDEM_MEMBERS=""
+CDS_NATIVE=""; CDS_MINIPROT=""
+TOP_N_RANKED=""
+
 if [ -f "$RANKED_FILE" ]; then
-    HIGH_CONF=$(awk -F',' '$3=="High"{count++}END{print count+0}' "$RANKED_FILE")
-    MED_CONF=$(awk -F',' '$3=="Medium"{count++}END{print count+0}' "$RANKED_FILE")
-    LOW_CONF=$(awk -F',' '$3=="Low"{count++}END{print count+0}' "$RANKED_FILE")
-    SIG_SELECTION=$(awk -F',' 'NR>1 && $8=="True"{count++}END{print count+0}' "$RANKED_FILE")
+    HIGH_CONF=$(count_by_value      "$RANKED_FILE" confidence_tier        High)
+    MED_CONF=$(count_by_value       "$RANKED_FILE" confidence_tier        Medium)
+    LOW_CONF=$(count_by_value       "$RANKED_FILE" confidence_tier        Low)
+    SIG_SELECTION=$(count_by_value  "$RANKED_FILE" selection_significant  True)
+    BUSTED_S_SIG=$(count_by_value   "$RANKED_FILE" busted_s_significant   True)
+    BUSTED_MH_SIG=$(count_by_value  "$RANKED_FILE" busted_mh_significant  True)
+    MEME_TOTAL=$(sum_column         "$RANKED_FILE" meme_n_episodic_sites)
+    HCR_FRIENDLY=$(count_by_value   "$RANKED_FILE" hcr_probe_friendly     True)
+    TANDEM_MEMBERS=$(count_by_value "$RANKED_FILE" has_tandem_cluster_data True)
+    CDS_NATIVE=$(count_by_value     "$RANKED_FILE" cds_source             native)
+    CDS_MINIPROT=$(count_by_value   "$RANKED_FILE" cds_source             miniprot)
+    TOP_N_RANKED=$(awk -F',' 'NR>1{n++}END{print n+0}' "$RANKED_FILE")
 fi
 
 # --- Generate LaTeX report ---
