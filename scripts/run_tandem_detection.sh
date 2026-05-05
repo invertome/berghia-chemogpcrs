@@ -51,4 +51,9 @@ python3 "$SCRIPT_DIR/compute_tandem_clusters.py" \
     --min-size "${TANDEM_MIN_SIZE:-3}" \
     --out "$OUT"
 
-echo "[run_tandem_detection] OK -> $OUT" >&2
+# Auto-emit the tandem-cluster figure beside the CSV (consumed by stage 09).
+PLOT_PREFIX="${OUT%.csv}_plot"
+python3 "$SCRIPT_DIR/plot_tandem_clusters.py" "$OUT" "$PLOT_PREFIX" \
+    || echo "[run_tandem_detection] WARN: tandem-cluster plot failed (continuing)" >&2
+
+echo "[run_tandem_detection] OK -> $OUT (plot: ${PLOT_PREFIX}.png)" >&2
