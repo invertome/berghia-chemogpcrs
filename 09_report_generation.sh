@@ -88,8 +88,11 @@ PCA_IMG=$(find_image "$STRUCT_DIR" "tmalign_pca.png" "")
 TANDEM_IMG=$(find_image "$SYNTENY_DIR" "tandem_clusters_plot.png" "")
 
 # JCVI synteny dotplot (May-2026 stack; bead -e59). One PDF per Berghia-vs-target run
-# under ${SYNTENY_DIR}/jcvi/<run>/<a>.<b>.pdf — surface the first match.
-JCVI_IMG=$(find_image "$SYNTENY_DIR/jcvi" "*/*.pdf" "")
+# under ${SYNTENY_DIR}/jcvi/<run>/<a>.<b>.pdf. The pattern *.*.pdf (a basename
+# with at least one dot) matches JCVI's <a>.<b>.pdf dotplots while excluding
+# auxiliary single-token PDFs (karyotype.pdf, density.pdf, etc.) the catalog
+# step also emits.
+JCVI_IMG=$(find_image "$SYNTENY_DIR/jcvi" "*/*.*.pdf" "")
 
 # --- Collect statistics (header-aware; tolerates schema additions) ---
 TOTAL_CANDIDATES=$(count_lines "${RESULTS_DIR}/candidates/chemogpcr_candidates.txt")
@@ -445,7 +448,18 @@ if [ -f "$RANKED_FILE" ]; then
 EOF
 
     python3 - "$RANKED_FILE" >> "${RESULTS_DIR}/report/report.tex" <<'PY'
-import csv, sys
+import csv, re, sys
+
+# Escape LaTeX-special characters in interpolated string fields. & % $ # _ { }
+# need a backslash; \ ^ ~ need their package-supplied math-mode forms. Without
+# this, an ID containing any of these (NCBI provisional names occasionally
+# include "&"; gene_name fields routinely contain "_") aborts pdflatex.
+_LATEX_SPECIALS = re.compile(r'([&%$#_{}])')
+def tex_esc(s):
+    s = "" if s is None else str(s)
+    s = _LATEX_SPECIALS.sub(r'\\\1', s)
+    s = s.replace('\\', r'\textbackslash{}').replace('^', r'\^{}').replace('~', r'\~{}')
+    return s
 
 def yn(v):
     return "Y" if str(v).strip().lower() in ("true", "1", "yes", "y") else "N"
@@ -455,14 +469,15 @@ with open(sys.argv[1]) as fh:
     for i, row in enumerate(r, start=1):
         if i > 20:
             break
-        conf = row.get("confidence_tier", "")
-        color = {"High": "highconf", "Medium": "medconf", "Low": "lowconf"}.get(conf, "lowconf")
+        conf = tex_esc(row.get("confidence_tier", ""))
+        color = {"High": "highconf", "Medium": "medconf", "Low": "lowconf"}.get(
+            row.get("confidence_tier", ""), "lowconf")
         try:
             score = float(row.get("rank_score", "0") or 0)
         except ValueError:
             score = 0.0
-        tc = row.get("tandem_cluster_size", "0") or "0"
-        rid = row.get("id", "").replace("_", r"\_")
+        tc = tex_esc(row.get("tandem_cluster_size", "0") or "0")
+        rid = tex_esc(row.get("id", ""))
         print(rf"{i} & {rid} & {score:.3f} & "
               rf"\textcolor{{{color}}}{{{conf}}} & "
               rf"{yn(row.get('selection_significant'))} & "
@@ -494,7 +509,14 @@ HCR-validated chemoreceptor controls (e.g.\ G$\alpha_{\text{olf}}$) are scored b
 \midrule
 EOF
     python3 - "$POSCTRL_TSV" >> "${RESULTS_DIR}/report/report.tex" <<'PY'
-import csv, sys
+import csv, re, sys
+
+_LATEX_SPECIALS = re.compile(r'([&%$#_{}])')
+def tex_esc(s):
+    s = "" if s is None else str(s)
+    s = _LATEX_SPECIALS.sub(r'\\\1', s)
+    s = s.replace('\\', r'\textbackslash{}').replace('^', r'\^{}').replace('~', r'\~{}')
+    return s
 
 def truthy(v):
     return str(v).strip().lower() in ("true", "1", "yes", "y")
@@ -502,9 +524,9 @@ def truthy(v):
 with open(sys.argv[1], newline="") as fh:
     r = csv.DictReader(fh, delimiter="\t")
     for row in r:
-        name = (row.get("gene_name") or "").replace("_", r"\_")
+        name = tex_esc(row.get("gene_name") or "")
         found = "Y" if truthy(row.get("found")) else "N"
-        rank = row.get("rank", "") or "-"
+        rank = tex_esc(row.get("rank", "") or "-")
         pct_raw = row.get("percentile", "")
         try:
             pct = f"{float(pct_raw):.1f}" if pct_raw not in ("", None) else "-"

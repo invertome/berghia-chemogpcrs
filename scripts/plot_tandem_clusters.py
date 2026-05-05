@@ -75,7 +75,12 @@ def plot(df: pd.DataFrame, output_prefix: str, top_n: int = 15) -> None:
                     "cluster size (genes)", "candidates")
 
     # ---- Panel B: top-N largest distinct clusters ----
-    has_cid = (df["tandem_cluster_id"].astype(str).str.len() > 0)
+    # NaN is the wire form for "no cluster" emitted by compute_tandem_clusters
+    # (empty string → pandas NaN on read_csv). Without notna(), .astype(str)
+    # would turn NaN into the literal "nan" string and these would slip past
+    # the length-based filter, producing a phantom "nan" bar in panel B.
+    cid_col = df["tandem_cluster_id"]
+    has_cid = cid_col.notna() & (cid_col.astype(str).str.len() > 0) & (cid_col.astype(str) != "nan")
     clustered = df[has_cid].copy()
     if clustered.empty:
         ax_b.text(0.5, 0.5, "No tandem clusters detected",

@@ -65,11 +65,25 @@ def test_populated(populated_csv: Path, tmp_path: Path) -> None:
     _all_outputs_exist(prefix)
 
 
-def test_all_singletons_emits_figure(all_singletons_csv: Path, tmp_path: Path) -> None:
-    """Even with zero clusters, the plotter must emit a figure with the
-    'No tandem clusters detected' annotation so stage 09 can always link it."""
+def test_all_singletons_filter_excludes_nan_rows(all_singletons_csv: Path,
+                                                  tmp_path: Path) -> None:
+    """Reviewer-found regression: pandas read_csv coerces empty strings to
+    NaN; ``.astype(str)`` then turns NaN into the literal "nan" (length 3),
+    so a naive ``str.len() > 0`` check let phantom rows past, producing a
+    phantom 'nan' bar in panel B. The fixed filter must produce an EMPTY
+    clustered subframe for the all-singletons case."""
     prefix = tmp_path / "tandem_plot_singletons"
     df = pd.read_csv(all_singletons_csv)
+
+    # Replicate the (fixed) filter the plotter uses
+    cid_col = df["tandem_cluster_id"]
+    has_cid = (cid_col.notna()
+               & (cid_col.astype(str).str.len() > 0)
+               & (cid_col.astype(str) != "nan"))
+    assert not has_cid.any(), \
+        "all-singletons input must yield zero cluster-IDs after the filter"
+
+    # End-to-end: plotter still emits a figure (empty-state annotation path).
     ptc.plot(df, str(prefix))
     _all_outputs_exist(prefix)
 

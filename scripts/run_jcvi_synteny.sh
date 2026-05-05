@@ -22,6 +22,15 @@
 
 set -uo pipefail
 
+# Force matplotlib's headless backend so JCVI's dotplot generation
+# (jcvi.graphics.dotplot, called during compara.catalog ortholog) does not
+# attempt to import a display backend on Unity compute nodes. Without this
+# the ortholog step crashes with "_tkinter.TclError: no display name and no
+# $DISPLAY environment variable" — which would abort the whole stage even
+# though the scientifically-relevant anchors file is produced before the
+# dotplot step.
+export MPLBACKEND=Agg
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
@@ -165,6 +174,17 @@ if [ $ORTH_RC -ne 0 ] && [ ! -s "$ANCHORS_OUT" ]; then
     echo "ERROR: jcvi.compara.catalog ortholog failed (exit=$ORTH_RC) with no anchor output." >&2
     tail -40 "${OUTPUT_DIR}/jcvi_ortholog.log" >&2 || true
     exit 4
+fi
+
+# Anchors exist but the ortholog step exited non-zero — this typically means
+# the dotplot rendering failed (e.g. matplotlib backend issue) AFTER the
+# anchors were produced. Log a warning and continue: the report-image hook in
+# stage 09 will simply skip the missing PDF, but the scientific signal (the
+# anchor file feeding the synteny axis of ranking) is intact.
+if [ $ORTH_RC -ne 0 ] && [ -s "$ANCHORS_OUT" ]; then
+    echo "WARNING: jcvi.compara.catalog ortholog returned non-zero (exit=$ORTH_RC) but anchors are present;" >&2
+    echo "         likely a dotplot-rendering failure. Continuing." >&2
+    tail -10 "${OUTPUT_DIR}/jcvi_ortholog.log" >&2 || true
 fi
 
 if [ ! -s "$ANCHORS_OUT" ]; then
