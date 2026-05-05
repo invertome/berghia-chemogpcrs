@@ -47,6 +47,18 @@ except ImportError:
     pass  # No .env support; rely on os.environ values set by the shell.
 
 
+# Maximum sequence length accepted as a "CDS" from a single efetch call.
+# Bug context (bead -lfy, 2026-05-05): for genome-contig accessions
+# (Wellcome Sanger Tree-of-Life OX/LR prefixes, multi-letter WGS contigs
+# like CAJxxx) `efetch nuccore <acc> rettype=fasta` returns the WHOLE
+# 50 MB+ contig, not a single CDS. The script previously wrote those whole
+# contigs into `all_references_cds.fna` (60 GB of garbage). 50 kb is well
+# above the largest plausible single GPCR CDS (the pipeline's actual
+# target — a 7-TM receptor is ~1-3 kb; even big-protein outliers stay
+# under 50 kb) but well below any genome contig.
+MAX_CDS_LENGTH_BP = 50_000
+
+
 @dataclass
 class AccessionInfo:
     """Information about an accession ID."""
@@ -115,6 +127,16 @@ def classify_accession(accession: str) -> str:
     if re.match(r'^(N[CGTWZ]|AC|NS)_\d+', accession):
         return 'ncbi_refseq_genomic'
 
+    # Wellcome Sanger Tree-of-Life genome contigs / chromosomes. These are
+    # unambiguously genomic and must NOT be fetched whole-record (bug -lfy:
+    # `efetch nuccore OX439002.1 rettype=fasta` returns a 50 MB scaffold).
+    # CAJxxx / JABxxx / longer-prefix accessions overlap with TSA and are
+    # NOT explicitly classified here — they fall through to the TSA path,
+    # where the MAX_CDS_LENGTH_BP cap in fetch_cds_ncbi_tsa() rejects any
+    # response that turns out to be a whole-contig fetch.
+    if re.match(r'^(OX|LR)\d{6,}(\.\d+)?$', accession):
+        return 'ncbi_genome_contig'
+
     # TSA (Transcriptome Shotgun Assembly) - typically 4-6 letter prefix + numbers
     # Examples: GABXXX, GECXXX, JABXXX, etc.
     if re.match(r'^[A-Z]{3,6}\d{8,}', accession):
@@ -137,10 +159,6 @@ def classify_accession(accession: str) -> str:
     # DDBJ/ENA nucleotide (single letter + 5 numbers)
     if re.match(r'^[A-Z]\d{5}(\.\d+)?$', accession):
         return 'ena_ddbj'
-
-    # WGS/TSA contigs with version
-    if re.match(r'^[A-Z]{4,}\d+\.\d+$', accession):
-        return 'ncbi_wgs'
 
     return 'unknown'
 
@@ -340,43 +358,32 @@ def fetch_cds_ncbi_tsa(accession: str, entrez) -> Optional[Tuple[str, str]]:
     Returns:
         Tuple of (accession, sequence) or None
     """
-    try:
-        handle = entrez.efetch(
-            db='nuccore',
-            id=accession,
-            rettype='fasta',
-            retmode='text'
-        )
+    def _fetch_and_cap(db: str) -> Optional[Tuple[str, str]]:
+        handle = entrez.efetch(db=db, id=accession, rettype='fasta', retmode='text')
         fasta_data = handle.read()
         handle.close()
+        if not (fasta_data and '>' in fasta_data):
+            return None
+        lines = fasta_data.strip().split('\n')
+        seq = ''.join(lines[1:])
+        # Bug -lfy safety net: a single CDS should never be huge. If the
+        # response is bigger than MAX_CDS_LENGTH_BP, this is a genome-contig
+        # accession that slipped past classification — reject it so it
+        # cannot poison the output FASTA.
+        if len(seq) > MAX_CDS_LENGTH_BP:
+            return None
+        return (accession, seq)
 
-        if fasta_data and '>' in fasta_data:
-            lines = fasta_data.strip().split('\n')
-            seq = ''.join(lines[1:])
-            return (accession, seq)
-
-        return None
-
+    try:
+        result = _fetch_and_cap('nuccore')
+        if result is not None:
+            return result
     except Exception:
-        # Try nucleotide est database
-        try:
-            handle = entrez.efetch(
-                db='nucest',
-                id=accession,
-                rettype='fasta',
-                retmode='text'
-            )
-            fasta_data = handle.read()
-            handle.close()
+        pass
 
-            if fasta_data and '>' in fasta_data:
-                lines = fasta_data.strip().split('\n')
-                seq = ''.join(lines[1:])
-                return (accession, seq)
-
-        except Exception:
-            pass
-
+    try:
+        return _fetch_and_cap('nucest')
+    except Exception:
         return None
 
 
@@ -467,7 +474,7 @@ def fetch_cds_for_accession(info: AccessionInfo, entrez) -> AccessionInfo:
         if info.database == 'ncbi_refseq_protein':
             result = fetch_cds_ncbi_refseq(info.accession, entrez)
 
-        elif info.database in ['ncbi_tsa', 'ncbi_wgs', 'ncbi_genbank_nuc']:
+        elif info.database in ['ncbi_tsa', 'ncbi_genbank_nuc']:
             result = fetch_cds_ncbi_tsa(info.accession, entrez)
 
         elif info.database in ['ena_ddbj']:
@@ -476,10 +483,16 @@ def fetch_cds_for_accession(info: AccessionInfo, entrez) -> AccessionInfo:
         elif info.database == 'uniprot':
             result = fetch_cds_uniprot(info.accession)
 
-        elif info.database == 'ncbi_refseq_genomic':
-            # Genomic scaffolds don't have direct CDS - need gene coordinates
+        elif info.database in ('ncbi_refseq_genomic', 'ncbi_genome_contig'):
+            # Genome scaffolds / contigs (RefSeq NC_/NW_/... or Sanger
+            # ToL OX/LR or multi-letter WGS) don't have a direct
+            # whole-record CDS — `efetch fasta` would return the entire
+            # multi-megabase contig (bug -lfy). These need miniprot
+            # recovery against the source assembly, handled by
+            # recover_cds_from_assemblies.py downstream.
             info.status = 'skipped'
-            info.error_message = 'Genomic scaffold - no direct CDS available'
+            info.error_message = (
+                'Genomic contig — no direct CDS available; needs miniprot recovery')
             return info
 
         elif info.database == 'unknown':
