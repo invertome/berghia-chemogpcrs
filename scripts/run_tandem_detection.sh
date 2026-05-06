@@ -52,7 +52,9 @@ python3 "$SCRIPT_DIR/compute_tandem_clusters.py" \
     --out "$OUT"
 
 # Auto-emit the tandem-cluster figure beside the CSV (consumed by stage 09).
-PLOT_PREFIX="${OUT%.csv}_plot"
+# Use the env-var-controlled plot prefix so user overrides of TANDEM_CLUSTERS_FILE
+# remain in sync with the find pattern stage 09 uses to pick up the image.
+PLOT_PREFIX="${TANDEM_CLUSTERS_PLOT_PREFIX:-${OUT%.csv}_plot}"
 python3 "$SCRIPT_DIR/plot_tandem_clusters.py" "$OUT" "$PLOT_PREFIX" \
     || echo "[run_tandem_detection] WARN: tandem-cluster plot failed (continuing)" >&2
 

@@ -345,6 +345,10 @@ export TANDEM_WINDOW_KB="${TANDEM_WINDOW_KB:-100}"   # Max gap between consecuti
 export TANDEM_MIN_SIZE="${TANDEM_MIN_SIZE:-3}"       # Minimum cluster size to flag
 # CSV produced by scripts/compute_tandem_clusters.py
 export TANDEM_CLUSTERS_FILE="${TANDEM_CLUSTERS_FILE:-${RESULTS_DIR}/synteny/tandem_clusters.csv}"
+# Tandem-cluster plot prefix derived from the CSV path. Single source of truth
+# referenced by both run_tandem_detection.sh (producer) and stage 09 (consumer)
+# so a TANDEM_CLUSTERS_FILE override doesn't silently break the report-image hook.
+export TANDEM_CLUSTERS_PLOT_PREFIX="${TANDEM_CLUSTERS_PLOT_PREFIX:-${TANDEM_CLUSTERS_FILE%.csv}_plot}"
 # Bead -qu9: rhinophore RNA-seq has known confounds (low depth + starvation
 # artifact, e.g. Galpha_olf absent in seq but expressed by HCR in fed slugs).
 # Treat expression as a SOFT signal only; never as a hard gate.

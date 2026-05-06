@@ -85,7 +85,10 @@ HEATMAP_IMG=$(find_image "$STRUCT_DIR" "tmalign_heatmap.png" "")
 PCA_IMG=$(find_image "$STRUCT_DIR" "tmalign_pca.png" "")
 
 # Tandem-cluster plot (May-2026 stack; bead -ar8). Emitted by run_tandem_detection.sh.
-TANDEM_IMG=$(find_image "$SYNTENY_DIR" "tandem_clusters_plot.png" "")
+# Use the env-var-controlled prefix so a TANDEM_CLUSTERS_FILE override remains in
+# sync with the file we look for here.
+TANDEM_PLOT_BASENAME="$(basename "${TANDEM_CLUSTERS_PLOT_PREFIX:-tandem_clusters_plot}").png"
+TANDEM_IMG=$(find_image "$SYNTENY_DIR" "$TANDEM_PLOT_BASENAME" "")
 
 # JCVI synteny dotplot (May-2026 stack; bead -e59). One PDF per Berghia-vs-target run
 # under ${SYNTENY_DIR}/jcvi/<run>/<a>.<b>.pdf. The pattern *.*.pdf (a basename

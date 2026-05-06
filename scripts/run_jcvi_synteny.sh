@@ -21,6 +21,10 @@
 #     --output-dir=<dir>
 
 set -uo pipefail
+# NOTE: deliberately omit `set -e`. The JCVI calls below (gff bed,
+# compara.catalog.ortholog) capture $? into JCVI_RC / ORTH_RC and then
+# branch on it — under `set -e` the script would abort BEFORE the
+# handler runs. Each non-pipeline failure is checked explicitly.
 
 # Force matplotlib's headless backend so JCVI's dotplot generation
 # (jcvi.graphics.dotplot, called during compara.catalog ortholog) does not
@@ -123,7 +127,7 @@ JCVI_VERSION=$("$PYTHON_BIN" -c 'import jcvi, sys; sys.stdout.write(getattr(jcvi
 
 # ---- copy inputs into workdir under JCVI naming convention ----
 # JCVI expects <prefix>.bed and <prefix>.pep (or .cds) co-located in workdir.
-cd "$OUTPUT_DIR"
+cd "$OUTPUT_DIR" || { echo "ERROR: cannot cd into output dir: $OUTPUT_DIR" >&2; exit 5; }
 
 # Build Berghia BED from GFF.
 # `jcvi.formats.gff bed` reads a GFF3 and writes a BED with one line per
