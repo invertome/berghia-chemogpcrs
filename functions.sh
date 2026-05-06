@@ -1339,3 +1339,126 @@ get_incomplete_tasks() {
     # Use subshell to avoid polluting IFS in calling context
     ( IFS=','; echo "${incomplete[*]}" )
 }
+
+# -----------------------------------------------------------------------------
+# Alignment-cleanup stack orchestration (May 2026 v2 — replaces HmmCleaner)
+#
+# Runs the full filter chain on a protein FASTA:
+#   PREQUAL (residue mask)
+#     -> alignment ensemble (canonical + MAFFT variants + FAMSA)
+#     -> CLOAK (consensus mask)
+#     -> TAPER (residue-outlier mask)
+# Each step is gated by RUN_PREQUAL / RUN_CLOAK / RUN_TAPER (defaults ON).
+# Failures are logged but non-fatal: the chain falls through and the caller
+# receives the best-effort output (e.g. canonical alignment if CLOAK fails).
+#
+# Arguments:
+#   $1 - input FASTA (unaligned sequences)
+#   $2 - output FASTA (cleaned alignment)
+#   $3 - work dir prefix (used for ensemble + intermediates; deletable on success)
+#   $4 - tag for logs (e.g. orthogroup base name)
+#   $5 - threads (optional; defaults to $CPUS)
+#
+# Returns: 0 on success (output exists, non-empty), 1 if even the canonical
+# alignment couldn't be produced.
+# -----------------------------------------------------------------------------
+run_alignment_filter_stack() {
+    local input="$1"
+    local output="$2"
+    local workdir="$3"
+    local tag="$4"
+    local threads="${5:-${CPUS:-4}}"
+
+    if [ ! -f "$input" ]; then
+        log --level=ERROR "filter_stack: input not found: $input"
+        return 1
+    fi
+
+    mkdir -p "$workdir" "$(dirname "$output")"
+    local cur="$input"
+
+    # --- Stage 1: PREQUAL ---
+    if [ "${RUN_PREQUAL:-1}" = "1" ]; then
+        local prequal_out="${workdir}/${tag}_prequal.fa"
+        if bash "${SCRIPTS_DIR}/run_prequal.sh" \
+                --input="$cur" --output="$prequal_out" \
+                2>"${LOGS_DIR:-/tmp}/prequal_${tag}.err"; then
+            cur="$prequal_out"
+        else
+            log --level=WARN "filter_stack[$tag]: PREQUAL failed, continuing with un-masked input"
+        fi
+    fi
+
+    # --- Stage 2: alignment ensemble (canonical + variants) ---
+    local ensemble_dir="${workdir}/${tag}_ensemble"
+    if ! bash "${SCRIPTS_DIR}/run_alignment_ensemble.sh" \
+            --input="$cur" \
+            --output-dir="$ensemble_dir" \
+            --threads="$threads" \
+            --canonical-aligner="${ENSEMBLE_CANONICAL_ALIGNER:-auto}" \
+            2>"${LOGS_DIR:-/tmp}/ensemble_${tag}.err"; then
+        log --level=ERROR "filter_stack[$tag]: ensemble failed; aborting"
+        return 1
+    fi
+    cur="${ensemble_dir}/canonical.fa"
+    [ -s "$cur" ] || { log --level=ERROR "filter_stack[$tag]: empty canonical alignment"; return 1; }
+
+    # --- Stage 3: CLOAK consensus ---
+    if [ "${RUN_CLOAK:-1}" = "1" ]; then
+        local cloak_out="${workdir}/${tag}_cloaked.fa"
+        local n_variants
+        n_variants=$(find "$ensemble_dir" -maxdepth 1 -name '*.fa' -type f | wc -l)
+        if [ "$n_variants" -lt 2 ]; then
+            log --level=WARN "filter_stack[$tag]: only $n_variants alignment(s); skipping CLOAK"
+        elif bash "${SCRIPTS_DIR}/run_cloak.sh" \
+                --ensemble-dir="$ensemble_dir" \
+                --output="$cloak_out" \
+                2>"${LOGS_DIR:-/tmp}/cloak_${tag}.err"; then
+            cur="$cloak_out"
+        else
+            log --level=WARN "filter_stack[$tag]: CLOAK failed, continuing with canonical alignment"
+        fi
+    fi
+
+    # --- Stage 4: TAPER residue-outlier mask ---
+    if [ "${RUN_TAPER:-1}" = "1" ]; then
+        local taper_out="${workdir}/${tag}_tapered.fa"
+        if bash "${SCRIPTS_DIR}/run_taper.sh" \
+                --input="$cur" --output="$taper_out" \
+                2>"${LOGS_DIR:-/tmp}/taper_${tag}.err"; then
+            cur="$taper_out"
+        else
+            log --level=WARN "filter_stack[$tag]: TAPER failed, continuing with prior alignment"
+        fi
+    fi
+
+    # --- Optional 5th pass: HmmCleaner (deprecated, off by default) ---
+    if [ "${RUN_HMMCLEANER:-0}" = "1" ] && command -v HmmCleaner.pl >/dev/null 2>&1; then
+        local hmmc_out="${workdir}/${tag}_hmmcleaned.fa"
+        if bash "${SCRIPTS_DIR}/run_hmmcleaner.sh" \
+                --input="$cur" --output="$hmmc_out" \
+                2>"${LOGS_DIR:-/tmp}/hmmcleaner_${tag}.err"; then
+            cur="$hmmc_out"
+        else
+            log --level=WARN "filter_stack[$tag]: HmmCleaner failed, continuing"
+        fi
+    fi
+
+    # --- Finalize: copy final cleaned alignment to caller's output path ---
+    cp "$cur" "$output"
+
+    # Provenance summary alongside the output
+    {
+        echo "tool=run_alignment_filter_stack"
+        echo "input=$input"
+        echo "output=$output"
+        echo "stages_run=prequal=${RUN_PREQUAL:-1},cloak=${RUN_CLOAK:-1},taper=${RUN_TAPER:-1},hmmcleaner=${RUN_HMMCLEANER:-0}"
+        echo "ensemble_dir=$ensemble_dir"
+        echo "final_alignment=$cur"
+        echo "n_seqs=$(grep -c '^>' "$output" 2>/dev/null || echo 0)"
+        echo "run_at=$(date -Iseconds)"
+    } > "${output}.filter_stack.txt"
+
+    log "filter_stack[$tag]: $output ready (n=$(grep -c '^>' "$output"))"
+    return 0
+}

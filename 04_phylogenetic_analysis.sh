@@ -235,21 +235,17 @@ with open('${REF_CATEGORIES_FINAL}', 'a') as f:
     check_resource_requirements "$COMBINED" alignment || \
         log --level=WARN "Proceeding despite alignment resource warning"
 
-    # Bead -align: regime-based aligner — large N (>=1000) uses FAMSA 2,
-    # mid (200-999) uses MAFFT --auto, small (<200) uses MAFFT L-INS-i.
-    # The global Berghia+refs alignment is ~2400 seqs → FAMSA 2 (when installed).
-    run_command "all_berghia_refs_aligner" bash "${SCRIPTS_DIR}/run_aligner.sh" \
-        --input="$COMBINED" \
-        --output="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" \
-        --threads="${CPUS}"
-    # Bead -i61: per-sequence segment cleaning before column-trimming.
-    if [ "${RUN_HMMCLEANER:-1}" = "1" ]; then
-        bash "${SCRIPTS_DIR}/run_hmmcleaner.sh" \
-            --input="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" \
-            --output="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" \
-            2>> "${LOGS_DIR}/hmmcleaner_global.err" \
-            || log --level=WARN "HmmCleaner failed for global alignment (continuing with un-cleaned)"
-    fi
+    # Bead -i61 (May 2026 v2): full filter stack — PREQUAL -> ensemble
+    # alignment (MAFFT canonical + 4 MAFFT variants + FAMSA) -> CLOAK
+    # consensus mask -> TAPER residue-outlier mask. Each stage gated.
+    # Replaces the legacy MAFFT-only + HmmCleaner step. Helper handles
+    # canonical-aligner regime selection and per-stage failure recovery.
+    run_alignment_filter_stack \
+        "$COMBINED" \
+        "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" \
+        "${RESULTS_DIR}/phylogenies/protein/_filter_stack_global" \
+        "all_berghia_refs" \
+        "${CPUS}" || { log "Error: filter stack failed for global alignment"; exit 1; }
     check_alignment "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" || { log "Error: Alignment quality check failed"; exit 1; }
     run_command "all_berghia_refs_clipkit" ${CLIPKIT} "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" -m smart-gap -o "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa"
 
@@ -295,11 +291,13 @@ done
 for level in "${!lse_taxids[@]}"; do
     if [ -f "${RESULTS_DIR}/lse_classification/lse_${level}.fa" ] && [ ! -f "${RESULTS_DIR}/step_completed_lse_${level}_iqtree.txt" ]; then
         mkdir -p "${RESULTS_DIR}/phylogenies/protein/lse_${level}"
-        # Bead -align: regime-based aligner.
-        run_command "lse_${level}_aligner" bash "${SCRIPTS_DIR}/run_aligner.sh" \
-            --input="${RESULTS_DIR}/lse_classification/lse_${level}.fa" \
-            --output="${RESULTS_DIR}/phylogenies/protein/lse_${level}/aligned.fa" \
-            --threads="${CPUS}"
+        # Bead -i61: full filter stack (PREQUAL -> ensemble -> CLOAK -> TAPER).
+        run_alignment_filter_stack \
+            "${RESULTS_DIR}/lse_classification/lse_${level}.fa" \
+            "${RESULTS_DIR}/phylogenies/protein/lse_${level}/aligned.fa" \
+            "${RESULTS_DIR}/phylogenies/protein/lse_${level}/_filter_stack" \
+            "lse_${level}" \
+            "${CPUS}" || { log "Error: filter stack failed for lse_${level}"; exit 1; }
         check_alignment "${RESULTS_DIR}/phylogenies/protein/lse_${level}/aligned.fa" || { log "Error: Alignment quality check failed for lse_${level}"; exit 1; }
         run_command "lse_${level}_trimal" ${TRIMAL} -in "${RESULTS_DIR}/phylogenies/protein/lse_${level}/aligned.fa" -out "${RESULTS_DIR}/phylogenies/protein/lse_${level}/trimmed.fa" -automated1
 
@@ -354,20 +352,13 @@ og=$(find "${RESULTS_DIR}/orthogroups" -name "${base}.fa" -type f 2>/dev/null | 
 [ -z "$og" ] || [ ! -f "$og" ] && { log "Skipping missing orthogroup: ${base}"; exit 0; }
 
 if [ ! -f "${RESULTS_DIR}/step_completed_${base}_iqtree.txt" ]; then
-    # Bead -align: regime-based aligner. Per-OG is typically <500 seqs →
-    # MAFFT L-INS-i (gold-standard accuracy for downstream dN/dS).
-    run_command "${base}_aligner" bash "${SCRIPTS_DIR}/run_aligner.sh" \
-        --input="$og" \
-        --output="${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" \
-        --threads="${CPUS}"
-    # Bead -i61: HmmCleaner segment-clean per OG before column-trim.
-    if [ "${RUN_HMMCLEANER:-1}" = "1" ]; then
-        bash "${SCRIPTS_DIR}/run_hmmcleaner.sh" \
-            --input="${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" \
-            --output="${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" \
-            2>> "${LOGS_DIR}/hmmcleaner_${base}.err" \
-            || log --level=WARN "HmmCleaner failed for ${base} (continuing with un-cleaned)"
-    fi
+    # Bead -i61 (May 2026 v2): full filter stack per OG.
+    run_alignment_filter_stack \
+        "$og" \
+        "${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" \
+        "${RESULTS_DIR}/phylogenies/protein/_filter_stack_${base}" \
+        "${base}" \
+        "${CPUS}" || { log "Error: filter stack failed for ${base}"; exit 1; }
     check_alignment "${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" || { log "Error: Alignment quality check failed for ${base}"; exit 1; }
     run_command "${base}_trimal" ${TRIMAL} -in "${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" -out "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa" -automated1
 

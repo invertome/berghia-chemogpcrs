@@ -90,6 +90,16 @@ export DEEPTMHMM_SIF="${BASE_DIR}/containers/deeptmhmm.sif"
 export ASTRAL="astral"
 export MRBAYES="mb"
 export CLIPKIT="clipkit"
+# --- Alignment-cleanup stack (replaces HmmCleaner, May 2026) ---
+# PREQUAL (Whelan 2018) — bioconda binary; pre-alignment residue mask.
+export PREQUAL="${PREQUAL:-prequal}"
+# CLOAK (Chatur/Wheeler bioRxiv 2025) — Python single-file consensus mask
+# across an alignment ensemble. cloak.py path expected; cloned from
+# github.com/phylowheeler/CLOAK by scripts/unity/install_alignment_filters.sh.
+export CLOAK="${CLOAK:-${BASE_DIR}/tools/CLOAK/cloak.py}"
+# TAPER (Zhang 2021) — Julia script; per-sequence outlier residue masking.
+export TAPER="${TAPER:-${BASE_DIR}/tools/TAPER/correction_multi.jl}"
+export JULIA="${JULIA:-julia}"
 export CDHIT="cd-hit"
 export CAFE="cafe5"
 export NOTUNG="java -jar ${BASE_DIR}/tools/Notung-2.9.jar"
@@ -101,8 +111,26 @@ export RECONCILIATION_BACKEND="${RECONCILIATION_BACKEND:-generax}"
 # aBSREL → MEME (modern HyPhy stack); =absrel runs aBSREL only (legacy,
 # ~5x faster but no recombination/SRV/multi-hit/site-level inference).
 export SELECTION_BACKEND="${SELECTION_BACKEND:-stack}"
-# Bead -i61: gating env vars for new alignment/cleaning tools (default ON).
-export RUN_HMMCLEANER="${RUN_HMMCLEANER:-1}"
+# Bead -i61 (May 2026 v2): the alignment-cleanup stack moved from
+# HmmCleaner -> PREQUAL + CLOAK + TAPER (HmmCleaner abandoned because
+# its Perl XS deps don't build under the conda env's Perl ABI on Unity).
+# Each step gated independently so they can be ablated for sensitivity
+# analysis. Defaults: all ON.
+#   RUN_PREQUAL — pre-alignment residue mask (Whelan 2018).
+#   RUN_CLOAK   — alignment-uncertainty mask via consensus across an
+#                 ensemble of MAFFT variants + FAMSA (Wheeler 2025).
+#   RUN_TAPER   — post-alignment per-sequence residue-outlier mask
+#                 (Zhang 2021).
+#   RUN_HMMCLEANER — DEPRECATED. Kept for back-compat; if =1 *and* HmmCleaner
+#                 is on PATH, will run after CLOAK as a 4th filter pass.
+#                 Default 0 going forward.
+export RUN_PREQUAL="${RUN_PREQUAL:-1}"
+export RUN_CLOAK="${RUN_CLOAK:-1}"
+export RUN_TAPER="${RUN_TAPER:-1}"
+export RUN_HMMCLEANER="${RUN_HMMCLEANER:-0}"
+# Default canonical aligner mode for run_alignment_ensemble.sh
+# (auto = regime-based via run_aligner.sh; or one of linsi/ginsi/einsi/famsa)
+export ENSEMBLE_CANONICAL_ALIGNER="${ENSEMBLE_CANONICAL_ALIGNER:-auto}"
 export RUN_MACSE="${RUN_MACSE:-1}"
 export RUN_TREESHRINK="${RUN_TREESHRINK:-1}"
 # Bead -j44: ASR backend
