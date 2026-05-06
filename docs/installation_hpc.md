@@ -65,20 +65,77 @@ export JAVA_BIN="java"  # or path to your Java 11+ binary
 
 Pipeline integration: stage 05 runs MACSE before pal2nal when `RUN_MACSE=1` (default). Falls back to pal2nal when `MACSE_JAR` is unset or the file is missing.
 
-### HmmCleaner.pl — per-sequence segment cleaning (bead -i61)
+### Alignment-cleanup stack: PREQUAL + CLOAK + TAPER (bead -i61, May 2026 v2)
 
-Required by `scripts/run_hmmcleaner.sh` (invoked from `04_phylogenetic_analysis.sh`).
+Replaces HmmCleaner. The legacy HmmCleaner path was abandoned because its
+Perl XS dependency tree (`Class::XSAccessor`, `Moose`, the `Bio::MUST::*`
+distribution) cannot be built under the conda env's Perl ABI on Unity HPC
+without sudo / system headers — every CPAN attempt failed inside
+`Bio::MUST::Drivers` tests, no bioconda recipe exists, and no published
+container image exists either (see `scripts/unity/README_hmmcleaner_install.md`
+for the full post-mortem). HmmCleaner is now deprecated; the gating
+variable `RUN_HMMCLEANER` defaults to `0` and the binary is no longer
+required.
+
+The replacement is a four-tool stack chained inside
+`run_alignment_filter_stack` in `functions.sh` and invoked from
+`04_phylogenetic_analysis.sh` at three sites (global concat, per-LSE-level,
+per-OG):
+
+1. **PREQUAL** — pre-alignment residue-level mask
+   (Whelan, Irisarri & Burki 2018, *Bioinformatics* **34**:3929,
+   <https://doi.org/10.1093/bioinformatics/bty448>;
+   source <https://github.com/simonwhelan/prequal>). Bioconda binary.
+2. **Alignment ensemble** (`scripts/run_alignment_ensemble.sh`) — six
+   alignments per dataset feeding CLOAK: canonical MAFFT (regime-based
+   via `run_aligner.sh`) + L-INS-i + G-INS-i + E-INS-i + FFT-NS-1 + FAMSA
+   (K = 6).
+3. **CLOAK** — alignment-uncertainty consensus mask across the ensemble
+   (Chatur, Wheeler lab, *bioRxiv* 691663, December 2025,
+   <https://doi.org/10.1101/2025.12.06.691663>;
+   source <https://github.com/phylowheeler/CLOAK>). Single-file Python
+   script; no pip deps beyond stdlib.
+4. **TAPER** — post-alignment per-sequence residue-outlier mask
+   (Zhang, Zhang, Stamatakis & Mirarab 2021, *Methods Ecol Evol* **13**:91,
+   <https://doi.org/10.1111/2041-210X.13696>;
+   source <https://github.com/chaoszhang/TAPER>). Julia script; requires
+   `julia` (installed from conda-forge by the installer).
+
+Then ClipKit handles column-level trimming downstream.
+
+**One-shot install (Unity SLURM):**
 
 ```bash
-# Install via CPAN (requires Perl + cpanminus)
-cpanm Bio::MUST::Apps::HmmCleaner
-
-# Verify
-which HmmCleaner.pl
-HmmCleaner.pl --version
+sbatch scripts/unity/install_alignment_filters.sh
 ```
 
-Pipeline integration: stage 04 runs HmmCleaner after MAFFT and before ClipKit when `RUN_HMMCLEANER=1` (default). Failures are non-fatal — continue with un-cleaned alignment.
+Submitted from the repo root, the job:
+
+- `mamba install -c bioconda prequal` into the `berghia-gpcr` env;
+- `git clone https://github.com/chaoszhang/TAPER.git` into
+  `${WORKDIR}/tools/TAPER` and `mamba install -c conda-forge julia` if
+  needed;
+- `git clone https://github.com/phylowheeler/CLOAK.git` into
+  `${WORKDIR}/tools/CLOAK` (no pip deps).
+
+End-of-job summary prints OK/FAILED per tool plus the `export` lines to
+paste into `config.local.sh`. Partial installs are tolerated — a failure
+in one tool does not abort the others. End-to-end smoke test
+(`scripts/unity/smoke_test_filter_stack.sh`) verified on Unity in 32 s
+(job 56830329) and 29 s (job 56831279).
+
+**Gating env vars (config.sh defaults):**
+
+| Var | Default | Effect |
+|---|---|---|
+| `RUN_PREQUAL`     | `1` | residue mask before MAFFT |
+| `RUN_CLOAK`       | `1` | consensus mask across the 6-alignment ensemble |
+| `RUN_TAPER`       | `1` | per-sequence residue-outlier mask after CLOAK |
+| `RUN_HMMCLEANER`  | `0` | DEPRECATED; if `=1` *and* `HmmCleaner.pl` is on `PATH`, runs after CLOAK as a 4th legacy filter pass (back-compat only) |
+
+Each gate is independent so the stages can be ablated for sensitivity
+analysis. Tool paths (`PREQUAL`, `CLOAK`, `TAPER`, `JULIA`) are exported
+in `config.sh` and overridable via `config.local.sh`.
 
 ### GeneRax — phylogenetic + reconciliation (bead -30g)
 

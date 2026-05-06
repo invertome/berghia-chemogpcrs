@@ -1,5 +1,17 @@
 # HmmCleaner.pl install on Unity HPC
 
+> **DEPRECATED (May 2026).** HmmCleaner is no longer in the active
+> Berghia chemoGPCRs pipeline. The Perl XS dependency stack
+> (`Class::XSAccessor`, `Moose`, `Bio::MUST::*`) refused to build under the
+> `berghia-gpcr` conda env's Perl ABI on Unity HPC (no sudo, no system
+> headers, no bioconda recipe, no published container — see the
+> post-mortem table below). The alignment-cleanup step has been replaced
+> by a PREQUAL + alignment-ensemble + CLOAK + TAPER stack; see
+> `scripts/unity/install_alignment_filters.sh` and
+> `docs/installation_hpc.md` for the replacement. `RUN_HMMCLEANER`
+> defaults to `0` going forward and the install script below is retained
+> only for back-compat / reproducibility.
+
 ## TL;DR — what to run
 
 ```bash
