@@ -6,8 +6,7 @@
 # and masking columns where the alignments disagree. This script
 # produces the ensemble.
 #
-# Default ensemble (6 alignments — chosen for chemoreceptor GPCRs where
-# parameter-sensitivity in ECL/ICL loops dominates uncertainty):
+# Default ensemble (5 alignments — all MAFFT variants):
 #   1. MAFFT canonical (regime-based, kept for downstream tree)
 #   2. MAFFT --localpair --maxiterate 1000  (LINSI)
 #   3. MAFFT --globalpair --maxiterate 1000 (GINSI)
@@ -16,7 +15,22 @@
 #                                            domain spacers — exactly
 #                                            7TM proteins)
 #   5. MAFFT --retree 1 --maxiterate 0      (single-tree progressive)
-#   6. FAMSA                                (independent algorithm family)
+#
+# WHY MAFFT-ONLY (lesson from large smoke test 56832359, 2026-05-06):
+# An earlier version of this script included FAMSA as a 6th ensemble
+# member ("for cross-algorithm diversity"). On 150 Conus consors seqs,
+# FAMSA produced a 3772-column alignment vs MAFFT variants' 1627-1999
+# columns (2.3x longer). CLOAK's column-pairing consensus across that
+# heterogeneous ensemble inflated the output to 6350 columns instead
+# of masking down toward ~1600 — the OPPOSITE of what we wanted.
+#
+# Wheeler 2025 (CLOAK paper) benchmarked the algorithm on Muscle5
+# stratified ensembles — same-algorithm parameter perturbations with
+# similar column structures. CLOAK assumes that. Cross-algorithm
+# ensembles (MAFFT + FAMSA) violate the assumption because progressive-
+# vs-iterative aligners produce fundamentally different column counts.
+# We get our diversity via MAFFT parameter perturbation instead, which
+# is exactly what CLOAK was designed for.
 #
 # Usage:
 #   bash run_alignment_ensemble.sh \
@@ -41,7 +55,7 @@ CANONICAL_ALIGNER="auto"
 
 usage() {
     cat >&2 <<EOF
-run_alignment_ensemble.sh — generate ensemble of MAFFT variants + FAMSA
+run_alignment_ensemble.sh — generate ensemble of MAFFT variants for CLOAK
 
 Required:
   --input=<path>          Unaligned protein FASTA
@@ -137,19 +151,11 @@ for entry in "${VARIANTS[@]}"; do
     run_mafft_variant "$name" $args
 done
 
-# FAMSA variant (different algorithm family)
-if command -v "$FAMSA_BIN" >/dev/null 2>&1; then
-    if "$FAMSA_BIN" -t "$THREADS" "$INPUT" "${OUTPUT_DIR}/variant_famsa.fa" \
-        2>"${OUTPUT_DIR}/variant_famsa.log" \
-       && [[ -s "${OUTPUT_DIR}/variant_famsa.fa" ]]; then
-        echo "  variant_famsa: OK ($(grep -c '^>' "${OUTPUT_DIR}/variant_famsa.fa") seqs)" >&2
-    else
-        echo "  variant_famsa: FAILED (continuing without it)" >&2
-        rm -f "${OUTPUT_DIR}/variant_famsa.fa"
-    fi
-else
-    echo "  variant_famsa: SKIPPED (famsa not installed)" >&2
-fi
+# NOTE: FAMSA was deliberately removed from the ensemble (see header comment).
+# It produces alignments with ~2x the column count of MAFFT, which breaks
+# CLOAK's same-column-structure assumption. FAMSA is still available as the
+# canonical aligner via --canonical-aligner=famsa for use cases outside the
+# CLOAK ensemble (e.g. very large datasets where MAFFT would be too slow).
 
 # --- Provenance ---
 N_VARIANTS=$(find "$OUTPUT_DIR" -maxdepth 1 -name 'variant_*.fa' -type f | wc -l)
