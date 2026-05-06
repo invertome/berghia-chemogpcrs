@@ -119,6 +119,25 @@ if [ -f "$HCR_AUG_INPUT" ]; then
         || log --level=WARN "HCR-friendliness column augmentation failed (kept original CSV)"
 fi
 
+# Bead -ogc: per-OG ref-CDS coverage transparency columns
+# (og_n_ref_cds, og_n_total, og_dnds_reliability). Annotates each row
+# with the data-quality context for its dN/dS contribution. Doesn't
+# change ranking; lets reviewers see which candidates' rankings depend
+# on dN/dS estimates from sparse reference CDS.
+COV_REF_CDS="${RESULTS_DIR}/reference_sequences/cds/all_references_cds.fna"
+COV_OG_TSV=$(find "${RESULTS_DIR}/orthogroups" -name "Orthogroups.tsv" -path "*/Orthogroups/*" 2>/dev/null | head -1)
+if [ -f "$HCR_AUG_INPUT" ] && [ -f "$COV_REF_CDS" ] && [ -n "$COV_OG_TSV" ]; then
+    python3 "${SCRIPTS_DIR}/add_og_coverage_columns.py" \
+        --ranked-csv "$HCR_AUG_INPUT" \
+        --cds-fasta "$COV_REF_CDS" \
+        --orthogroups-tsv "$COV_OG_TSV" \
+        --out "$HCR_AUG_INPUT" \
+        2>> "${LOGS_DIR}/og_coverage_columns.err" \
+        || log --level=WARN "OG-coverage column augmentation failed (kept original CSV)"
+elif [ -f "$HCR_AUG_INPUT" ]; then
+    log --level=WARN "Skipping OG-coverage columns: missing $COV_REF_CDS or Orthogroups.tsv"
+fi
+
 # Generate plots
 python3 "${SCRIPTS_DIR}/plot_ranking.py" "${RESULTS_DIR}/ranking/ranked_candidates_sorted.csv" "${RESULTS_DIR}/ranking/ranking_plot" || log "Warning: Ranking plot failed"
 

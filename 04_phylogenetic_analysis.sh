@@ -247,7 +247,14 @@ with open('${REF_CATEGORIES_FINAL}', 'a') as f:
         "all_berghia_refs" \
         "${CPUS}" || { log "Error: filter stack failed for global alignment"; exit 1; }
     check_alignment "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" || { log "Error: Alignment quality check failed"; exit 1; }
-    run_command "all_berghia_refs_clipkit" ${CLIPKIT} "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" -m smart-gap -o "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa"
+    # kpic-smart-gap (not plain smart-gap): the filter stack's CLOAK step
+    # produces a super-alignment where disputed pairings are spread into
+    # singleton-variant columns. kpic-smart-gap drops both heavily-gappy
+    # columns (smart-gap) AND singleton variants (kpic), correctly cleaning
+    # up CLOAK's spread artifact while preserving parsimony-informative +
+    # constant sites for IQ-TREE branch-length estimation. See ClipKit
+    # paper recommendation for phylogenomics.
+    run_command "all_berghia_refs_clipkit" ${CLIPKIT} "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" -m kpic-smart-gap -o "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa"
 
     # FastTree seed strategy: Generate approximate ML tree first to avoid local optima
     # This is important for large, divergent gene families like GPCRs
@@ -299,7 +306,9 @@ for level in "${!lse_taxids[@]}"; do
             "lse_${level}" \
             "${CPUS}" || { log "Error: filter stack failed for lse_${level}"; exit 1; }
         check_alignment "${RESULTS_DIR}/phylogenies/protein/lse_${level}/aligned.fa" || { log "Error: Alignment quality check failed for lse_${level}"; exit 1; }
-        run_command "lse_${level}_trimal" ${TRIMAL} -in "${RESULTS_DIR}/phylogenies/protein/lse_${level}/aligned.fa" -out "${RESULTS_DIR}/phylogenies/protein/lse_${level}/trimmed.fa" -automated1
+        # ClipKit kpic-smart-gap (consistent with global path; correctly handles
+        # CLOAK super-alignment by dropping singleton-variant + heavily-gappy cols).
+        run_command "lse_${level}_clipkit" ${CLIPKIT} "${RESULTS_DIR}/phylogenies/protein/lse_${level}/aligned.fa" -m kpic-smart-gap -o "${RESULTS_DIR}/phylogenies/protein/lse_${level}/trimmed.fa"
 
         # FastTree seed strategy for LSE trees
         run_command "lse_${level}_fasttree" --stdout="${RESULTS_DIR}/phylogenies/protein/lse_${level}/fasttree.tre" ${FASTTREE} -seed "${FASTTREE_SEED}" -lg -gamma "${RESULTS_DIR}/phylogenies/protein/lse_${level}/trimmed.fa"
@@ -360,7 +369,9 @@ if [ ! -f "${RESULTS_DIR}/step_completed_${base}_iqtree.txt" ]; then
         "${base}" \
         "${CPUS}" || { log "Error: filter stack failed for ${base}"; exit 1; }
     check_alignment "${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" || { log "Error: Alignment quality check failed for ${base}"; exit 1; }
-    run_command "${base}_trimal" ${TRIMAL} -in "${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" -out "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa" -automated1
+    # ClipKit kpic-smart-gap (consistent with global+LSE paths; correctly
+    # handles CLOAK super-alignment).
+    run_command "${base}_clipkit" ${CLIPKIT} "${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" -m kpic-smart-gap -o "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa"
 
     # FastTree seed strategy for orthogroup trees
     run_command "${base}_fasttree" --stdout="${RESULTS_DIR}/phylogenies/protein/${base}_fasttree.tre" ${FASTTREE} -seed "${FASTTREE_SEED}" -lg -gamma "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa"
