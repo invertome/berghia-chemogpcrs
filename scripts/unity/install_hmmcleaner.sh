@@ -1,4 +1,12 @@
 #!/bin/bash
+#SBATCH --job-name=hmmcleaner_install
+#SBATCH --partition=cpu
+#SBATCH --time=2:00:00
+#SBATCH --mem=8G
+#SBATCH --cpus-per-task=2
+#SBATCH --output=logs/%x-%j.out
+#SBATCH --error=logs/%x-%j.err
+#
 # install_hmmcleaner.sh — install HmmCleaner.pl into the berghia-gpcr conda env on Unity.
 #
 # WHY THIS EXISTS
@@ -42,14 +50,6 @@
 # After completion, RUN_HMMCLEANER=1 in the main pipeline will pick up
 # HmmCleaner.pl from $CONDA_PREFIX/bin (which is already on PATH for the
 # berghia-gpcr conda env).
-
-#SBATCH --job-name=hmmcleaner_install
-#SBATCH --partition=cpu
-#SBATCH --time=2:00:00
-#SBATCH --mem=8G
-#SBATCH --cpus-per-task=2
-#SBATCH --output=logs/%x-%j.out
-#SBATCH --error=logs/%x-%j.err
 
 set -eo pipefail
 # NOTE: deliberately omitting `set -u`. Conda's gcc/gxx deactivate hooks
