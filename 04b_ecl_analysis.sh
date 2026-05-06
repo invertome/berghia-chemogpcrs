@@ -5,7 +5,13 @@
 # suggests ligand-binding site diversification, a hallmark of chemoreceptor evolution.
 #
 # Inputs:
-#   - Pre-trimming MAFFT alignment (all_berghia_refs_aligned.fa) — retains variable ECL columns
+#   - Canonical MAFFT alignment (all_berghia_refs_aligned_canonical.fa) —
+#     un-cleaned, retains variable ECL columns. Stage 04's filter stack
+#     (PREQUAL+CLOAK+TAPER) would mask exactly the alignment-uncertain ECL
+#     positions we want to study here, so this analysis must read the
+#     pre-filter canonical alignment instead. Falls back to the filter-
+#     stacked output with a warning if the canonical sibling is missing
+#     (e.g. for legacy runs that pre-date the May 2026 filter-stack swap).
 #   - DeepTMHMM/Kyte-Doolittle topology predictions (predicted_topologies.3line)
 #
 # Outputs:
@@ -34,10 +40,20 @@ log "=== Step 04b: ECL Divergence Analysis ==="
 
 # --- Check prerequisites ---
 
-# Step 04 completion (we need the alignment)
-ALIGNMENT="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa"
-if [ ! -s "$ALIGNMENT" ]; then
-    log "Warning: Pre-trimming alignment not found or empty: $ALIGNMENT"
+# Step 04 completion (we need the alignment).
+# Prefer the canonical sibling (un-cleaned MAFFT alignment, ECL columns
+# preserved); fall back to the filter-stacked output for legacy runs.
+CANONICAL="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned_canonical.fa"
+FILTERED="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa"
+if [ -s "$CANONICAL" ]; then
+    ALIGNMENT="$CANONICAL"
+    log "Using canonical (un-CLOAKed) alignment for ECL analysis: $(basename "$ALIGNMENT")"
+elif [ -s "$FILTERED" ]; then
+    ALIGNMENT="$FILTERED"
+    log --level=WARN "Canonical sibling missing; falling back to filter-stacked alignment: $(basename "$ALIGNMENT")"
+    log --level=WARN "ECL columns may be CLOAK-masked, biasing the divergence ratio. Re-run stage 04 to regenerate."
+else
+    log "Warning: Neither canonical nor filter-stacked alignment found at $CANONICAL or $FILTERED"
     log "Skipping ECL analysis — run step 04 first to generate the alignment."
     exit 0
 fi

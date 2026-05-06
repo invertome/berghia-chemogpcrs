@@ -1447,11 +1447,23 @@ run_alignment_filter_stack() {
     # --- Finalize: copy final cleaned alignment to caller's output path ---
     cp "$cur" "$output"
 
+    # Sibling: preserve the canonical (pre-CLOAK / pre-TAPER) alignment for
+    # downstream consumers that need the variable columns intact. 04b ECL
+    # divergence analysis specifically *wants* the variable ECL columns —
+    # CLOAK would have masked exactly those (because they're alignment-
+    # uncertain). Save the un-cleaned canonical MAFFT/FAMSA output so 04b
+    # can read it instead of the filter-stack output.
+    local canonical_sibling="${output%.fa}_canonical.fa"
+    if [ -s "${ensemble_dir}/canonical.fa" ]; then
+        cp "${ensemble_dir}/canonical.fa" "$canonical_sibling"
+    fi
+
     # Provenance summary alongside the output
     {
         echo "tool=run_alignment_filter_stack"
         echo "input=$input"
         echo "output=$output"
+        echo "canonical_sibling=$canonical_sibling"
         echo "stages_run=prequal=${RUN_PREQUAL:-1},cloak=${RUN_CLOAK:-1},taper=${RUN_TAPER:-1},hmmcleaner=${RUN_HMMCLEANER:-0}"
         echo "ensemble_dir=$ensemble_dir"
         echo "final_alignment=$cur"
@@ -1459,6 +1471,6 @@ run_alignment_filter_stack() {
         echo "run_at=$(date -Iseconds)"
     } > "${output}.filter_stack.txt"
 
-    log "filter_stack[$tag]: $output ready (n=$(grep -c '^>' "$output"))"
+    log "filter_stack[$tag]: $output ready (n=$(grep -c '^>' "$output"); canonical sibling: $(basename "$canonical_sibling"))"
     return 0
 }

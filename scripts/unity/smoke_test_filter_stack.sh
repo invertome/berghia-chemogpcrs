@@ -120,6 +120,17 @@ else
     PASS=0
 fi
 
+# 3b. Canonical sibling — un-cleaned MAFFT alignment for 04b ECL analysis
+CANONICAL_SIBLING="${OUTPUT%.fa}_canonical.fa"
+if [[ -s "$CANONICAL_SIBLING" ]]; then
+    N_CANON=$(grep -c '^>' "$CANONICAL_SIBLING")
+    echo "  [PASS] Canonical sibling exists: $CANONICAL_SIBLING ($N_CANON seqs)"
+else
+    echo "  [FAIL] Canonical sibling missing: $CANONICAL_SIBLING"
+    echo "         (04b ECL analysis depends on this for variable-column-preserving alignment)"
+    PASS=0
+fi
+
 # 4. Per-stage outputs in workdir
 echo ""
 echo "  Per-stage workdir contents:"
