@@ -51,7 +51,15 @@
 #SBATCH --output=logs/%x-%j.out
 #SBATCH --error=logs/%x-%j.err
 
-set -euo pipefail
+set -eo pipefail
+# NOTE: deliberately omitting `set -u`. Conda's gcc/gxx deactivate hooks
+# (deactivate-gxx_linux-64.sh) reference $CONDA_BACKUP_CXX without a
+# default, which makes any `conda install -n <other_env>` (which forces a
+# deactivate first) abort under `set -u` with:
+#   "CONDA_BACKUP_CXX: unbound variable"
+# The first install attempt (job 56723380) crashed in 5 seconds for
+# exactly this reason. We accept the marginal loss of unset-var safety
+# in this install script in exchange for a working conda interaction.
 
 # -----------------------------------------------------------------------------
 # Paths

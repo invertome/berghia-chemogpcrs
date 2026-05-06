@@ -163,7 +163,14 @@ def write_fasta(seqs, path):
 
 
 def get_missing_proteins(og_dir, cds_file, species_prefix):
-    """Get protein IDs for a species that lack CDS."""
+    """Get protein IDs for a species that lack CDS.
+
+    The Nath et al. reference tree uses ``.faa`` and stores files in
+    nested subdirectories (``lse/<phylum>/<taxid>_<species>.faa``,
+    ``one_to_one_ortholog/OG*.faa``). We recurse through ``og_dir`` and
+    accept the common protein-FASTA extensions ``.faa`` / ``.fa`` /
+    ``.fasta``.
+    """
     # Load existing CDS IDs
     cds_ids = set()
     if os.path.exists(cds_file):
@@ -172,13 +179,19 @@ def get_missing_proteins(og_dir, cds_file, species_prefix):
                 if line.startswith('>'):
                     cds_ids.add(line[1:].split()[0])
 
-    # Find proteins for this species in OG FASTAs
+    # Find proteins for this species in OG FASTAs (recursive; multi-extension)
     missing = {}
-    for fa_path in glob.glob(os.path.join(og_dir, '*.fa')):
-        seqs = parse_fasta(fa_path)
-        for sid, seq in seqs.items():
-            if sid.startswith(species_prefix + '_') and sid not in cds_ids:
-                missing[sid] = seq
+    seen_paths = set()
+    for ext in ('faa', 'fa', 'fasta'):
+        for fa_path in glob.glob(os.path.join(og_dir, '**', f'*.{ext}'),
+                                 recursive=True):
+            if fa_path in seen_paths:
+                continue
+            seen_paths.add(fa_path)
+            seqs = parse_fasta(fa_path)
+            for sid, seq in seqs.items():
+                if sid.startswith(species_prefix + '_') and sid not in cds_ids:
+                    missing[sid] = seq
 
     return missing
 
