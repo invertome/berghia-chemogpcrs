@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=class_ref_trees
 #SBATCH --partition=cpu
-#SBATCH --time=08:00:00
-#SBATCH --mem=16G
+#SBATCH --time=12:00:00
+#SBATCH --mem=24G
 #SBATCH --cpus-per-task=8
 #SBATCH --output=logs/%x-%j.out
 #SBATCH --error=logs/%x-%j.err
@@ -20,12 +20,21 @@
 #   3. peptide         — all 189 reviewed peptide refs for medium-
 #                        granularity placement.
 #
-# Per-tree pipeline: MAFFT --auto + ClipKit kpic-smart-gap + IQ-TREE 3
+# Per-tree pipeline: PRODUCTION FILTER STACK
+# (run_alignment_filter_stack from functions.sh) — PREQUAL + MAFFT
+# canonical+4 variants+FAMSA ensemble + CLOAK consensus mask + TAPER
+# residue-outlier mask, then ClipKit kpic-smart-gap, then IQ-TREE 3
 # ModelFinder (LG/VT/WAG/JTT/Dayhoff/mtREV/cpREV) + UFBoot 1000 +
-# SH-aLRT 1000 with deterministic seed. Lighter than the production
-# stage 04 filter stack (no PREQUAL/CLOAK/TAPER) because the inputs
-# are already high-quality Swiss-Prot reviewed entries — full filter
-# stack would over-trim signal columns.
+# SH-aLRT 1000 + TBE with deterministic seed.
+#
+# Earlier version of this script used a lighter MAFFT-only pipeline,
+# arguing the Swiss-Prot reviewed inputs were already clean. Reverted
+# 2026-05-07 for METHODOLOGICAL CONSISTENCY with stage 04 (the rest of
+# the project's phylogenies all use the full stack) and because the
+# subtrees span closely-related receptors (5HT vs dopamine etc.) where
+# alignment uncertainty in ECL/ICL loops genuinely matters even on
+# reviewed inputs. Defends against reviewer comments on inconsistency.
+# Compute cost: ~60 extra min on Unity (one-time, cached).
 #
 # Submit:  sbatch scripts/unity/build_classification_reference_trees.sh
 
@@ -82,12 +91,14 @@ build_tree() {
     echo "==== [tree:$name] $n sequences ===="
     local aln="$OUT_DIR/${name}.aln"
     local trimmed="$OUT_DIR/${name}.trimmed.aln"
+    local stack_workdir="$OUT_DIR/_filter_stack_${name}"
     local prefix="$OUT_DIR/${name}"
 
     if [[ ! -s "$aln" ]]; then
-        echo "  [tree:$name] MAFFT --auto..."
-        mafft --auto --quiet --thread "$THREADS" "$input" > "$aln" \
-            2> "$OUT_DIR/${name}.mafft.log"
+        echo "  [tree:$name] Filter stack (PREQUAL → MAFFT ensemble → CLOAK → TAPER)..."
+        run_alignment_filter_stack \
+            "$input" "$aln" "$stack_workdir" "$name" "$THREADS" \
+            || { echo "  [tree:$name] filter stack FAILED" >&2; return 1; }
     else
         echo "  [tree:$name] MSA already present: $aln"
     fi

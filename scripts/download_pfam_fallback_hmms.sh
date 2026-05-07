@@ -27,11 +27,17 @@ mkdir -p "$OUTPUT_DIR"
 # Pfam HMM download endpoint (InterPro re-exports the Pfam HMMs).
 # Each HMM is a single text file at:
 #   https://www.ebi.ac.uk/interpro/wwwapi/entry/pfam/<accession>?annotation=hmm
+# Labels prefixed with "pfam-" to distinguish from custom HMMs trained
+# from our curated reference set. Custom HMMs are more specific to our
+# taxa and should win when both classify the same candidate; Pfam
+# fallbacks remain useful for candidates that don't hit any custom HMM
+# (Class A orphans, etc.) — at minimum we get a coarse Class A/B/C/F
+# call instead of 'unclassified-hmm'.
 PFAM_HMMS=(
-    "PF00001:7tm_1:class-A-7tm"
-    "PF00002:7tm_2:class-B-7tm"
-    "PF00003:7tm_3:class-C-7tm"
-    "PF01534:Frizzled:class-F-frizzled"
+    "PF00001:7tm_1:pfam-class-A"
+    "PF00002:7tm_2:pfam-class-B"
+    "PF00003:7tm_3:pfam-class-C"
+    "PF01534:Frizzled:pfam-class-F"
 )
 
 MANIFEST="$OUTPUT_DIR/manifest.tsv"

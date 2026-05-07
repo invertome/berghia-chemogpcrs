@@ -141,14 +141,62 @@ def assign_classification(hits: list[tuple[str, float, float]],
 
 # ---- HMM library consolidation + scan -----------------------------------
 
+def _load_pfam_manifest(pfam_dir: str) -> dict[str, str]:
+    """Read the Pfam fallback manifest to map original HMM NAME (e.g.
+    '7tm_1') to our classification label (e.g. 'class-A-7tm'). Returns
+    empty dict if no manifest is present.
+
+    Without this mapping, the HMM names '7tm_1' / '7tm_2' / '7tm_3'
+    would be parsed by label_for_hmm as ('7tm', '1') etc — splitting
+    Pfam's family numbering as if it were a subfamily separator. We
+    rename the Pfam HMMs at consolidation time to avoid that.
+    """
+    manifest = os.path.join(pfam_dir, "manifest.tsv")
+    if not os.path.exists(manifest):
+        return {}
+    out: dict[str, str] = {}
+    with open(manifest) as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        for row in reader:
+            pfam_name = row.get("pfam_name", "").strip()
+            label = row.get("classification_label", "").strip()
+            if pfam_name and label:
+                out[pfam_name] = label
+    return out
+
+
+def _rewrite_hmm_name(hmm_text: str, new_name: str) -> str:
+    """Replace the NAME line of an HMM block. HMMER format: line starts
+    with 'NAME' followed by whitespace and the name. We only rewrite the
+    FIRST NAME line per block (subsequent NAME-prefixed text in alignments
+    can't legitimately exist at column 0 in HMMER format)."""
+    out_lines: list[str] = []
+    renamed = False
+    for line in hmm_text.splitlines(keepends=True):
+        if not renamed and line.startswith("NAME ") and len(line.split()) >= 2:
+            out_lines.append(f"NAME  {new_name}\n")
+            renamed = True
+        else:
+            out_lines.append(line)
+    return "".join(out_lines)
+
+
 def consolidate_hmm_library(hmm_dir: str,
                              pfam_dir: Optional[str],
                              out_path: str) -> None:
     """Concatenate all .hmm files from hmm_dir + pfam_dir into a single
-    file and hmmpress it for hmmscan."""
+    file and hmmpress it for hmmscan.
+
+    Pfam HMMs are renamed at consolidation time using the Pfam manifest's
+    classification_label, so 7tm_1 becomes class-A-7tm etc — avoids the
+    label_for_hmm parser splitting Pfam family numbering on the
+    underscore separator.
+    """
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    pfam_label_map = _load_pfam_manifest(pfam_dir) if pfam_dir else {}
+
     with open(out_path, "w") as out:
-        # Custom HMMs (skip Pfam fallback subdir if it lives inside hmm_dir)
+        # Custom HMMs (already have meaningful NAMEs from build step).
         for fname in sorted(os.listdir(hmm_dir)):
             if not fname.endswith(".hmm"):
                 continue
@@ -157,14 +205,24 @@ def consolidate_hmm_library(hmm_dir: str,
                 continue
             with open(full) as f:
                 shutil.copyfileobj(f, out)
-        # Pfam fallback HMMs (if provided)
+        # Pfam fallback HMMs — rewrite NAME using the Pfam manifest mapping.
         if pfam_dir and os.path.isdir(pfam_dir):
             for fname in sorted(os.listdir(pfam_dir)):
                 if not fname.endswith(".hmm"):
                     continue
                 full = os.path.join(pfam_dir, fname)
                 with open(full) as f:
-                    shutil.copyfileobj(f, out)
+                    text = f.read()
+                # Find original NAME and remap
+                orig_name = ""
+                for line in text.splitlines():
+                    if line.startswith("NAME "):
+                        orig_name = line.split(None, 1)[1].strip()
+                        break
+                new_name = pfam_label_map.get(orig_name, orig_name)
+                if new_name != orig_name:
+                    text = _rewrite_hmm_name(text, new_name)
+                out.write(text)
     # hmmpress for fast hmmscan; remove existing index files first.
     for ext in ("h3f", "h3i", "h3m", "h3p"):
         p = out_path + "." + ext
