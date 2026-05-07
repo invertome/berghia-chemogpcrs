@@ -106,6 +106,9 @@ BUSTED_S_SIG=""; BUSTED_MH_SIG=""; MEME_TOTAL=""
 HCR_FRIENDLY=""; TANDEM_MEMBERS=""
 CDS_NATIVE=""; CDS_MINIPROT=""
 TOP_N_RANKED=""
+# Non-chemoreceptor classification (stage 06c output, joined into ranked CSV
+# by add_classification_columns.py).
+NONCHEMO_HIGH=""; NONCHEMO_MED=""; CHEMO_CANDIDATE=""
 
 if [ -f "$RANKED_FILE" ]; then
     HIGH_CONF=$(count_by_value      "$RANKED_FILE" confidence_tier        High)
@@ -120,6 +123,9 @@ if [ -f "$RANKED_FILE" ]; then
     CDS_NATIVE=$(count_by_value     "$RANKED_FILE" cds_source             native)
     CDS_MINIPROT=$(count_by_value   "$RANKED_FILE" cds_source             miniprot)
     TOP_N_RANKED=$(awk -F',' 'NR>1{n++}END{print n+0}' "$RANKED_FILE")
+    NONCHEMO_HIGH=$(count_by_value  "$RANKED_FILE" classification         non-chemoreceptor)
+    NONCHEMO_MED=$(count_by_value   "$RANKED_FILE" classification         likely-non-chemoreceptor)
+    CHEMO_CANDIDATE=$(count_by_value "$RANKED_FILE" classification        chemoreceptor-candidate)
 fi
 
 # --- Generate LaTeX report ---
@@ -188,6 +194,10 @@ MEME episodic sites (sum) & ${MEME_TOTAL:-0} \\\\
 \midrule
 HCR probe-friendly & ${HCR_FRIENDLY:-0} \\\\
 In tandem cluster & ${TANDEM_MEMBERS:-0} \\\\
+\midrule
+Chemoreceptor-candidate (kept) & ${CHEMO_CANDIDATE:-0} \\\\
+Likely non-chemoreceptor (medium) & ${NONCHEMO_MED:-0} \\\\
+Non-chemoreceptor (high conf.) & ${NONCHEMO_HIGH:-0} \\\\
 \midrule
 CDS source: native & ${CDS_NATIVE:-0} \\\\
 CDS source: miniprot-recovered & ${CDS_MINIPROT:-0} \\\\

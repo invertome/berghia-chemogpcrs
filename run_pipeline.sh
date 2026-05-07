@@ -43,13 +43,14 @@ declare -A PIPELINE_STEPS=(
     ["04"]="04_phylogenetic_analysis.sh:Phylogenetic Analysis:yes"
     ["05"]="05_selective_pressure_and_asr.sh:Selective Pressure & ASR:yes"
     ["06"]="06_synteny_and_mapping.sh:Synteny & Mapping:no"
+    ["06c"]="06c_classify_non_chemoreceptors.sh:Non-Chemoreceptor Classification:no"
     ["07"]="07_candidate_ranking.sh:Candidate Ranking:no"
     ["08"]="08_structural_analysis.sh:Structural Analysis:no"
     ["09"]="09_report_generation.sh:Report Generation:no"
 )
 
 # Ordered list for sequential execution
-STEP_ORDER=("01" "02" "02a" "02b" "03" "03a" "03b" "03c" "03d" "04" "05" "06" "07" "08" "09")
+STEP_ORDER=("01" "02" "02a" "02b" "03" "03a" "03b" "03c" "03d" "04" "05" "06" "06c" "07" "08" "09")
 
 # --- Usage ---
 usage() {
