@@ -137,6 +137,62 @@ Each gate is independent so the stages can be ablated for sensitivity
 analysis. Tool paths (`PREQUAL`, `CLOAK`, `TAPER`, `JULIA`) are exported
 in `config.sh` and overridable via `config.local.sh`.
 
+### EPA-ng + classification reference trees (non-chemoreceptor classification, May 2026)
+
+Required by stage `06c_classify_non_chemoreceptors.sh` (Phase 4 of the
+non-chemoreceptor classification feature).
+
+**Install EPA-ng (bioconda):**
+
+```bash
+mamba install -c bioconda epa-ng
+```
+
+**Build the classification reference trees (one-time):**
+
+```bash
+sbatch scripts/unity/build_classification_reference_trees.sh
+```
+
+This builds three IQ-TREE 3 reference trees from the curated
+non-chemoreceptor GPCR reference set (created by Phase 1 of the
+feature, `scripts/curate_gpcr_references.py`):
+
+1. **backbone** (~54 reps; 6 per coarse family across 9 families) for
+   first-pass family-level placement
+2. **aminergic_subtree** (all reviewed aminergic refs) for medium-
+   granularity 5HT/dopamine/norepinephrine/histamine/tyramine drilldown
+3. **peptide_subtree** (all reviewed peptide refs) for medium-
+   granularity NPY-NPF/tachykinin/opioid/etc. drilldown
+
+Per-tree pipeline: MAFFT `--auto` + ClipKit `kpic-smart-gap` +
+IQ-TREE 3 ModelFinder + UFBoot 1000 + SH-aLRT 1000 with deterministic
+seed. Output to `${RESULTS_DIR}/classification/trees/`.
+
+**Build the custom HMM library (one-time, paired with the trees):**
+
+```bash
+python3 scripts/build_classification_hmms.py \
+    --reference-fasta references/non_chemo_gpcr/all_references.fasta \
+    --reference-tsv references/non_chemo_gpcr/all_references.tsv \
+    --output-dir results/classification/hmms/ \
+    --threads 4
+bash scripts/download_pfam_fallback_hmms.sh   # adds 4 Pfam fallback HMMs
+python3 scripts/validate_classification_hmms.py \
+    --hmm-dir results/classification/hmms/ \
+    --output-dir results/classification/loo/ \
+    --threads 4   # LOO benchmark — sets per-family E-value thresholds
+```
+
+Pipeline integration: stage 06c (`06c_classify_non_chemoreceptors.sh`)
+runs HMM-scan + OG-vote + EPA-ng placement + 3-source consensus, writing
+`${RESULTS_DIR}/classification/candidate_classifications.tsv`. Stage 07
+(`07_candidate_ranking.sh`) joins those classifications into the ranked
+candidates CSV via `scripts/add_classification_columns.py`. The 06c
+stage is OPTIONAL — if its prerequisites (HMMs / trees / reference
+annotations) are missing, stage 07 falls back to defaulting all
+candidates to `chemoreceptor-candidate`.
+
 ### GeneRax — phylogenetic + reconciliation (bead -30g)
 
 Required by `scripts/hpc/run_generax.sh`. Compile from source:
