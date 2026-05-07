@@ -60,13 +60,14 @@ echo "Threads: $THREADS"
 echo "Reference: $REF_FASTA ($(grep -c '^>' "$REF_FASTA") sequences)"
 echo ""
 
-# IQ-TREE 3 default arguments (consistent with main pipeline stage 04).
+# IQ-TREE 3 default arguments (consistent with main pipeline stage 04
+# IQTREE_BOOT_FLAGS in config.sh / 04_phylogenetic_analysis.sh).
 IQTREE_ARGS=(
     -m MFP
     -mset LG,VT,WAG,JTT,Dayhoff,mtREV,cpREV
-    --bb 1000
-    --alrt 1000
-    --boot-trees
+    -B 1000
+    -alrt 1000
+    --tbe
     -seed 12345
     -T "$THREADS"
 )
