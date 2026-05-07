@@ -77,54 +77,107 @@ def base_query() -> str:
 
 # Family-level patterns. First match wins; order matters (more-specific
 # patterns first, generic Class-A catchall last).
+#
+# The patterns use word-keyword matching (not adjacent phrases) because
+# protein names have variable adjective insertions: "Tachykinin-like
+# PEPTIDES receptor" is still a tachykinin family member, "Cholinergic
+# receptor MUSCARINIC 1" is still aminergic, etc.
 _FAMILY_PATTERNS: list[tuple[re.Pattern, str]] = [
     # Opsin (specific; matches "rhodopsin" too)
     (re.compile(r"\bopsin\b|\brhodopsin\b", re.I), "opsin"),
     # Class F — Frizzled / Smoothened
-    (re.compile(r"\bfrizzled\b|\bsmoothened\b|\bSmoothened\b", re.I),
+    (re.compile(r"\bfrizzled\b|\bsmoothened\b", re.I),
      "class-F-frizzled"),
     # Class C — metabotropic glutamate, GABA-B, calcium-sensing, taste-2
     (re.compile(r"metabotropic glutamate|\bmGlu|\bGABA-B|gamma-aminobutyric.*B|"
                 r"calcium-sensing receptor|\bCASR\b|taste receptor type 1",
                 re.I), "class-C"),
-    # Class B secretin family
+    # Class B secretin/adhesion — secretin-related peptide hormones AND
+    # adhesion-class GPCRs (latrophilin, methuselah, cadherin/stan, boss).
     (re.compile(r"\bsecretin receptor\b|\bglucagon receptor\b|"
                 r"\bcalcitonin receptor\b|parathyroid hormone receptor|"
                 r"corticotropin-releasing factor|gastric inhibitory polypep|"
                 r"glucagon-like peptide|pituitary adenylate cyclase|"
-                r"vasoactive intestinal pep", re.I),
+                r"vasoactive intestinal pep|"
+                r"\blatrophilin\b|\bmethuselah\b|\badhesion G[- ]?protein|"
+                r"\bcadherin\b.*EGF.*LAG|"
+                r"\bbride of sevenless\b", re.I),
      "class-B-secretin"),
     # Glycoprotein hormone receptors
-    (re.compile(r"thyroid-stimulating hormone receptor|follicle-stimulating "
-                r"hormone receptor|luteinizing hormone receptor|"
-                r"chorionic gonadotropin receptor", re.I),
+    (re.compile(r"thyroid-stimulating hormone|follicle-stimulating hormone|"
+                r"luteinizing hormone receptor|chorionic gonadotropin|"
+                r"\bLHCGR\b|\bTSHR\b|\bFSHR\b", re.I),
      "glycoprotein-hormone"),
-    # Aminergic — keep BEFORE generic peptide patterns
+    # Aminergic — keep BEFORE generic peptide patterns. Includes muscarinic
+    # acetylcholine (Class A aminergic group per GPCRdb convention) and
+    # invertebrate dopamine receptors (Drosophila Dop1R/Dop2R, C. elegans
+    # dop-1 .. dop-6, ser-1 .. ser-7, gar-1/2/3 muscarinic, octr-*, tyra-*).
     (re.compile(r"5-?hydroxytryptamine|serotonin receptor|\b5-HT\b|"
-                r"dopamine receptor|\bDRD\d|adrenergic|noradrenergic|"
-                r"norepinephrine receptor|histamine receptor|\bHRH\d|"
-                r"octopamine receptor|tyramine receptor|trace amine",
-                re.I), "aminergic"),
+                r"\bdopamine\b|\bDRD\d|\bDop\d?R\b|\bdop-\d+\b|"
+                r"adrenergic|noradrenergic|norepinephrine receptor|"
+                r"histamine receptor|\bHRH\d|"
+                r"octopamine|\boctr-\d+\b|"
+                r"tyramine|\btyra-\d+\b|"
+                r"trace amine|"
+                r"muscarinic.*acetylcholine|cholinergic.*muscarinic|"
+                r"\bmAChR\b|\bgar-\d\b|"
+                r"\bser-\d+\b|\bmod-\d+\b", re.I), "aminergic"),
     # Lipid (prostaglandin, lysophosphatidic, sphingosine 1-phosphate,
-    # cannabinoid, leukotriene)
+    # cannabinoid, leukotriene, FFA, oxysterol).
     (re.compile(r"prostaglandin.*receptor|lysophosphatidic acid|"
                 r"sphingosine 1-phosphate|cannabinoid receptor|"
                 r"leukotriene.*receptor|free fatty acid receptor|"
-                r"oxysterol receptor", re.I), "lipid"),
+                r"oxysterol receptor|thromboxane.*receptor|"
+                r"platelet-activating factor receptor", re.I), "lipid"),
     # Nucleotide (adenosine, P2Y purinergic)
     (re.compile(r"adenosine receptor|\bADORA\d|P2Y receptor|"
-                r"purinergic receptor P2Y|P2RY\d", re.I), "nucleotide"),
-    # Peptide — many subfamilies; broad name patterns
-    (re.compile(r"neuropeptide [YFS]|tachykinin receptor|vasopressin receptor|"
-                r"oxytocin receptor|allatostatin receptor|"
-                r"melatonin receptor|opioid receptor|somatostatin receptor|"
-                r"cholecystokinin receptor|kinin receptor|bradykinin receptor|"
-                r"\bAKHR\b|adipokinetic|corazonin receptor|diuretic hormone|"
-                r"sex peptide receptor|pigment-dispersing|FMRFamide|"
-                r"orexin receptor|ghrelin receptor|galanin receptor|"
-                r"motilin receptor|relaxin receptor|kisspeptin receptor|"
-                r"angiotensin.*receptor|endothelin receptor|"
-                r"neurotensin receptor|neuromedin", re.I), "peptide"),
+                r"purinergic receptor P2Y|\bP2RY\d|\bP2Y\d{1,2}\b", re.I),
+     "nucleotide"),
+    # Peptide — broad keyword matching, not phrase matching. Order: most
+    # specific subfamilies first, generic "neuropeptide" / "peptide" last.
+    (re.compile(
+        r"\btachykinin\b|\bTkR\d|"
+        r"\bneuropeptide [YFS]\b|\bNPY\d?R\b|\bNPF[FR]?\b|\bsNPF\b|"
+        r"\bvasopressin\b|\boxytocin\b|\bAVPR\d|"
+        r"\ballatostatin\b|\bAst[ABC]-?R\b|"
+        r"\bmelatonin\b|\bMTNR\d|"
+        r"\bopioid\b|\bOPR[KMD]\b|"
+        r"\bsomatostatin\b|\bSSTR\d|"
+        r"\bcholecystokinin\b|\bCCKR\b|\bCCK[12]R?\b|"
+        r"\bkinin\b|\bbradykinin\b|\bBDKRB\d\b|\bLkr\b|"
+        r"\bpyrokinin\b|\bPK1-?R\b|"
+        r"\bAKHR\b|\badipokinetic\b|"
+        r"\bcorazonin\b|\bCrzR\b|"
+        r"\bdiuretic hormone\b|\bDh\d+-R\b|"
+        r"\bsex peptide\b|"
+        r"\bpigment-dispersing\b|\bPdfr\b|"
+        r"\bFMRFamide\b|"
+        r"\borexin\b|\bhypocretin\b|"
+        r"\bghrelin\b|"
+        r"\bgalanin\b|"
+        r"\bmotilin\b|"
+        r"\brelaxin\b|"
+        r"\bkisspeptin\b|"
+        r"\bangiotensin\b|"
+        r"\bendothelin\b|"
+        r"\bneurotensin\b|"
+        r"\bneuromedin\b|"
+        r"\bcrustacean cardioactive\b|\bCCAP\b|"
+        r"\bCCHamide\b|\bCCHa\d?-R\b|"
+        r"\bcapability receptor\b|\bCapaR\b|"
+        r"\bproctolin\b|"
+        r"\bSIFamide\b|\bSIFR\b|"
+        r"\bmyoinhibitory peptide\b|\bMip-?R\b|"
+        r"\bmyosuppressin\b|"
+        r"\bnatriuretic peptide\b|"
+        r"\bglycoprotein hormone-like\b|"
+        r"\bDmsR\b|\bdmsr-\d+\b|"
+        r"\bnpr-\d+\b|\bntr-\d+\b|"
+        r"\bdaf-3[78]\b|\baex-2\b|"
+        r"\btrissin\b|"
+        r"\bECTH\b|\bETHR\b|"
+        r"\bproctolin\b",
+        re.I), "peptide"),
 ]
 
 # Aminergic medium-granularity sub-patterns (only used if family is aminergic).
