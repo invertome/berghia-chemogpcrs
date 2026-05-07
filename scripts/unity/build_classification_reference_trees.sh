@@ -71,7 +71,12 @@ echo ""
 
 # IQ-TREE 3 default arguments (consistent with main pipeline stage 04
 # IQTREE_BOOT_FLAGS in config.sh / 04_phylogenetic_analysis.sh).
+# -st AA forces protein interpretation: auto-detection occasionally
+# fails when the first sequence in the trimmed alignment happens to
+# be all-gap (e.g. PREQUAL masked an outlier that ClipKit then trimmed
+# down to nothing) — IQ-TREE then can't tell AA vs DNA from that row.
 IQTREE_ARGS=(
+    -st AA
     -m MFP
     -mset LG,VT,WAG,JTT,Dayhoff,mtREV,cpREV
     -B 1000
@@ -109,6 +114,41 @@ build_tree() {
             > "$OUT_DIR/${name}.clipkit.log" 2>&1
     else
         echo "  [tree:$name] Trimmed alignment already present"
+    fi
+
+    # Drop sequences that are >=95% gap after trimming. PREQUAL can
+    # mask an outlier reference to nearly-all-X, which ClipKit then
+    # trims to nearly-all-gap; IQ-TREE 3 hits "Unknown sequence type"
+    # if the first such row prevents auto-detection.
+    local cleaned="$OUT_DIR/${name}.cleaned.aln"
+    python3 -c "
+import sys
+keep = []
+with open('${trimmed}') as f:
+    cur_id, cur_seq = None, []
+    for line in f:
+        line = line.rstrip('\n')
+        if line.startswith('>'):
+            if cur_id is not None:
+                seq = ''.join(cur_seq)
+                gap_frac = seq.count('-') / max(len(seq), 1)
+                if gap_frac < 0.95:
+                    keep.append((cur_id, seq))
+            cur_id = line; cur_seq = []
+        else:
+            cur_seq.append(line)
+    if cur_id is not None:
+        seq = ''.join(cur_seq)
+        gap_frac = seq.count('-') / max(len(seq), 1)
+        if gap_frac < 0.95:
+            keep.append((cur_id, seq))
+with open('${cleaned}', 'w') as f:
+    for h, s in keep:
+        f.write(h + '\n' + s + '\n')
+print(f'[clean] kept {len(keep)} of N seqs (dropped >=95%-gap rows)', file=sys.stderr)
+" 2>>"$OUT_DIR/${name}.clean.log"
+    if [[ -s "$cleaned" ]] && [[ "$(grep -c '^>' "$cleaned")" -ge 4 ]]; then
+        trimmed="$cleaned"
     fi
 
     if [[ ! -s "${prefix}.treefile" ]]; then
