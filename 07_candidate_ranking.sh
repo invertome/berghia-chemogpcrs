@@ -138,6 +138,23 @@ elif [ -f "$HCR_AUG_INPUT" ]; then
     log --level=WARN "Skipping OG-coverage columns: missing $COV_REF_CDS or Orthogroups.tsv"
 fi
 
+# Phase 4 / Task 5.1: non-chemoreceptor classification columns
+# (classification, classification_confidence, classification_family,
+#  classification_subfamily, classification_evidence). Adds columns from
+# the 06c consensus TSV; defaults to 'chemoreceptor-candidate' when 06c
+# hasn't run or the candidate has no consensus row. Doesn't change rank.
+CLASS_TSV="${RESULTS_DIR}/classification/candidate_classifications.tsv"
+if [ -f "$HCR_AUG_INPUT" ] && [ -f "$CLASS_TSV" ]; then
+    python3 "${SCRIPTS_DIR}/add_classification_columns.py" \
+        --ranked-csv "$HCR_AUG_INPUT" \
+        --consensus-tsv "$CLASS_TSV" \
+        --out "$HCR_AUG_INPUT" \
+        2>> "${LOGS_DIR}/classification_columns.err" \
+        || log --level=WARN "Classification column augmentation failed (kept original CSV)"
+elif [ -f "$HCR_AUG_INPUT" ]; then
+    log --level=WARN "Skipping classification columns: $CLASS_TSV not found (run 06c first)"
+fi
+
 # Generate plots
 python3 "${SCRIPTS_DIR}/plot_ranking.py" "${RESULTS_DIR}/ranking/ranked_candidates_sorted.csv" "${RESULTS_DIR}/ranking/ranking_plot" || log "Warning: Ranking plot failed"
 
