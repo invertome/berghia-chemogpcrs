@@ -33,6 +33,7 @@ references/**/*
 # Exceptions: small curated reference CSVs maintained in-repo
 !references/hcr_positive_controls.csv
 !references/cummins2009_aplysia_chemoreceptors.csv
+!references/aplysia_classification_validation.csv
 
 # Transcriptomes and genomes (large, user-provided)
 transcriptomes/

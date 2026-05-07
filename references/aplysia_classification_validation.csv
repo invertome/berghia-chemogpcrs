@@ -1,0 +1,8 @@
+aplysia_protein_id,expected_classification,expected_family,expected_subfamily,source_citation,notes
+NP_001191513.1,chemoreceptor-candidate,,,Cummins et al. 2009 BMC Biology 7:28 (PMC2693106),"Chemosensory receptor A (Apgr.A subfamily). MUST NOT be marked as non-chemoreceptor by the classifier — this is the canonical chemoreceptor truth set."
+NP_001191494.1,chemoreceptor-candidate,,,Cummins et al. 2009 BMC Biology 7:28,"Chemosensory receptor B (Apgr.B). Rhinophore + oral-tentacle expression."
+NP_001191495.1,chemoreceptor-candidate,,,Cummins et al. 2009 BMC Biology 7:28,"Chemosensory receptor C (Apgr.C). Rhinophore-enriched."
+Q16950,non-chemoreceptor,aminergic,5HT,UniProt Swiss-Prot reviewed,"5-hydroxytryptamine receptor 1 (5-HTB1). Cloned + functionally characterized; Aplysia serotonin signaling literature (Barbas et al. 2003)."
+Q16951,non-chemoreceptor,aminergic,5HT,UniProt Swiss-Prot reviewed,"5-hydroxytryptamine receptor 2 (5-HTB2). Distinct from 5-HTB1; both are well-characterized aminergic receptors."
+NP_001240691.1,non-chemoreceptor,aminergic,5HT,RefSeq curated NP_,"5-HT4 receptor. RefSeq curated entry for Aplysia 5-HT4."
+YCB02720.1,non-chemoreceptor,peptide,allatostatin,literature curation,"Buccalin/allatostatin-A receptor. Neuropeptide receptor — invertebrate-specific (allatostatin signaling). MUST be marked as non-chemoreceptor; if missed, classifier has a false-negative on a clear non-chemo case."
