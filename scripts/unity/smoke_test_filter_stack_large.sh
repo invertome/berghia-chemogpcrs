@@ -148,7 +148,44 @@ if [[ -s "${WD}/smoke_large_ensemble/canonical.fa" ]] && [[ -s "${WD}/smoke_larg
         echo "  [INFO] CLOAK masked $masked uncertain columns (~$(awk -v m=$masked -v c=$canonical_cols 'BEGIN{printf "%.1f%%", m*100/c}') of canonical alignment)"
     elif [[ "$cloaked_cols" -eq "$canonical_cols" ]]; then
         echo "  [WARN] CLOAK output has same column count as canonical — alignments fully agreed (unusual at this scale)"
+    elif [[ "$cloaked_cols" -gt "$canonical_cols" ]]; then
+        excess=$((cloaked_cols - canonical_cols))
+        echo "  [INFO] CLOAK super-alignment +${excess} cols ($(awk -v e=$excess -v c=$canonical_cols 'BEGIN{printf "%.1f%%", e*100/c}') over canonical) — disputed pairings spread into singleton columns"
     fi
+fi
+
+# 7. End-to-end with downstream ClipKit (kpic-smart-gap, the stage-04 default).
+#    Validates that ClipKit cleanly trims CLOAK's super-alignment back down
+#    to a tractable column count for IQ-TREE.
+echo ""
+echo "  ClipKit kpic-smart-gap (stage-04 trim step):"
+CLIPKIT_OUT="${SCRATCH_DIR}/clipkit_kpic_smart_gap.fa"
+CLIPKIT_LOG="${SCRATCH_DIR}/clipkit.log"
+if clipkit "$OUTPUT" -m kpic-smart-gap -o "$CLIPKIT_OUT" >"$CLIPKIT_LOG" 2>&1 && [[ -s "$CLIPKIT_OUT" ]]; then
+    trimmed_cols=$(awk '/^>/{if(s){print length(s); exit} s=""} !/^>/{s=s $0}' "$CLIPKIT_OUT")
+    n_trimmed=$(grep -c '^>' "$CLIPKIT_OUT")
+    if [[ -n "$cloaked_cols" ]] && [[ "$cloaked_cols" -gt 0 ]]; then
+        kept_pct=$(awk -v t=$trimmed_cols -v c=$cloaked_cols 'BEGIN{printf "%.1f%%", t*100/c}')
+    else
+        kept_pct="?"
+    fi
+    if [[ -n "$canonical_cols" ]] && [[ "$canonical_cols" -gt 0 ]]; then
+        vs_canonical=$(awk -v t=$trimmed_cols -v c=$canonical_cols 'BEGIN{printf "%.0f%%", t*100/c}')
+    else
+        vs_canonical="?"
+    fi
+    echo "  [PASS] ClipKit trimmed: $trimmed_cols cols ($n_trimmed seqs)"
+    echo "         (kept $kept_pct of CLOAK super-alignment; $vs_canonical of canonical $canonical_cols cols)"
+    if [[ "$trimmed_cols" -ge 200 ]] && [[ "$trimmed_cols" -le $((canonical_cols * 2)) ]]; then
+        echo "  [PASS] Trimmed column count is sensible (>=200, <=2x canonical) — IQ-TREE-ready"
+    elif [[ "$trimmed_cols" -lt 200 ]]; then
+        echo "  [WARN] Trimmed alignment has only $trimmed_cols cols — may be too short for ModelFinder"
+    elif [[ "$trimmed_cols" -gt $((canonical_cols * 2)) ]]; then
+        echo "  [WARN] Trimmed alignment is >2x canonical ($trimmed_cols vs $canonical_cols) — under-trimmed?"
+    fi
+else
+    echo "  [FAIL] ClipKit kpic-smart-gap failed (see $CLIPKIT_LOG)"
+    PASS=0
 fi
 
 echo ""
