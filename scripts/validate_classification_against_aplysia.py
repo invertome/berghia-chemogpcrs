@@ -89,12 +89,38 @@ def verdict_for_entry(truth: dict, obs: dict) -> dict:
             "family_correct": False, "subfamily_correct": False}
 
 
+def load_id_map(id_map_csv: str) -> dict[str, str]:
+    """Load update_headers.py's ID map (original_id,short_id,...) and return
+    dict: original_id -> short_id. Handles stage-01-produced map files."""
+    if not id_map_csv or not Path(id_map_csv).exists():
+        return {}
+    out: dict[str, str] = {}
+    with open(id_map_csv) as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            orig = row.get("original_id", "").strip()
+            short = row.get("short_id", "").strip()
+            if orig and short:
+                out[orig] = short
+    return out
+
+
 def run_validation(ranked_csv: str, truth_csv: str,
-                    out_md_path: str, id_col: str = "id") -> dict:
+                    out_md_path: str, id_col: str = "id",
+                    id_map_csv: str = "") -> dict:
     """End-to-end: read inputs, compute per-entry verdicts + summary,
-    write markdown report. Returns summary metrics dict."""
+    write markdown report. Returns summary metrics dict.
+
+    If `id_map_csv` is provided, truth `aplysia_protein_id`s (UniProt /
+    NCBI accessions like 'Q16950' or 'NP_001191513.1') are translated
+    to the short `ref_TAXID_N` form via the map before lookup. Without
+    the map, direct lookup is attempted (works for stub testing or any
+    pipeline run that doesn't apply update_headers.py to Aplysia inputs).
+    Fixes C3 from the 2026-05-07 code review.
+    """
     truth = load_truth(truth_csv)
     ranked = pd.read_csv(ranked_csv, keep_default_na=False, dtype=str)
+    id_map = load_id_map(id_map_csv) if id_map_csv else {}
 
     by_id: dict[str, dict] = {}
     if id_col in ranked.columns:
@@ -104,7 +130,11 @@ def run_validation(ranked_csv: str, truth_csv: str,
     rows: list[dict] = []
     n_not_classified = 0
     for acc, t in truth.items():
-        obs = by_id.get(acc)
+        # Translate truth accession via id_map if provided. Falls back to
+        # direct lookup for both pre-translation and post-translation IDs
+        # (lets us handle a ranked CSV that uses either format).
+        lookup_id = id_map.get(acc, acc)
+        obs = by_id.get(lookup_id) or by_id.get(acc)
         if obs is None:
             n_not_classified += 1
             rows.append({"id": acc, "verdict": "NOT_IN_RANKED",
@@ -204,9 +234,15 @@ def main() -> int:
     ap.add_argument("--out", required=True,
                     help="Output markdown report path")
     ap.add_argument("--id-col", default="id")
+    ap.add_argument("--id-map", default="",
+                    help="Optional update_headers.py ID-map CSV "
+                         "(${RESULTS_DIR}/reference_sequences/id_map.csv) "
+                         "for translating truth UniProt/NCBI accessions to "
+                         "the rewritten ref_TAXID_N short IDs that appear in "
+                         "the ranked CSV.")
     args = ap.parse_args()
     metrics = run_validation(args.ranked_csv, args.truth_csv, args.out,
-                              args.id_col)
+                              args.id_col, args.id_map)
     print(f"[validate-aplysia] {metrics['n_correct']}/{metrics['n_total']} "
           f"correct ({metrics['accuracy']:.1%})", file=sys.stderr)
     if metrics.get("chemoreceptor_correctness") is not None:

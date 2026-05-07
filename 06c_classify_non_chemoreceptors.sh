@@ -71,10 +71,10 @@ check_dir "$HMM_DIR"                 || { log "Error: HMM library missing — bu
 N_CANDIDATES=$(grep -c '^>' "$CANDIDATE_FASTA")
 log "Candidates: $N_CANDIDATES sequences in $CANDIDATE_FASTA"
 
-# --- 1. HMM scan classifier ---
+# --- 1a. HMM scan classifier on Berghia candidates ---
 HMM_OUT="${OUT_DIR}/candidate_hmm_assignments.tsv"
 if ! is_step_completed "06c_classify_hmm"; then
-    log "[06c] Running HMM-scan classifier..."
+    log "[06c] Running HMM-scan classifier on candidates..."
     PFAM_ARGS=""
     if [ -d "$PFAM_DIR" ]; then
         PFAM_ARGS="--pfam-fallback-dir $PFAM_DIR"
@@ -92,7 +92,33 @@ if ! is_step_completed "06c_classify_hmm"; then
         --threads "$THREADS"
     create_checkpoint "06c_classify_hmm"
 else
-    log "[06c] HMM-scan classifier: already completed"
+    log "[06c] HMM-scan classifier (candidates): already completed"
+fi
+
+# --- 1b. HMM scan on the pipeline's rewritten reference set ---
+# This produces a `ref_TAXID_N -> family` annotation TSV that matches
+# OrthoFinder member IDs (post-update_headers.py rewrite). Without it,
+# OG-vote can't find any annotated members because Swiss-Prot accessions
+# don't match the rewritten OrthoFinder IDs (H6 from 2026-05-07 review).
+NATH_REWRITTEN="${RESULTS_DIR}/reference_sequences/all_references.fa"
+NATH_CLASSIFICATIONS="${OUT_DIR}/nath_classifications.tsv"
+if ! is_step_completed "06c_classify_nath"; then
+    if [ -f "$NATH_REWRITTEN" ]; then
+        log "[06c] Running HMM-scan classifier on Nath et al rewritten refs..."
+        # shellcheck disable=SC2086
+        python3 "${SCRIPTS_DIR}/classify_via_hmm.py" \
+            --candidate-fasta "$NATH_REWRITTEN" \
+            --hmm-dir "$HMM_DIR" \
+            $PFAM_ARGS $LOO_ARGS \
+            --output-tsv "$NATH_CLASSIFICATIONS" \
+            --threads "$THREADS"
+        create_checkpoint "06c_classify_nath"
+    else
+        log --level=WARN "Skipping Nath classification: $NATH_REWRITTEN not found. OG-vote will rely on Swiss-Prot annotations only (likely zero matches)."
+        NATH_CLASSIFICATIONS=""
+    fi
+else
+    log "[06c] HMM-scan classifier (Nath refs): already completed"
 fi
 
 # --- 2. OG-vote classifier ---
@@ -100,10 +126,16 @@ OG_OUT="${OUT_DIR}/candidate_og_assignments.tsv"
 if ! is_step_completed "06c_classify_og"; then
     if [ -n "$ORTHOGROUPS_TSV" ]; then
         log "[06c] Running OG-vote classifier..."
+        NATH_ARG=""
+        if [ -n "$NATH_CLASSIFICATIONS" ] && [ -f "$NATH_CLASSIFICATIONS" ]; then
+            NATH_ARG="--hmm-classifications-tsv $NATH_CLASSIFICATIONS"
+        fi
+        # shellcheck disable=SC2086
         python3 "${SCRIPTS_DIR}/classify_via_og_vote.py" \
             --candidate-fasta "$CANDIDATE_FASTA" \
             --orthogroups-tsv "$ORTHOGROUPS_TSV" \
             --annotations-tsv "$ANNOTATIONS_TSV" \
+            $NATH_ARG \
             --output-tsv "$OG_OUT"
     else
         log --level=WARN "Skipping OG-vote (no Orthogroups.tsv); writing empty output"

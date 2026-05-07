@@ -456,8 +456,16 @@ def main() -> int:
 
     records = dedup_records(records)
     out_dir = Path(args.output_dir)
-    write_fasta(records, str(out_dir / "01_swissprot_backbone.fasta"))
-    write_tsv(records, str(out_dir / "01_swissprot_backbone.tsv"))
+    # Write directly to all_references.{fasta,tsv} — the canonical filename
+    # downstream consumers (build_classification_hmms.py, select_backbone_reps.py,
+    # classify_via_og_vote.py, 06c orchestrator) expect. Phase 1 was originally
+    # designed to layer multiple sources (1.1 SwissProt backbone, 1.2 FlyBase,
+    # 1.3 WormBase, 1.4 mollusc literature) into a separate consolidator step
+    # producing all_references.*; with 1.2/1.3/1.4 deferred to bead -qgs,
+    # SwissProt IS the consolidated set, so we write to the canonical name
+    # directly. This eliminates the manual `cp` step that was needed before.
+    write_fasta(records, str(out_dir / "all_references.fasta"))
+    write_tsv(records, str(out_dir / "all_references.tsv"))
     print(f"\n[curate] DONE: {len(records)} unique records -> {out_dir}",
           file=sys.stderr)
     return 0

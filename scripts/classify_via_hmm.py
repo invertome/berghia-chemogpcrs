@@ -95,20 +95,12 @@ def load_thresholds(loo_metrics_path: str) -> dict[str, float]:
     return out
 
 
-# ---- HMM name -> family/subfamily ---------------------------------------
+# ---- HMM name -> family/subfamily (shared helper) ----------------------
 
-def label_for_hmm(hmm_name: str) -> tuple[str, str]:
-    """Map an HMM name to (family, subfamily). Same convention as
-    validate_classification_hmms.label_for_hmm:
-        coarse: '<family>'                e.g. aminergic
-        medium: '<family>_<subfamily>'   e.g. aminergic_5HT
-    Family names contain hyphens (class-B-secretin) but never underscores.
-    Split on FIRST underscore only so peptide_NPY-NPF parses correctly.
-    """
-    if "_" not in hmm_name:
-        return (hmm_name, "")
-    family, _, subfamily = hmm_name.partition("_")
-    return (family, subfamily)
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parent))
+from _classification_labels import label_for_hmm  # noqa: E402, F401
 
 
 # ---- Classification assignment -------------------------------------------

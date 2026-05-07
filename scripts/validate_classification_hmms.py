@@ -108,22 +108,12 @@ def strip_gaps(seq: str) -> str:
 
 # ---- HMM label parsing --------------------------------------------------
 
-def label_for_hmm(hmm_name: str) -> tuple[str, str]:
-    """Map an HMM file basename (no extension) to (family, subfamily).
-
-    The naming convention from build_classification_hmms.py:
-        coarse:        <family>.hmm                e.g. aminergic.hmm
-        medium:        <family>_<subfamily>.hmm   e.g. aminergic_5HT.hmm
-
-    Family names contain hyphens (class-B-secretin, class-F-frizzled) but
-    NEVER underscores. Subfamily names CAN contain hyphens (NPY-NPF,
-    vasopressin-oxytocin). So we split on the FIRST underscore, treating
-    everything before the underscore as the family.
-    """
-    if "_" not in hmm_name:
-        return (hmm_name, "")
-    family, _, subfamily = hmm_name.partition("_")
-    return (family, subfamily)
+# label_for_hmm moved to scripts/_classification_labels.py for shared use
+# across classify_via_hmm.py, validate_classification_hmms.py, etc.
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parent))
+from _classification_labels import label_for_hmm  # noqa: E402, F401
 
 
 def build_id_to_family_map(manifest: list[dict],
@@ -271,29 +261,60 @@ def per_family_metrics(results: list[tuple[str, str]]) -> dict[str, dict]:
 
 
 def select_evalue_threshold(rows: list[tuple[str, str, float]],
-                            family: str, target_recall: float = 0.9
+                            family: str, target_recall: float = 0.9,
+                            target_precision: float = 0.95
                             ) -> float:
     """Given LOO rows (true_family, predicted_family, evalue) and a target
-    recall, return the loosest E-value threshold for the given `family`
-    such that ≥target_recall of `family`'s held-outs are TPs at
-    evalue ≤ threshold.
+    recall + precision, return the loosest E-value threshold for the given
+    `family` such that:
+      (a) >= target_recall of `family`'s held-outs are TPs at evalue ≤ thr
+      (b) the precision at `family` (TPs / TPs+FPs) is >= target_precision
 
-    Returns DEFAULT_THRESHOLD if no rows for this family.
+    Both constraints come from the design doc: per-family LOO must achieve
+    >=0.90 recall AND >=0.95 precision. Earlier versions only optimized
+    for recall (H3 from the 2026-05-07 code review).
+
+    Returns DEFAULT_THRESHOLD if no rows or no threshold satisfies both.
     """
     fam_rows = [(t, p, e) for (t, p, e) in rows if t == family]
     if not fam_rows:
         return DEFAULT_THRESHOLD
-    tps = [(p, e) for (t, p, e) in fam_rows if p == family]
+    tps = [e for (t, p, e) in fam_rows if p == family]
     n_total = len(fam_rows)
     n_required = max(1, int(target_recall * n_total + 0.999))  # ceiling
     if len(tps) < n_required:
-        # Can't reach target recall; return loosest E-val seen at any TP
-        if tps:
-            return max(e for _, e in tps)
+        # Can't reach target recall; conservatively return DEFAULT_THRESHOLD
+        # rather than a looser E-value (which would only worsen precision
+        # in production).
         return DEFAULT_THRESHOLD
-    tp_evalues_sorted = sorted([e for _, e in tps])
-    # Loosest E-val at which we still have n_required TPs
-    return tp_evalues_sorted[n_required - 1]
+
+    # Off-family rows that get *predicted* as `family` are the FP candidates;
+    # any with E-value <= cutoff at runtime would be FPs.
+    fp_evalues_for_other_truth = [
+        e for (t, p, e) in rows
+        if t != family and p == family
+    ]
+
+    # Iterate candidate cutoffs from STRICT to LOOSE (sorted TP E-values),
+    # picking the loosest that satisfies BOTH recall and precision.
+    tp_evalues_sorted = sorted(tps)
+    # Start at the threshold that just satisfies recall (n_required-th best TP)
+    # and walk looser until precision fails; pick the last loose threshold
+    # where both constraints hold.
+    chosen = DEFAULT_THRESHOLD
+    for i in range(n_required - 1, len(tp_evalues_sorted)):
+        candidate_thr = tp_evalues_sorted[i]
+        n_tp = sum(1 for e in tps if e <= candidate_thr)
+        n_fp = sum(1 for e in fp_evalues_for_other_truth if e <= candidate_thr)
+        if n_tp + n_fp == 0:
+            continue
+        precision = n_tp / (n_tp + n_fp)
+        recall = n_tp / n_total
+        if recall >= target_recall and precision >= target_precision:
+            chosen = candidate_thr  # keep walking; record loosest passing
+        else:
+            break
+    return chosen
 
 
 # ---- LOO orchestration --------------------------------------------------

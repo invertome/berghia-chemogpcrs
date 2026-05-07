@@ -42,18 +42,68 @@ DEFAULT_MIN_ANNOTATED = 3
 # ---- Inputs -------------------------------------------------------------
 
 def load_reference_annotations(annotations_tsv: str) -> dict[str, tuple[str, str]]:
-    """Read the curated reference TSV (Phase 1 output). Returns dict:
-    accession -> (family, subfamily)."""
+    """Read an annotation TSV mapping ID -> (family, subfamily).
+
+    Accepts BOTH formats:
+
+    1. Phase 1 curated reference TSV (Swiss-Prot backbone): columns
+       accession / family / subfamily / species / gene / source / length.
+       Keys are UniProt accessions (e.g. P28223).
+
+    2. HMM classifier output (`scripts/classify_via_hmm.py`): columns
+       candidate_id / hmm_family / hmm_subfamily / evalue / score /
+       hmm_target. Keys are whatever IDs were in the input FASTA — when
+       run on `${RESULTS_DIR}/reference_sequences/all_references.fa`
+       (post-`update_headers.py`), keys are `ref_TAXID_N` short IDs that
+       MATCH OrthoFinder's member IDs.
+
+    Format auto-detected from header row. Rows where family is
+    'unclassified-hmm' (HMM scan declined to call) are skipped — only
+    confident classifications contribute to OG-vote annotations.
+
+    This dual-format loader fixes H6 from the 2026-05-07 code review:
+    OrthoFinder member IDs are `ref_TAXID_N` (rewritten by stage 01),
+    so a Swiss-Prot-only annotations dict produced ZERO matches in
+    practice and OG-vote was effectively dead code.
+    """
     out: dict[str, tuple[str, str]] = {}
     with open(annotations_tsv) as f:
         reader = csv.DictReader(f, delimiter="\t")
-        for row in reader:
-            acc = row.get("accession", "").strip()
-            fam = row.get("family", "").strip()
-            sub = row.get("subfamily", "").strip()
-            if acc and fam:
+        cols = set(reader.fieldnames or [])
+        # Format 1: curated reference TSV
+        if "accession" in cols and "family" in cols:
+            for row in reader:
+                acc = row.get("accession", "").strip()
+                fam = row.get("family", "").strip()
+                sub = row.get("subfamily", "").strip()
+                if acc and fam:
+                    out[acc] = (fam, sub)
+        # Format 2: HMM classifier output TSV
+        elif "candidate_id" in cols and "hmm_family" in cols:
+            for row in reader:
+                acc = row.get("candidate_id", "").strip()
+                fam = row.get("hmm_family", "").strip()
+                sub = row.get("hmm_subfamily", "").strip()
+                if not acc or not fam or fam == "unclassified-hmm":
+                    continue
                 out[acc] = (fam, sub)
+        else:
+            print(f"WARN: {annotations_tsv} has unrecognized format "
+                  f"(columns: {sorted(cols)}); skipping", file=__import__('sys').stderr)
     return out
+
+
+def load_merged_annotations(*paths: str) -> dict[str, tuple[str, str]]:
+    """Merge annotations from multiple TSVs. Later paths override earlier
+    ones on key collision. Returns combined dict."""
+    merged: dict[str, tuple[str, str]] = {}
+    for p in paths:
+        if not p:
+            continue
+        if not os.path.exists(p):
+            continue
+        merged.update(load_reference_annotations(p))
+    return merged
 
 
 def load_og_members(orthogroups_tsv: str) -> dict[str, list[str]]:
@@ -164,9 +214,18 @@ def classify_candidates_via_og(
     output_tsv: str,
     consensus_threshold: float = DEFAULT_CONSENSUS_THRESHOLD,
     min_annotated: int = DEFAULT_MIN_ANNOTATED,
+    hmm_classifications_tsv: str = "",
 ) -> None:
-    """End-to-end: read inputs, run OG vote per candidate, write TSV."""
-    annotations = load_reference_annotations(annotations_tsv)
+    """End-to-end: read inputs, run OG vote per candidate, write TSV.
+
+    `annotations_tsv` is the Phase 1 Swiss-Prot reference annotations
+    (UniProt accessions). `hmm_classifications_tsv` is an optional
+    second TSV from running classify_via_hmm.py on the pipeline's
+    rewritten reference set (ref_TAXID_N IDs that match OrthoFinder
+    member IDs). Both get merged.
+    """
+    annotations = load_merged_annotations(annotations_tsv,
+                                           hmm_classifications_tsv)
     og_members = load_og_members(orthogroups_tsv)
     member_to_og = build_member_to_og(og_members)
 
@@ -212,8 +271,16 @@ def main() -> int:
     ap.add_argument("--orthogroups-tsv", required=True,
                     help="OrthoFinder Orthogroups.tsv")
     ap.add_argument("--annotations-tsv", required=True,
-                    help="Reference annotations TSV "
+                    help="Phase 1 reference annotations TSV "
                          "(references/non_chemo_gpcr/all_references.tsv)")
+    ap.add_argument("--hmm-classifications-tsv", default="",
+                    help="Optional: HMM classifier output TSV from running "
+                         "scripts/classify_via_hmm.py on the pipeline's "
+                         "rewritten reference set (e.g. results/reference_sequences/"
+                         "all_references.fa). Provides ref_TAXID_N -> family "
+                         "annotations that match OrthoFinder member IDs. Without "
+                         "this, OG-vote relies on Swiss-Prot accessions only and "
+                         "will yield few matches (since OrthoFinder rewrites refs).")
     ap.add_argument("--output-tsv", required=True)
     ap.add_argument("--consensus-threshold", type=float,
                     default=DEFAULT_CONSENSUS_THRESHOLD)
@@ -235,6 +302,7 @@ def main() -> int:
         output_tsv=args.output_tsv,
         consensus_threshold=args.consensus_threshold,
         min_annotated=args.min_annotated,
+        hmm_classifications_tsv=args.hmm_classifications_tsv,
     )
 
     # Brief summary
