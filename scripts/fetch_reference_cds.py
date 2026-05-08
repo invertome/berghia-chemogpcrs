@@ -48,15 +48,22 @@ except ImportError:
 
 
 # Maximum sequence length accepted as a "CDS" from a single efetch call.
-# Bug context (bead -lfy, 2026-05-05): for genome-contig accessions
+#
+# Bug -lfy first iteration (2026-05-05): genome-contig accessions
 # (Wellcome Sanger Tree-of-Life OX/LR prefixes, multi-letter WGS contigs
-# like CAJxxx) `efetch nuccore <acc> rettype=fasta` returns the WHOLE
-# 50 MB+ contig, not a single CDS. The script previously wrote those whole
-# contigs into `all_references_cds.fna` (60 GB of garbage). 50 kb is well
-# above the largest plausible single GPCR CDS (the pipeline's actual
-# target — a 7-TM receptor is ~1-3 kb; even big-protein outliers stay
-# under 50 kb) but well below any genome contig.
-MAX_CDS_LENGTH_BP = 50_000
+# like CAJxxx) silently fetched whole contigs (50 MB+) and wrote them as
+# CDS. Initial fix capped at 50 kb.
+#
+# Bug -lfy second iteration (2026-05-08): Capitella `cate_KB292229.1_1519`
+# class headers passed through with seq lengths up to 49,499 bp — just
+# under the 50 kb cap but still 10x larger than any real GPCR CDS.
+# Inspecting the production output: 86 % of `cate` entries, 100 % of
+# `cobi`/`hycu`/`ruph`, and 50 % of `digy` were >5 kb (i.e. WGS contigs
+# that snuck under the lenient cap). Tightening to 8 kb: typical GPCR
+# 7-TM CDS is 1-3 kb; class-C metabotropic NTDs push to ~3.5 kb; even
+# the longest plausible Nath-et-al. ortholog CDS is comfortably under
+# 8 kb, while WGS contigs are 10 kb+.
+MAX_CDS_LENGTH_BP = 8_000
 
 
 @dataclass
@@ -127,14 +134,31 @@ def classify_accession(accession: str) -> str:
     if re.match(r'^(N[CGTWZ]|AC|NS)_\d+', accession):
         return 'ncbi_refseq_genomic'
 
-    # Wellcome Sanger Tree-of-Life genome contigs / chromosomes. These are
-    # unambiguously genomic and must NOT be fetched whole-record (bug -lfy:
-    # `efetch nuccore OX439002.1 rettype=fasta` returns a 50 MB scaffold).
-    # CAJxxx / JABxxx / longer-prefix accessions overlap with TSA and are
-    # NOT explicitly classified here — they fall through to the TSA path,
-    # where the MAX_CDS_LENGTH_BP cap in fetch_cds_ncbi_tsa() rejects any
-    # response that turns out to be a whole-contig fetch.
+    # Genome contigs / scaffolds — must NOT be fetched whole-record because
+    # `efetch nuccore <acc> rettype=fasta` returns the entire scaffold, which
+    # then gets written as a "CDS" downstream. These accessions go through the
+    # explicit ncbi_genome_contig branch which short-circuits the fetch and
+    # leaves the protein for miniprot-based recovery in
+    # recover_cds_from_assemblies.py.
+    #
+    # Patterns covered (bug -lfy 2026-05-05 + 2026-05-08):
+    #   - OX / LR + 6+ digits: Wellcome Sanger Tree-of-Life genome scaffolds.
+    #   - 2 letters + 6 digits: legacy WGS/HTGS contig accessions, e.g.
+    #     `KB292229.1` (Capitella draft genome), `AC*` (HTGS phase),
+    #     `JH*`/`KE*`/`KZ*`/`KK*` (various WGS scaffolds). These previously
+    #     classified as `ncbi_genbank_nuc` and 49 kb scaffolds slipped past
+    #     the cap.
+    #   - 4-6 letter + 6+ digits: WGS contig assembly accessions like
+    #     `JABMCL010001063.1`, `CAJ...`. These overlap with TSA syntax but
+    #     for the Nath-et-al. reference proteins these are virtually all
+    #     genomic, so we treat them as contigs by default. The downstream
+    #     length cap still protects the few genuine TSA cases.
     if re.match(r'^(OX|LR)\d{6,}(\.\d+)?$', accession):
+        return 'ncbi_genome_contig'
+    if re.match(r'^[A-Z]{2}\d{6}(\.\d+)?$', accession):
+        # 2-letter WGS contig accessions (KB, JH, KE, KZ, KK, ...).
+        # Bona-fide GenBank single-record sequences use a 2 letter + 5 digit
+        # form (`AB12345`), still classified below as `ncbi_genbank_nuc`.
         return 'ncbi_genome_contig'
 
     # TSA (Transcriptome Shotgun Assembly) - typically 4-6 letter prefix + numbers
@@ -406,6 +430,12 @@ def fetch_cds_ena(accession: str) -> Optional[Tuple[str, str]]:
         if response.status_code == 200 and '>' in response.text:
             lines = response.text.strip().split('\n')
             seq = ''.join(lines[1:])
+            # Defense in depth: the same whole-contig hazard as the NCBI
+            # path applies to ENA when a "DDBJ accession" turns out to be
+            # a scaffold. Reject anything past MAX_CDS_LENGTH_BP and let
+            # miniprot recovery handle it.
+            if len(seq) > MAX_CDS_LENGTH_BP:
+                return None
             return (accession, seq)
 
         return None

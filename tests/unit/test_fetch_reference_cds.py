@@ -24,7 +24,7 @@ from __future__ import annotations
 import io
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -109,10 +109,57 @@ def test_fetch_cds_ncbi_tsa_accepts_normal_cds() -> None:
 def test_fetch_cds_ncbi_tsa_size_cap_constant_is_reasonable() -> None:
     """The cap should be high enough to admit the largest plausible single
     GPCR CDS (the pipeline's actual targets) but well below any genome
-    contig. 50 kb is a reasonable middle ground."""
+    contig. After the 2026-05-08 -lfy second-iteration tightening, the cap
+    is 8 kb — typical 7-TM CDS is 1-3 kb, class-C metabotropic NTDs push
+    to ~3.5 kb, leaving comfortable headroom; WGS contigs run 10 kb+ so
+    they're still excluded."""
     assert hasattr(frc, "MAX_CDS_LENGTH_BP"), "fix must define MAX_CDS_LENGTH_BP"
     cap = frc.MAX_CDS_LENGTH_BP
-    assert 10_000 <= cap <= 200_000, f"MAX_CDS_LENGTH_BP={cap} outside sane range"
+    assert 5_000 <= cap <= 20_000, f"MAX_CDS_LENGTH_BP={cap} outside sane range"
+
+
+# -------- 2026-05-08 -lfy regression: 2-letter WGS contig prefixes ----------
+
+@pytest.mark.parametrize("acc", [
+    "KB292229.1",   # Capitella draft genome scaffold
+    "KB300474.1",
+    "JH123456.1",   # generic WGS scaffold prefix
+    "KE789012.1",
+    "KZ111222.1",
+])
+def test_two_letter_wgs_contigs_classified_as_genome_contig(acc: str) -> None:
+    """Production stage 01 (2026-05-08) wrote WGS scaffolds like
+    `KB292229.1` (Capitella) into all_references_cds.fna as 49 kb
+    "CDS" entries because the 2-letter+6-digit pattern matched the
+    generic ncbi_genbank_nuc class, which fetched whole contigs and
+    the lenient 50 kb cap let them through. The fix routes 2-letter +
+    6-digit accessions into ncbi_genome_contig — the dispatcher then
+    skips efetch and leaves them for miniprot recovery against the
+    source assembly."""
+    assert frc.classify_accession(acc) == "ncbi_genome_contig"
+
+
+def test_genuine_two_letter_genbank_nuc_still_classified_correctly() -> None:
+    """Sanity: 2 letter + 5 digit (the genuine GenBank single-record
+    nucleotide form, e.g. AB12345) stays as ncbi_genbank_nuc — these are
+    short curated records, not WGS scaffolds, and the cap will catch any
+    that turn out otherwise."""
+    assert frc.classify_accession("AB12345.1") == "ncbi_genbank_nuc"
+    assert frc.classify_accession("Y12345") == "ncbi_genbank_nuc"
+
+
+def test_fetch_cds_ena_rejects_oversized_response() -> None:
+    """ENA fetch must enforce the same MAX_CDS_LENGTH_BP cap as the NCBI
+    path — without it, DDBJ/ENA-classified accessions that happen to
+    resolve to scaffolds would slip through unchecked. Defense in depth
+    for the -lfy second-iteration regression."""
+    huge_seq = "CCCTAA" * 200_000  # 1.2 Mbp telomere repeat
+    fake_response = MagicMock()
+    fake_response.status_code = 200
+    fake_response.text = f">someacc\n{huge_seq}\n"
+    with patch("requests.get", return_value=fake_response):
+        result = frc.fetch_cds_ena("X12345.1")
+    assert result is None, "oversized ENA response must be rejected"
 
 
 # -------- fetch_cds_for_accession: dispatcher does not call TSA for ToL ----
