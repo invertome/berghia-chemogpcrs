@@ -119,34 +119,13 @@ build_tree() {
     # Drop sequences that are >=95% gap after trimming. PREQUAL can
     # mask an outlier reference to nearly-all-X, which ClipKit then
     # trims to nearly-all-gap; IQ-TREE 3 hits "Unknown sequence type"
-    # if the first such row prevents auto-detection.
+    # if the first such row prevents auto-detection. Shared helper at
+    # scripts/drop_near_all_gap_rows.py — the same defensive filter is
+    # used in 04_phylogenetic_analysis.sh.
     local cleaned="$OUT_DIR/${name}.cleaned.aln"
-    python3 -c "
-import sys
-keep = []
-with open('${trimmed}') as f:
-    cur_id, cur_seq = None, []
-    for line in f:
-        line = line.rstrip('\n')
-        if line.startswith('>'):
-            if cur_id is not None:
-                seq = ''.join(cur_seq)
-                gap_frac = seq.count('-') / max(len(seq), 1)
-                if gap_frac < 0.95:
-                    keep.append((cur_id, seq))
-            cur_id = line; cur_seq = []
-        else:
-            cur_seq.append(line)
-    if cur_id is not None:
-        seq = ''.join(cur_seq)
-        gap_frac = seq.count('-') / max(len(seq), 1)
-        if gap_frac < 0.95:
-            keep.append((cur_id, seq))
-with open('${cleaned}', 'w') as f:
-    for h, s in keep:
-        f.write(h + '\n' + s + '\n')
-print(f'[clean] kept {len(keep)} of N seqs (dropped >=95%-gap rows)', file=sys.stderr)
-" 2>>"$OUT_DIR/${name}.clean.log"
+    python3 "${WORKDIR}/scripts/drop_near_all_gap_rows.py" \
+        --input "$trimmed" --output "$cleaned" \
+        2>>"$OUT_DIR/${name}.clean.log" || true
     if [[ -s "$cleaned" ]] && [[ "$(grep -c '^>' "$cleaned")" -ge 4 ]]; then
         trimmed="$cleaned"
     fi

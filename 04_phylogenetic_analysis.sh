@@ -256,6 +256,16 @@ with open('${REF_CATEGORIES_FINAL}', 'a') as f:
     # paper recommendation for phylogenomics.
     run_command "all_berghia_refs_clipkit" ${CLIPKIT} "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" -m kpic-smart-gap -o "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa"
 
+    # Bead -lfy/-iqg follow-up (commit 7db2a49 fix ported into stage 04):
+    # ClipKit's kpic-smart-gap mode can leave a few sequences with ≥95 %
+    # gaps in the output. IQ-TREE 3 auto-detection then raises "Unknown
+    # sequence type" and aborts. Drop those rows defensively and feed the
+    # result to FastTree + IQ-TREE under explicit `-st AA`.
+    python3 "${SCRIPTS_DIR}/drop_near_all_gap_rows.py" \
+        --input "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa" \
+        --output "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa" \
+        2>>"${LOGS_DIR}/all_berghia_refs_drop_gappy.log" || true
+
     # FastTree seed strategy: Generate approximate ML tree first to avoid local optima
     # This is important for large, divergent gene families like GPCRs
     run_command "all_berghia_refs_fasttree" --stdout="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_fasttree.tre" ${FASTTREE} -seed "${FASTTREE_SEED}" -lg -gamma "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa"
@@ -264,9 +274,17 @@ with open('${REF_CATEGORIES_FINAL}', 'a') as f:
     check_resource_requirements "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa" iqtree || \
         log --level=WARN "Proceeding despite IQ-TREE resource warning"
 
-    # Use FastTree result as starting tree for IQ-TREE (-t option)
-    # IQ-TREE 3.x uses -T (threads) and --prefix instead of -nt and -pre
-    run_command "all_berghia_refs_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa" -m "${IQTREE_MODEL_FIND}" -mset "${IQTREE_MODEL_SET}" ${IQTREE_BOOT_FLAGS} -seed "${IQTREE_SEED}" -T "${CPUS}" -t "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_fasttree.tre" --prefix "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs"
+    # Use FastTree result as starting tree for IQ-TREE (-t option) only if
+    # FastTree actually produced one — on small/odd alignments FastTree can
+    # fail without aborting the pipeline; without the guard IQ-TREE would
+    # then try to read a missing file. -st AA is forced because alphabet
+    # auto-detection fails on alignments where the first rows are sparse.
+    iqtree_seed_arg=""
+    if [ -s "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_fasttree.tre" ]; then
+        iqtree_seed_arg="-t ${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_fasttree.tre"
+    fi
+    # shellcheck disable=SC2086
+    run_command "all_berghia_refs_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa" -st AA -m "${IQTREE_MODEL_FIND}" -mset "${IQTREE_MODEL_SET}" ${IQTREE_BOOT_FLAGS} -seed "${IQTREE_SEED}" -T "${CPUS}" ${iqtree_seed_arg} --prefix "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs"
     run_command "phyloformer_all_berghia" python3 "${SCRIPTS_DIR}/test_phyloformer_models.py" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_phyloformer" "${CPUS}"
     if [ "$USE_MRBAYES" = true ]; then
         cat <<EOF > "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.nex"
@@ -310,9 +328,21 @@ for level in "${!lse_taxids[@]}"; do
         # CLOAK super-alignment by dropping singleton-variant + heavily-gappy cols).
         run_command "lse_${level}_clipkit" ${CLIPKIT} "${RESULTS_DIR}/phylogenies/protein/lse_${level}/aligned.fa" -m kpic-smart-gap -o "${RESULTS_DIR}/phylogenies/protein/lse_${level}/trimmed.fa"
 
+        # Drop near-all-gap rows defensively (see comment in the global path).
+        python3 "${SCRIPTS_DIR}/drop_near_all_gap_rows.py" \
+            --input "${RESULTS_DIR}/phylogenies/protein/lse_${level}/trimmed.fa" \
+            --output "${RESULTS_DIR}/phylogenies/protein/lse_${level}/trimmed.fa" \
+            2>>"${LOGS_DIR}/lse_${level}_drop_gappy.log" || true
+
         # FastTree seed strategy for LSE trees
         run_command "lse_${level}_fasttree" --stdout="${RESULTS_DIR}/phylogenies/protein/lse_${level}/fasttree.tre" ${FASTTREE} -seed "${FASTTREE_SEED}" -lg -gamma "${RESULTS_DIR}/phylogenies/protein/lse_${level}/trimmed.fa"
-        run_command "lse_${level}_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/lse_${level}/trimmed.fa" -m "${IQTREE_MODEL_FIND}" -mset "${IQTREE_MODEL_SET}" ${IQTREE_BOOT_FLAGS} -seed "${IQTREE_SEED}" -T "${CPUS}" -t "${RESULTS_DIR}/phylogenies/protein/lse_${level}/fasttree.tre" --prefix "${RESULTS_DIR}/phylogenies/protein/lse_${level}"
+        # Guard the FastTree seed file (see global path comment) and force -st AA.
+        lse_iqtree_seed_arg=""
+        if [ -s "${RESULTS_DIR}/phylogenies/protein/lse_${level}/fasttree.tre" ]; then
+            lse_iqtree_seed_arg="-t ${RESULTS_DIR}/phylogenies/protein/lse_${level}/fasttree.tre"
+        fi
+        # shellcheck disable=SC2086
+        run_command "lse_${level}_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/lse_${level}/trimmed.fa" -st AA -m "${IQTREE_MODEL_FIND}" -mset "${IQTREE_MODEL_SET}" ${IQTREE_BOOT_FLAGS} -seed "${IQTREE_SEED}" -T "${CPUS}" ${lse_iqtree_seed_arg} --prefix "${RESULTS_DIR}/phylogenies/protein/lse_${level}"
 
         python3 "${SCRIPTS_DIR}/visualize_tree.py" "${RESULTS_DIR}/phylogenies/protein/lse_${level}.treefile" "${RESULTS_DIR}/phylogenies/visualizations/lse_${level}"
     fi
@@ -373,9 +403,21 @@ if [ ! -f "${RESULTS_DIR}/step_completed_${base}_iqtree.txt" ]; then
     # handles CLOAK super-alignment).
     run_command "${base}_clipkit" ${CLIPKIT} "${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" -m kpic-smart-gap -o "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa"
 
+    # Drop near-all-gap rows defensively (see comment in the global path).
+    python3 "${SCRIPTS_DIR}/drop_near_all_gap_rows.py" \
+        --input "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa" \
+        --output "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa" \
+        2>>"${LOGS_DIR}/${base}_drop_gappy.log" || true
+
     # FastTree seed strategy for orthogroup trees
     run_command "${base}_fasttree" --stdout="${RESULTS_DIR}/phylogenies/protein/${base}_fasttree.tre" ${FASTTREE} -seed "${FASTTREE_SEED}" -lg -gamma "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa"
-    run_command "${base}_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa" -m "${IQTREE_MODEL_FIND}" -mset "${IQTREE_MODEL_SET}" ${IQTREE_BOOT_FLAGS} -seed "${IQTREE_SEED}" -T "${CPUS}" -t "${RESULTS_DIR}/phylogenies/protein/${base}_fasttree.tre" --prefix "${RESULTS_DIR}/phylogenies/protein/${base}"
+    # Guard the FastTree seed file (see global path comment) and force -st AA.
+    og_iqtree_seed_arg=""
+    if [ -s "${RESULTS_DIR}/phylogenies/protein/${base}_fasttree.tre" ]; then
+        og_iqtree_seed_arg="-t ${RESULTS_DIR}/phylogenies/protein/${base}_fasttree.tre"
+    fi
+    # shellcheck disable=SC2086
+    run_command "${base}_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa" -st AA -m "${IQTREE_MODEL_FIND}" -mset "${IQTREE_MODEL_SET}" ${IQTREE_BOOT_FLAGS} -seed "${IQTREE_SEED}" -T "${CPUS}" ${og_iqtree_seed_arg} --prefix "${RESULTS_DIR}/phylogenies/protein/${base}"
 
     # Bead -iof: TreeShrink rogue-taxon cleaning. Replaces the tree in place
     # and leaves a rollback copy at <tree>.original.treefile.
