@@ -87,10 +87,29 @@ for busco_id in "${!busco_files[@]}"; do
     fi
 done
 
-# --- Infer gene trees with IQ-TREE ---
+# --- Infer gene trees with IQ-TREE 3 ---
+# Three bugs from IQ-TREE 1.x carryover (caught in stage 03a audit, 2026-05-08):
+#   - `-m "${IQTREE_MODEL}"` collapsed the composite "MFP -mset ..." into a
+#     single quoted argument that IQ-TREE 3 rejects as an unknown model.
+#     Pass the discriminating flags separately like stage 04 does.
+#   - `-nt` (IQ-TREE 1.x threads) → `-T` (IQ-TREE 3.x).
+#   - `-pre` (IQ-TREE 1.x prefix) → `--prefix` (IQ-TREE 3.x).
+# Also force `-st AA` and run the defensive near-all-gap filter to match
+# stages 04 and the classification tree builder (avoids "Unknown sequence
+# type" on TrimAl outputs where one species is entirely missing).
 for aln in "${RESULTS_DIR}/busco/alignments/"*_trimmed.afa; do
     base=$(basename "$aln" _trimmed.afa)
-    run_command "tree_busco_${base}" ${IQTREE} -s "$aln" -m "${IQTREE_MODEL}" -B "${IQTREE_BOOTSTRAP}" -nt "${CPUS}" -pre "${RESULTS_DIR}/busco/gene_trees/${base}"
+    python3 "${SCRIPTS_DIR}/drop_near_all_gap_rows.py" \
+        --input "$aln" --output "$aln" \
+        2>>"${LOGS_DIR}/busco_${base}_drop_gappy.log" || true
+    run_command "tree_busco_${base}" ${IQTREE} \
+        -s "$aln" \
+        -st AA \
+        -m "${IQTREE_MODEL_FIND}" -mset "${IQTREE_MODEL_SET}" \
+        -B "${IQTREE_BOOTSTRAP}" -alrt 1000 \
+        -seed "${IQTREE_SEED}" \
+        -T "${CPUS}" \
+        --prefix "${RESULTS_DIR}/busco/gene_trees/${base}"
 done
 
 # --- Generate species tree with ASTRAL ---

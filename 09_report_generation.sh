@@ -229,7 +229,7 @@ The analysis pipeline consists of these sequential stages (May 2026 stack):
     \item \textbf{Reference Processing}: Build per-orthogroup HMMs from Nath et al. references.
     \item \textbf{GPCR Identification}: HHblits homology + TMbed transmembrane prediction (DeepTMHMM / Phobius / Kyte--Doolittle as graded fallbacks; 6+ TM filter). Predictor provenance recorded per run.
     \item \textbf{Orthology Clustering}: OrthoFinder (Diamond mode).
-    \item \textbf{Phylogenetic Analysis}: regime-based MAFFT/FAMSA alignment $\to$ HmmCleaner (segment) $\to$ ClipKit (column) $\to$ FastTree seed $\to$ IQ-TREE 3 (ModelFinder; UFBoot+SH-aLRT+TBE; deterministic seed) $\to$ TreeShrink rogue-taxon removal.
+    \item \textbf{Phylogenetic Analysis}: PREQUAL pre-alignment residue mask $\to$ MAFFT canonical + 4 MAFFT variant ensemble $\to$ CLOAK consensus mask $\to$ TAPER per-sequence outlier mask $\to$ ClipKit (column trim) $\to$ FastTree seed $\to$ IQ-TREE 3 (ModelFinder; UFBoot+SH-aLRT+TBE; deterministic seed) $\to$ TreeShrink rogue-taxon removal. (HmmCleaner replaced by the PREQUAL/CLOAK/TAPER stack in May 2026; see Wheeler 2025, Whelan et al. 2018, Zhang et al. 2021.)
     \item \textbf{Selective Pressure}: HyPhy stack — GARD recombination breakpoints $\to$ BUSTED-S (gene-wide) $\to$ BUSTED-MH (multi-hit-aware) $\to$ aBSREL (branch-specific) $\to$ MEME (episodic site-level). MACSE v2 for codon alignment.
     \item \textbf{Ancestral Reconstruction}: IQ-TREE 3 \texttt{-{}-ancestral} (FastML fallback).
     \item \textbf{Reconciliation}: GeneRax (Notung fallback).
@@ -632,7 +632,9 @@ TMbed (Bernhofer 2022) & Transmembrane topology (primary) \\
 DeepTMHMM / Phobius & TM topology (fallbacks) \\
 OrthoFinder & Orthology inference \\
 MAFFT / FAMSA & Multiple sequence alignment \\
-HmmCleaner & Per-sequence segment cleaning \\
+PREQUAL (Whelan 2018) & Pre-alignment residue mask \\
+CLOAK (Wheeler 2025) & Consensus-of-ensemble alignment uncertainty mask \\
+TAPER (Zhang 2021) & Per-sequence residue-outlier mask \\
 ClipKit & Column trimming \\
 MACSE v2 & Frameshift-aware codon alignment \\
 FastTree & Approximate-ML seed tree \\
