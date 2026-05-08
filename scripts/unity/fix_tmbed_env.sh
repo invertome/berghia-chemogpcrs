@@ -36,7 +36,10 @@
 # A leftover `tmp...` directory inside the bundled t5/ dir from an
 # interrupted previous install is also cleaned up.
 
-set -euo pipefail
+# `set -u` would trip on conda's deactivate hooks (CONDA_BACKUP_CXX etc.),
+# so only enforce -e and -o pipefail. The script doesn't rely on unset-var
+# safety beyond what conda needs.
+set -eo pipefail
 
 ENV_NAME="${1:-berghia-gpcr}"
 
