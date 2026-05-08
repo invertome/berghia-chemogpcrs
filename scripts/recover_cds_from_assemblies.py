@@ -564,8 +564,16 @@ def reverse_complement(seq):
     return seq.translate(comp)[::-1]
 
 
-def process_species(prefix, og_dir, cds_file, output_dir, genome_dir, threads=2):
-    """Process one species: download genome, run miniprot, extract CDS."""
+def process_species(prefix, og_dir, cds_file, output_dir, genome_dir,
+                    threads=2, reextract_only=False):
+    """Process one species: download genome, run miniprot, extract CDS.
+
+    When `reextract_only` is True, skip miniprot (re-using the cached
+    GFF and genome at output_dir + genome_dir) and just re-run
+    extract_cds_from_gff. Used to apply tightened paralog-discrimination
+    thresholds (bead -8st) to a previously-recovered set without paying
+    the multi-hour miniprot cost again.
+    """
     if prefix not in SPECIES_MAP:
         print(f'  SKIP {prefix}: not in species map')
         return 0
@@ -582,21 +590,41 @@ def process_species(prefix, og_dir, cds_file, output_dir, genome_dir, threads=2)
         return 0
     print(f'  Missing proteins: {len(missing)}')
 
-    # Write protein queries to temp FASTA
     proteins_fa = os.path.join(output_dir, f'{prefix}_query_proteins.fa')
-    write_fasta(missing, proteins_fa)
-
-    # Download assembly
-    genome_fa = download_assembly(accession, genome_dir, threads)
-    if not genome_fa:
-        print(f'  FAILED: could not download assembly for {prefix}')
-        return 0
-
-    # Run miniprot
     gff_path = os.path.join(output_dir, f'{prefix}_miniprot.gff')
-    if not run_miniprot(genome_fa, proteins_fa, gff_path, threads):
-        print(f'  FAILED: miniprot error for {prefix}')
-        return 0
+
+    if reextract_only:
+        if not os.path.exists(gff_path):
+            print(f'  SKIP {prefix}: --reextract-only set but no cached GFF '
+                  f'at {gff_path}')
+            return 0
+        # Locate the genome FASTA. It may have been deleted to save disk
+        # (default behavior of the orchestration is to clean up genomes
+        # post-recovery), so we accept either an existing file or fall
+        # back to redownloading just for the extraction.
+        genome_fa = os.path.join(genome_dir, f'{accession}.fa')
+        if not os.path.exists(genome_fa):
+            print(f'  Re-downloading genome for re-extraction…')
+            genome_fa = download_assembly(accession, genome_dir, threads)
+            if not genome_fa:
+                print(f'  FAILED: cannot fetch genome for re-extraction')
+                return 0
+        print(f'  Re-extracting CDS from cached GFF under tightened '
+              f'paralog-discrimination thresholds…')
+    else:
+        # Write protein queries to temp FASTA
+        write_fasta(missing, proteins_fa)
+
+        # Download assembly
+        genome_fa = download_assembly(accession, genome_dir, threads)
+        if not genome_fa:
+            print(f'  FAILED: could not download assembly for {prefix}')
+            return 0
+
+        # Run miniprot
+        if not run_miniprot(genome_fa, proteins_fa, gff_path, threads):
+            print(f'  FAILED: miniprot error for {prefix}')
+            return 0
 
     # Extract CDS
     print(f'  Extracting CDS from miniprot alignments...')
@@ -618,8 +646,10 @@ def process_species(prefix, og_dir, cds_file, output_dir, genome_dir, threads=2)
         write_fasta(cds_seqs, species_cds)
         print(f'  Wrote {len(cds_seqs)} CDS to {species_cds}')
 
-    # Clean up query proteins file
-    os.remove(proteins_fa)
+    # Clean up query proteins file (no-op in --reextract-only mode where
+    # we never wrote it)
+    if os.path.exists(proteins_fa):
+        os.remove(proteins_fa)
 
     return len(cds_seqs)
 
@@ -647,6 +677,14 @@ def main():
                             'Rank_candidates / parse_absrel can join on this to flag '
                             'miniprot-recovered branches in dN/dS results (literature '
                             'review noted potential frameshift/splice-site bias).')
+    parser.add_argument('--reextract-only', action='store_true',
+                        help='Skip miniprot. Re-run CDS extraction against '
+                             'existing cached GFFs in --output-dir. Used to '
+                             'apply the bead -8st paralog-discrimination '
+                             'thresholds to a previously-recovered set '
+                             'without paying the multi-hour miniprot cost. '
+                             'Genome FASTAs are re-downloaded if they were '
+                             'cleaned up after the original recovery.')
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -672,7 +710,8 @@ def main():
     for prefix in species_list:
         n = process_species(
             prefix, args.og_dir, args.cds_file,
-            args.output_dir, genome_dir, args.threads
+            args.output_dir, genome_dir, args.threads,
+            reextract_only=args.reextract_only,
         )
         total_recovered += n
         results.append((prefix, n))

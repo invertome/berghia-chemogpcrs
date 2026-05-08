@@ -142,7 +142,88 @@ if [ "${USE_NATH_ET_AL}" = true ]; then
         find "${RESULTS_DIR}/reference_sequences/cds/one_to_one_ortholog" -name "*.fna" -exec cat {} + \
             > "${RESULTS_DIR}/reference_sequences/cds/conserved_references_cds.fna" 2>/dev/null || true
     fi
-    cat "${RESULTS_DIR}/reference_sequences/cds/"*.fna > "${RESULTS_DIR}/reference_sequences/cds/all_references_cds.fna" 2>/dev/null || true
+
+    # Bead -lfy/-8st (2026-05-08): the previous one-liner
+    #
+    #   cat "${RESULTS_DIR}/reference_sequences/cds/"*.fna \
+    #       > "${RESULTS_DIR}/reference_sequences/cds/all_references_cds.fna"
+    #
+    # had two bugs that silently shrank the merged CDS file from ~30k to
+    # ~842 sequences across stage 01 runs:
+    #
+    #   (1) Self-cat truncation. The shell opens all_references_cds.fna
+    #       for writing (truncating to 0 bytes) BEFORE running `cat`. The
+    #       glob `*.fna` then matches the now-empty destination file too,
+    #       and the surviving content is whichever sibling files happened
+    #       to be re-cat'd before the destination was hit.
+    #
+    #   (2) cds_recovered/ ignored. Miniprot recovery output lives at
+    #       ${RESULTS_DIR}/reference_sequences/cds_recovered/*_cds.fna
+    #       (the run_cds_preprocess.sh layout), not under cds/. The cat
+    #       missed all 30k recovered CDS.
+    #
+    # Fix: idempotently rebuild via a temp file that excludes the
+    # destination by name AND pulls from BOTH cds/ and cds_recovered/.
+    # Skip the rebuild if the file is already substantial (e.g. produced
+    # by a fresh `bash scripts/run_cds_preprocess.sh` immediately before
+    # this stage); we don't want to rebuild a known-good file from
+    # whatever happens to be on disk.
+    ALL_REF_CDS_BUILT="${RESULTS_DIR}/reference_sequences/cds/all_references_cds.fna"
+    EXISTING_N=0
+    if [ -s "$ALL_REF_CDS_BUILT" ]; then
+        EXISTING_N=$(grep -c '^>' "$ALL_REF_CDS_BUILT" 2>/dev/null || echo 0)
+    fi
+    if [ "${EXISTING_N:-0}" -lt 5000 ]; then
+        log "Rebuilding merged CDS file (currently ${EXISTING_N} seqs; target ≥5000)"
+        TMP_CDS="${ALL_REF_CDS_BUILT}.tmp.$$"
+        : > "$TMP_CDS"
+        find "${RESULTS_DIR}/reference_sequences/cds" -name "*.fna" -type f \
+            ! -name "all_references_cds.fna*" \
+            -exec cat {} + >> "$TMP_CDS" 2>/dev/null || true
+        if [ -d "${RESULTS_DIR}/reference_sequences/cds_recovered" ]; then
+            find "${RESULTS_DIR}/reference_sequences/cds_recovered" -name "*.fna" -type f \
+                ! -name "all_recovered_cds.fna*" \
+                -exec cat {} + >> "$TMP_CDS" 2>/dev/null || true
+        fi
+        # Bead -lfy/-8st defense in depth: cap merged CDS at MERGE_CDS_MAX_BP
+        # bp per sequence so any contig leak from older fetch_reference_cds
+        # runs (pre-ad79a5c 8 kb cap) is dropped at the merge boundary.
+        # Real GPCR CDS — the only thing this pipeline targets — top out
+        # well under 8 kb; anything larger is a scaffold or whole contig
+        # that would poison stage 05 dN/dS.
+        FILTERED_TMP="${ALL_REF_CDS_BUILT}.filtered.$$"
+        MERGE_CDS_MAX_BP="${MERGE_CDS_MAX_BP:-8000}"
+        python3 -c "
+import sys
+MAX = int(sys.argv[1])
+src, dst = sys.argv[2], sys.argv[3]
+kept = dropped = 0
+with open(src) as fin, open(dst, 'w') as fout:
+    cur_id, cur_lines = None, []
+    def flush():
+        global kept, dropped
+        if cur_id is None: return
+        seq = ''.join(cur_lines)
+        if len(seq) <= MAX:
+            fout.write(cur_id + ''.join(cur_lines) + '\n')
+            kept += 1
+        else:
+            dropped += 1
+    for line in fin:
+        if line.startswith('>'):
+            flush(); cur_id = line; cur_lines = []
+        else:
+            cur_lines.append(line.rstrip('\n'))
+    flush()
+print(f'merge-filter: kept={kept}, dropped={dropped} (>{MAX} bp)', file=sys.stderr)
+" "$MERGE_CDS_MAX_BP" "$TMP_CDS" "$FILTERED_TMP" 2>>"${LOGS_DIR}/cds_merge.log" || cp "$TMP_CDS" "$FILTERED_TMP"
+        mv -f "$FILTERED_TMP" "$ALL_REF_CDS_BUILT"
+        rm -f "$TMP_CDS"
+        REBUILT_N=$(grep -c '^>' "$ALL_REF_CDS_BUILT" 2>/dev/null || echo 0)
+        log "Rebuilt merged CDS file: ${REBUILT_N} sequences (post length-cap at ${MERGE_CDS_MAX_BP} bp)"
+    else
+        log "Merged CDS file already has ${EXISTING_N} sequences — preserving (use run_cds_preprocess.sh to rebuild)."
+    fi
 
 else
     # Legacy structure: use taxid_*_refs.aa files
