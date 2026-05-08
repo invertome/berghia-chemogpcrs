@@ -90,15 +90,25 @@ if [ "$TM_PREDICTOR_PRIMARY" = "tmbed" ] && command -v tmbed &>/dev/null; then
     echo "Using TMbed (Bernhofer & Rost 2022)" >&2
     TMBED_OUT="${OUTPUT_DIR}/tmbed_out"
     mkdir -p "$TMBED_OUT"
-    if tmbed predict -f "$FASTA" -p "$TMBED_OUT/predictions.3line" -f-format=fasta --out-format=3 2>"$TMBED_OUT/tmbed.log"; then
+    # TMbed CLI: -f INPUT.fasta -p OUTPUT.3line --out-format 1.
+    # FASTA is the only supported input format (no `-f-format` flag — passing
+    # one made TMbed treat it as a positional input path and crash with
+    # FileNotFoundError; production stage 02 failure, 2026-05-08).
+    # --out-format 1 = simple 3-line (header / seq / topology with i/o/B/H/S
+    # alphabet), DeepTMHMM-compatible. --out-format 3 is the *tabular* per-
+    # residue probability format and the parser below would erroneously count
+    # `H` in the `P(H)` column header as TM regions.
+    if tmbed predict -f "$FASTA" -p "$TMBED_OUT/predictions.3line" --out-format 1 \
+            2>"$TMBED_OUT/tmbed.log"; then
         cp "$TMBED_OUT/predictions.3line" "$OUTPUT_DIR/predicted_topologies.3line"
         generate_prediction_tsv "$OUTPUT_DIR/predicted_topologies.3line" "$OUTPUT_DIR/prediction"
         record_predictor "tmbed"
         rm -rf "$TMBED_OUT"
         exit 0
     fi
-    echo "Warning: TMbed failed, trying DeepTMHMM strategies" >&2
-    rm -rf "$TMBED_OUT"
+    # Preserve the failure log for post-mortem (was previously rm -rf'd, which
+    # cost us a smoke iteration when the production crash left an empty dir).
+    echo "Warning: TMbed failed (log: $TMBED_OUT/tmbed.log); trying DeepTMHMM strategies" >&2
 fi
 
 # --- Strategy 1: Apptainer SIF container ---
