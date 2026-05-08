@@ -207,7 +207,12 @@ def build_edge_to_family_map(tree_newick: str,
         fams = set()
         subs = set()
         for leaf in leaves:
-            ann = leaf_annotations.get(leaf)
+            # Tree leaves are written as `accession|family|subfamily|species`
+            # by select_backbone_reps.py; the leaf-annotation TSV is keyed
+            # by accession alone. Strip pipe-suffix before lookup, falling
+            # back to the full name for backward-compat with simpler trees.
+            leaf_acc = leaf.split("|", 1)[0]
+            ann = leaf_annotations.get(leaf_acc) or leaf_annotations.get(leaf)
             if ann is None:
                 fams.add("?unknown-leaf?")
             else:
@@ -328,22 +333,55 @@ def _split_query_ref(combined_aln: str, ref_ids: set[str],
         _flush()
 
 
+def _read_iqtree_model(ref_tree: str) -> str:
+    """Read the IQ-TREE-inferred model from the sibling .iqtree file.
+    EPA-ng defaults to GTR+G (DNA) which crashes on AA data; we must
+    pass the protein model explicitly. Falls back to 'LG+G' if the
+    .iqtree file is missing or unparsable (a safe default for GPCRs)."""
+    iqtree_path = ref_tree
+    for suffix in (".treefile", ".contree"):
+        if iqtree_path.endswith(suffix):
+            iqtree_path = iqtree_path[: -len(suffix)] + ".iqtree"
+            break
+    try:
+        with open(iqtree_path) as f:
+            for line in f:
+                if line.startswith("Model of substitution:"):
+                    return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return "LG+G"
+
+
 def _run_epa_ng(query_aln: str, ref_aln: str, ref_tree: str,
                 out_dir: str, threads: int) -> bool:
-    """Run EPA-ng against the reference tree. Output: out_dir/epa_result.jplace."""
+    """Run EPA-ng against the reference tree. Output: out_dir/epa_result.jplace.
+
+    Captures stderr so the failure is visible if EPA-ng crashes (the
+    previous DEVNULL-everything approach hid a GTR+G default that
+    silently broke placement for protein data — see 2026-05-07
+    smoke-test postmortem).
+    """
     Path(out_dir).mkdir(parents=True, exist_ok=True)
+    model = _read_iqtree_model(ref_tree)
     try:
-        subprocess.run(
+        result = subprocess.run(
             ["epa-ng",
              "--redo",
              "--tree", ref_tree,
              "--ref-msa", ref_aln,
              "--query", query_aln,
              "--out-dir", out_dir,
-             "--threads", str(threads)],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+             "--threads", str(threads),
+             "--model", model],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True)
         return os.path.exists(os.path.join(out_dir, "epa_result.jplace"))
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except subprocess.CalledProcessError as e:
+        err = (e.stderr or b"").decode("utf-8", errors="replace")
+        print(f"  EPA-ng stderr: {err.strip()[:500]}", file=sys.stderr)
+        return False
+    except FileNotFoundError:
+        print(f"  EPA-ng not on PATH", file=sys.stderr)
         return False
 
 
@@ -377,10 +415,23 @@ def place_against_tree(query_fasta: str, ref_fasta: str, ref_aln: str,
         print(f"  WARN: EPA-ng failed for {ref_tree}", file=sys.stderr)
         return {}
 
-    placements = parse_jplace(os.path.join(epa_dir, "epa_result.jplace"))
+    jplace_path = os.path.join(epa_dir, "epa_result.jplace")
+    placements = parse_jplace(jplace_path)
     leaf_ann = load_leaf_annotations(ref_tsv)
-    with open(ref_tree) as f:
-        tree_text = f.read().strip()
+    # Read the EPA-ng-labeled tree from inside the jplace file (it has the
+    # `{N}` edge labels that placements reference). The IQ-TREE treefile on
+    # disk has SH-aLRT/UFBoot labels but no `{N}` labels — using it gives
+    # an empty edge_map and 'unclassified-placement' for every candidate.
+    tree_text = ""
+    try:
+        with open(jplace_path) as f:
+            jdata = json.load(f)
+        tree_text = (jdata.get("tree") or "").strip()
+    except (OSError, json.JSONDecodeError):
+        pass
+    if not tree_text:
+        with open(ref_tree) as f:
+            tree_text = f.read().strip()
     edge_map = build_edge_to_family_map(tree_text, leaf_ann)
     return classify_placement(placements, edge_map)
 
@@ -396,7 +447,14 @@ def main() -> int:
     args = ap.parse_args()
 
     tree_dir = Path(args.tree_dir)
-    backbone_aln = tree_dir / "backbone.trimmed.aln"
+    # Prefer the post-defensive-filter alignment that the tree was actually
+    # built from. build_classification_reference_trees.sh drops ≥95%-gap rows
+    # into <name>.cleaned.aln and feeds THAT to IQ-TREE, so the tree's leaf
+    # set matches cleaned.aln (not trimmed.aln). Using trimmed.aln gives a
+    # silent EPA-ng MSA-tree mismatch and 0 placements.
+    backbone_aln = tree_dir / "backbone.cleaned.aln"
+    if not backbone_aln.exists():
+        backbone_aln = tree_dir / "backbone.trimmed.aln"
     backbone_tre = tree_dir / "backbone.treefile"
     backbone_tsv = tree_dir / "backbone.tsv"
 
@@ -425,7 +483,9 @@ def main() -> int:
         final_results: dict[str, dict] = dict(backbone_results)
         for fam, name in [("aminergic", "aminergic_subtree"),
                           ("peptide", "peptide_subtree")]:
-            sub_aln = tree_dir / f"{name}.trimmed.aln"
+            sub_aln = tree_dir / f"{name}.cleaned.aln"
+            if not sub_aln.exists():
+                sub_aln = tree_dir / f"{name}.trimmed.aln"
             sub_tre = tree_dir / f"{name}.treefile"
             sub_tsv = tree_dir / f"{name}.tsv"
             if not (sub_aln.exists() and sub_tre.exists() and sub_tsv.exists()):

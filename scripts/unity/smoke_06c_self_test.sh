@@ -84,7 +84,12 @@ with open("references/non_chemo_gpcr/all_references.tsv") as f:
 obs = {}
 with open("results/classification/smoke_self_test/consensus.tsv") as f:
     for r in csv.DictReader(f, delimiter="\t"):
-        obs[r["candidate_id"]] = (
+        # When candidates are the curated reference FASTA (self-test),
+        # candidate_id is the pipe-format `accession|family|sub|species`
+        # baked into the FASTA header by curate_gpcr_references.py. The
+        # truth TSV keys by accession alone — strip the suffix.
+        acc = r["candidate_id"].split("|", 1)[0]
+        obs[acc] = (
             r.get("classification", ""),
             r.get("classification_family", ""),
             r.get("classification_subfamily", ""),

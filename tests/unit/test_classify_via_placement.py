@@ -100,6 +100,31 @@ def test_edge_to_family_internal_edge_monophyletic() -> None:
     assert edge_map[2] == ("aminergic", "5HT")
 
 
+def test_edge_to_family_pipe_format_leaves() -> None:
+    """Tree leaves are written by select_backbone_reps.py as
+    `accession|family|subfamily|species`; the leaf-annotation TSV is
+    keyed by accession alone. The map builder must split the pipe
+    suffix before looking up annotations, otherwise every edge gets
+    `?unknown-leaf?` and no placement is ever classified.
+
+    Regression for 2026-05-08 smoke postmortem (4th EPA-ng bug).
+    """
+    leaf_annotations = {
+        "P28223": ("aminergic", "5HT"),
+        "P50406": ("aminergic", "5HT"),
+        "P12345": ("opsin", ""),
+    }
+    tree_newick = (
+        "((P28223|aminergic|5HT|Homosapiens:0.1{0},"
+        "P50406|aminergic|5HT|Homosapiens:0.2{1}):0.05{2},"
+        "P12345|opsin||Homosapiens:0.3{3});"
+    )
+    edge_map = cvp.build_edge_to_family_map(tree_newick, leaf_annotations)
+    assert edge_map[0] == ("aminergic", "5HT")
+    assert edge_map[2] == ("aminergic", "5HT")
+    assert edge_map[3] == ("opsin", "")
+
+
 def test_edge_to_family_mixed_clade_returns_empty() -> None:
     """Internal edge subtending a polyphyletic clade returns empty
     family — placement on this edge is ambiguous."""
@@ -163,3 +188,30 @@ def test_load_leaf_annotations(tmp_path: Path) -> None:
     out = cvp.load_leaf_annotations(str(f))
     assert out["P28223"] == ("aminergic", "5HT")
     assert out["P12345"] == ("opsin", "")
+
+
+# ---- IQ-TREE model extraction (for EPA-ng --model) ----------------------
+
+def test_read_iqtree_model_present(tmp_path: Path) -> None:
+    """When sibling .iqtree exists, return the inferred model string."""
+    (tmp_path / "tree.iqtree").write_text(
+        "Some header\n"
+        "Best-fit model according to BIC: LG+I+G4\n"
+        "Model of substitution: LG+I+G4\n"
+        "Other content\n"
+    )
+    (tmp_path / "tree.treefile").write_text("((A,B),C);")
+    assert cvp._read_iqtree_model(str(tmp_path / "tree.treefile")) == "LG+I+G4"
+
+
+def test_read_iqtree_model_missing_falls_back(tmp_path: Path) -> None:
+    """No .iqtree file -> safe protein default (LG+G), not GTR+G."""
+    (tmp_path / "tree.treefile").write_text("((A,B),C);")
+    assert cvp._read_iqtree_model(str(tmp_path / "tree.treefile")) == "LG+G"
+
+
+def test_read_iqtree_model_handles_contree(tmp_path: Path) -> None:
+    """Works for .contree paths too (consensus tree variant)."""
+    (tmp_path / "tree.iqtree").write_text("Model of substitution: VT+R8\n")
+    (tmp_path / "tree.contree").write_text("((A,B),C);")
+    assert cvp._read_iqtree_model(str(tmp_path / "tree.contree")) == "VT+R8"
