@@ -64,6 +64,23 @@ ref_categories_file = sys.argv[7] if len(sys.argv) > 7 else None
 PHYLO_WEIGHT = float(os.getenv('PHYLO_WEIGHT', 2))
 PURIFYING_WEIGHT = float(os.getenv('PURIFYING_WEIGHT', 1))  # New: separate from positive
 POSITIVE_WEIGHT = float(os.getenv('POSITIVE_WEIGHT', 1))    # New: separate from purifying
+
+# Bead -8st: per-OG dN/dS reliability gating. The dN/dS axis is built from
+# aBSREL run on a per-OG codon alignment that depends on having recovered
+# CDS for the orthogroup's reference members. When few references have CDS
+# (chemoreceptor LSE expansions where miniprot fails on most paralogs), the
+# omega estimate is statistically unreliable AND there is no way to tell
+# from the omega alone whether it's a real signal. We multiply the dN/dS
+# axis contribution by min(1.0, n_ref_cds_in_og / DNDS_RELIABILITY_FULL),
+# applied to BOTH the score AND the total_weight denominator so a candidate
+# in an under-supported OG falls back to the other axes via fair-scoring,
+# rather than getting a score artificially shaped by noise.
+#
+# 5 references is the minimum for a defensible omega estimate (matches the
+# "medium" threshold in scripts/add_og_coverage_columns.py); above 10 the
+# estimate is robust ("high"). The default fully unlocks the dN/dS axis at
+# n_ref_cds == DNDS_RELIABILITY_FULL.
+DNDS_RELIABILITY_FULL = float(os.getenv('DNDS_RELIABILITY_FULL', 5))
 SYNTENY_WEIGHT = float(os.getenv('SYNTENY_WEIGHT', 3))
 EXPR_WEIGHT = float(os.getenv('EXPR_WEIGHT', 1))
 LSE_DEPTH_WEIGHT = float(os.getenv('LSE_DEPTH_WEIGHT', 1))
@@ -1204,6 +1221,61 @@ def load_cafe_expansion(results_dir):
     return cafe_data
 
 
+def load_og_dnds_reliability(results_dir):
+    """Compute per-OG dN/dS-axis reliability weights in [0, 1].
+
+    Bead -8st (2026-05-08). For each orthogroup, count how many of its
+    members have a CDS in the merged reference CDS file. Weight is
+    ``min(1.0, n_ref_cds / DNDS_RELIABILITY_FULL)``. Below the threshold
+    the dN/dS axis still contributes proportionally; above it the axis
+    is fully unlocked. The default threshold (5) matches the "medium"
+    reliability tier in scripts/add_og_coverage_columns.py.
+
+    Returns dict: og_id -> float in [0, 1]. Empty dict if either input
+    is missing — callers must default to 0.0 in that case so the dN/dS
+    axis falls out of fair-scoring rather than getting full weight on
+    unverified data.
+    """
+    cds_path = os.path.join(results_dir, 'reference_sequences', 'cds',
+                            'all_references_cds.fna')
+    og_tsv = None
+    for candidate in (
+            os.path.join(results_dir, 'orthogroups', 'OrthoFinder'),
+            os.path.join(results_dir, 'orthofinder')):
+        if not os.path.isdir(candidate):
+            continue
+        for root, _, files in os.walk(candidate):
+            if 'Orthogroups.tsv' in files and root.endswith('Orthogroups'):
+                og_tsv = os.path.join(root, 'Orthogroups.tsv')
+                break
+        if og_tsv:
+            break
+
+    if not (os.path.exists(cds_path) and og_tsv):
+        return {}
+
+    # Reuse the helpers from add_og_coverage_columns.py — same data sources,
+    # same parsing, single source of truth for "what counts as a recovered
+    # reference CDS for an OG".
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from add_og_coverage_columns import parse_cds_ids, load_og_members
+    except ImportError:
+        return {}
+
+    cds_ids = parse_cds_ids(cds_path)
+    og_members = load_og_members(og_tsv)
+    weights: dict = {}
+    full = max(DNDS_RELIABILITY_FULL, 1.0)
+    for og_id, members in og_members.items():
+        n_ref_cds = sum(1 for m in members if m in cds_ids)
+        weights[og_id] = min(1.0, n_ref_cds / full)
+    print(f"Computed dN/dS reliability weights for {len(weights)} orthogroups "
+          f"(full-credit threshold = {DNDS_RELIABILITY_FULL} ref CDS)",
+          file=sys.stderr)
+    return weights
+
+
 def load_gene_to_orthogroup(results_dir):
     """
     Load gene to orthogroup mapping.
@@ -1305,16 +1377,28 @@ def calculate_rank_score(df, weights):
     max_possible_weight = sum(weights.values())
 
     def calc_row(row):
+        # Bead -8st: per-OG dN/dS reliability multiplier in [0, 1].
+        # Falls back to 1.0 if the column wasn't populated (e.g. legacy
+        # CSVs run through downstream consumers) so we don't silently
+        # zero out the dN/dS axis on inputs that predate the multiplier.
+        dnds_rw = row.get('dnds_reliability_weight', 1.0)
+        try:
+            dnds_rw = float(dnds_rw)
+        except (TypeError, ValueError):
+            dnds_rw = 1.0
+
         # Base scores always available
         score = (
             row['phylo_score_norm'] * weights.get('phylo', 0) +
-            row['purifying_score_norm'] * weights.get('purifying', 0) +
-            row['positive_score_norm'] * weights.get('positive', 0) +
+            row['purifying_score_norm'] * weights.get('purifying', 0) * dnds_rw +
+            row['positive_score_norm'] * weights.get('positive', 0) * dnds_rw +
             row['lse_depth_score_norm'] * weights.get('lse_depth', 0)
         )
         total_weight = (
-            weights.get('phylo', 0) + weights.get('purifying', 0) +
-            weights.get('positive', 0) + weights.get('lse_depth', 0)
+            weights.get('phylo', 0) +
+            weights.get('purifying', 0) * dnds_rw +
+            weights.get('positive', 0) * dnds_rw +
+            weights.get('lse_depth', 0)
         )
 
         # Conditionally add synteny and expression
@@ -1601,6 +1685,13 @@ ecl_divergence_data = load_ecl_divergence(results_dir)
 cafe_expansion_data = load_cafe_expansion(results_dir)
 gene_to_orthogroup = load_gene_to_orthogroup(results_dir)
 
+# Bead -8st: per-OG dN/dS-axis reliability weights. Used downstream to
+# scale the purifying/positive contributions in the composite so that
+# under-supported OGs (chemoreceptor LSE expansions where miniprot
+# typically fails on most paralogs) don't get full dN/dS weight on
+# what is statistically just noise.
+og_dnds_reliability = load_og_dnds_reliability(results_dir)
+
 # Orthogroup gene trees for bootstrap confidence scoring
 og_trees = {}
 if OG_CONFIDENCE_WEIGHT > 0 and gene_to_orthogroup:
@@ -1763,6 +1854,14 @@ for cand_id in candidates['id']:
         'has_tandem_cluster_data': has_tandem,
         # Bead -325: CDS provenance
         'cds_source': cds_source,
+        # Bead -8st: dN/dS-axis reliability weight derived from how many
+        # of this OG's members have a CDS in the reference set (linear
+        # ramp to full credit at DNDS_RELIABILITY_FULL refs). Applied as
+        # a multiplier on the dN/dS contribution in calculate_rank_score.
+        # 0.0 when no OG can be resolved or no reliability map was loaded
+        # — that takes dN/dS out of fair-scoring entirely for that row.
+        'dnds_reliability_weight': (
+            og_dnds_reliability.get(cand_og, 0.0) if cand_og else 0.0),
         'evidence_completeness': evidence_completeness
     })
 

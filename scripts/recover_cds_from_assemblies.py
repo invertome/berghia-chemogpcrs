@@ -133,6 +133,121 @@ CODON_TABLE = {
 STOP_CODONS = {'TAA', 'TAG', 'TGA'}
 
 
+# ---------------------------------------------------------------------------
+# Paralog-discrimination thresholds (bead -8st, 2026-05-08).
+# ---------------------------------------------------------------------------
+# The pipeline targets chemoreceptor LSE expansions where paralogs commonly
+# share 80–95 % protein identity. The previous 0.5 translation-vs-protein
+# identity threshold was useless for paralog discrimination — a wrong-paralog
+# miniprot hit easily clears 50 %, attaches the *other* paralog's CDS to
+# this protein's identity, and silently poisons the dN/dS axis.
+#
+# CDS_PROTEIN_IDENTITY_MIN
+#   Minimum identity of the back-translated CDS to the query protein, after
+#   global pairwise alignment, for the CDS to be accepted. 0.95 is high
+#   enough to reject paralog matches at typical LSE-expansion divergence
+#   while tolerating routine back-translation artifacts (rare wobble codons,
+#   miniprot frameshift handling). Override only when intentionally working
+#   on more divergent gene families.
+#
+# CDS_AMBIGUITY_MARGIN
+#   When a query has multiple miniprot hits, the best hit's identity must
+#   exceed the second-best's by at least this margin. If the top two hits
+#   are closer than this, the assignment is ambiguous and the CDS is
+#   rejected — we'd rather have no CDS than the wrong CDS.
+#
+# CDS_OVERLAP_FRACTION
+#   When two query proteins map to overlapping genomic intervals, only the
+#   query with higher identity at that locus keeps the CDS (the other was
+#   matching its paralog's locus). Two intervals "overlap" when the smaller
+#   is at least this fraction contained in the larger.
+CDS_PROTEIN_IDENTITY_MIN = float(
+    os.environ.get('CDS_PROTEIN_IDENTITY_MIN', '0.95'))
+CDS_AMBIGUITY_MARGIN = float(
+    os.environ.get('CDS_AMBIGUITY_MARGIN', '0.05'))
+CDS_OVERLAP_FRACTION = float(
+    os.environ.get('CDS_OVERLAP_FRACTION', '0.5'))
+
+
+def _alignment_identity(seq1: str, seq2: str) -> float:
+    """Return identity = matches / aligned-length from a global pairwise
+    alignment of `seq1` vs `seq2`.
+
+    Uses Bio.Align.PairwiseAligner (Needleman-Wunsch) with a BLOSUM-style
+    scoring tilt so that gaps and mismatches both reduce identity. The
+    earlier code zip-compared `seq1[:N]` vs `seq2[:N]` position-by-position,
+    which was wrong for any pair that was not perfectly co-linear from
+    position 0 (signal peptide differences, miniprot frame-shift handling,
+    etc.) — a problem that became invisible noise in the dN/dS axis.
+
+    Returns 0.0 on either empty input.
+    """
+    if not seq1 or not seq2:
+        return 0.0
+    try:
+        from Bio.Align import PairwiseAligner
+    except ImportError:
+        # Last-resort fallback: position-by-position over the shorter length.
+        # Strictly worse than alignment-based identity but better than crash.
+        n = min(len(seq1), len(seq2))
+        if n == 0:
+            return 0.0
+        return sum(1 for a, b in zip(seq1[:n], seq2[:n]) if a == b) / n
+    aligner = PairwiseAligner()
+    aligner.mode = 'global'
+    aligner.match_score = 1
+    aligner.mismatch_score = -1
+    aligner.open_gap_score = -2
+    aligner.extend_gap_score = -1
+    try:
+        alignments = aligner.align(seq1, seq2)
+    except Exception:
+        return 0.0
+    if len(alignments) == 0:
+        return 0.0
+    aln = alignments[0]
+    # Modern Biopython: aln[0] / aln[1] return the aligned sequences as
+    # strings with '-' gaps. Older `str(aln)` text format is too unstable
+    # to parse reliably.
+    try:
+        aligned1 = str(aln[0])
+        aligned2 = str(aln[1])
+    except (TypeError, IndexError):
+        # Fallback for very old Biopython where indexing isn't supported.
+        text = str(aln).split('\n')
+        if len(text) < 3:
+            return 0.0
+        aligned1, aligned2 = text[0], text[2]
+    if not aligned1:
+        return 0.0
+    matches = sum(1 for a, b in zip(aligned1, aligned2) if a == b and a != '-')
+    return matches / max(len(aligned1), 1)
+
+
+def _intervals_overlap(coords_a: list[tuple[int, int]],
+                       coords_b: list[tuple[int, int]],
+                       overlap_fraction: float = CDS_OVERLAP_FRACTION) -> bool:
+    """Test whether the genomic spans covered by `coords_a` and `coords_b`
+    overlap by at least `overlap_fraction` of the smaller span.
+
+    Used to detect two query proteins whose miniprot hits land at the same
+    genomic locus — a sign that one query is matching the other's paralog.
+    """
+    if not coords_a or not coords_b:
+        return False
+    min_a = min(s for s, _ in coords_a)
+    max_a = max(e for _, e in coords_a)
+    min_b = min(s for s, _ in coords_b)
+    max_b = max(e for _, e in coords_b)
+    span_a = max_a - min_a + 1
+    span_b = max_b - min_b + 1
+    overlap = max(0, min(max_a, max_b) - max(min_a, min_b) + 1)
+    smaller = min(span_a, span_b)
+    if smaller <= 0:
+        return False
+    return (overlap / smaller) >= overlap_fraction
+
+
 def parse_fasta(path):
     """Parse FASTA file, return dict of id -> sequence."""
     seqs = {}
@@ -321,7 +436,15 @@ def extract_cds_from_gff(genome_fa, gff_path, protein_seqs):
         hits_by_protein[info['target']].append((mrna_id, info))
 
     cds_seqs = {}
-    stats = {'found': 0, 'no_hit': 0, 'bad_cds': 0, 'multi_hit': 0}
+    # Track per-protein meta for the second pass (genomic-overlap dedup) and
+    # the manifest. accepted_meta[prot_id] = (chrom, sorted_coords, identity)
+    accepted_meta = {}
+    stats = {
+        'found': 0, 'no_hit': 0, 'bad_cds': 0, 'multi_hit': 0,
+        'ambiguous_top_hits': 0,    # bead -8st: best/2nd-best within margin
+        'low_identity': 0,          # bead -8st: translation-vs-protein < threshold
+        'paralog_overlap_rejected': 0,  # bead -8st: another query won this locus
+    }
 
     for prot_id, prot_seq in protein_seqs.items():
         if prot_id not in hits_by_protein:
@@ -335,6 +458,16 @@ def extract_cds_from_gff(genome_fa, gff_path, protein_seqs):
         # Pick best hit by identity, then score
         hits.sort(key=lambda x: (x[1]['identity'], x[1]['score']), reverse=True)
         best_mrna_id, best_info = hits[0]
+
+        # Bead -8st: paralog-discrimination ambiguity gate. If multiple hits
+        # are within CDS_AMBIGUITY_MARGIN of the best by identity, miniprot
+        # cannot reliably tell which paralog the query corresponds to; refuse
+        # to assign the CDS rather than risk a wrong-paralog attribution.
+        if len(hits) > 1:
+            second_id = hits[1][1].get('identity', 0.0)
+            if (best_info['identity'] - second_id) < CDS_AMBIGUITY_MARGIN:
+                stats['ambiguous_top_hits'] += 1
+                continue
 
         chrom = best_info['chrom']
         strand = best_info['strand']
@@ -376,23 +509,51 @@ def extract_cds_from_gff(genome_fa, gff_path, protein_seqs):
             stats['bad_cds'] += 1
             continue
 
-        # Verify translation roughly matches protein (>60% identity)
+        # Bead -8st: tightened translation-vs-protein identity check.
+        # Previous code zip-compared seq1[:N] vs seq2[:N] from position 0
+        # at a 0.5 threshold. For chemoreceptor LSE paralogs sharing
+        # 80–95 % identity, both pieces were wrong: position-by-position
+        # comparison overweights co-linear regions (signal peptides,
+        # conserved TM helices) and the threshold doesn't discriminate
+        # paralog-on-paralog confusion. Use a proper global alignment and
+        # the higher CDS_PROTEIN_IDENTITY_MIN.
         translated = ''.join(CODON_TABLE.get(c, 'X') for c in
                            [cds_upper[i:i+3] for i in range(0, len(cds_upper), 3)])
         translated = translated.rstrip('*')
         prot_clean = prot_seq.replace('-', '').replace('*', '')
 
+        identity = 0.0
         if len(translated) > 0 and len(prot_clean) > 0:
-            # Quick identity check: compare overlapping region
-            min_len = min(len(translated), len(prot_clean))
-            matches = sum(1 for a, b in zip(translated[:min_len], prot_clean[:min_len]) if a == b)
-            identity = matches / min_len
-            if identity < 0.5:
-                stats['bad_cds'] += 1
+            identity = _alignment_identity(translated, prot_clean)
+            if identity < CDS_PROTEIN_IDENTITY_MIN:
+                stats['low_identity'] += 1
                 continue
 
         cds_seqs[prot_id] = cds
+        accepted_meta[prot_id] = (chrom, coords, identity)
         stats['found'] += 1
+
+    # Bead -8st: post-process layer for genomic-locus dedup. If two query
+    # proteins were both accepted with overlapping coords on the same
+    # chromosome, only the higher-identity one keeps the CDS — the other
+    # was matching its paralog's locus and the wrong-paralog CDS would
+    # poison dN/dS. We process accepted proteins in order of decreasing
+    # identity and reject any later one whose locus is already claimed.
+    by_chrom = defaultdict(list)  # chrom -> list of (prot_id, coords, identity)
+    for prot_id, (chrom, coords, identity) in accepted_meta.items():
+        by_chrom[chrom].append((prot_id, coords, identity))
+    for chrom, entries in by_chrom.items():
+        entries.sort(key=lambda x: x[2], reverse=True)
+        kept_intervals: list[tuple[str, list[tuple[int, int]]]] = []
+        for prot_id, coords, _ident in entries:
+            if any(_intervals_overlap(coords, kept_coords)
+                   for _, kept_coords in kept_intervals):
+                cds_seqs.pop(prot_id, None)
+                accepted_meta.pop(prot_id, None)
+                stats['paralog_overlap_rejected'] += 1
+                stats['found'] -= 1
+            else:
+                kept_intervals.append((prot_id, coords))
 
     return cds_seqs, stats
 
@@ -444,6 +605,12 @@ def process_species(prefix, og_dir, cds_file, output_dir, genome_dir, threads=2)
     print(f'  Results: {stats["found"]} CDS recovered, '
           f'{stats["no_hit"]} no hit, {stats["bad_cds"]} bad CDS, '
           f'{stats["multi_hit"]} multi-hit')
+    # Bead -8st: paralog-discrimination rejection breakdown
+    print(f'    paralog filters: {stats.get("ambiguous_top_hits", 0)} ambiguous '
+          f'(best/2nd-best within {CDS_AMBIGUITY_MARGIN} identity), '
+          f'{stats.get("low_identity", 0)} below {CDS_PROTEIN_IDENTITY_MIN} '
+          f'translation identity, {stats.get("paralog_overlap_rejected", 0)} '
+          f'paralog-locus collisions')
 
     # Write species CDS
     if cds_seqs:
