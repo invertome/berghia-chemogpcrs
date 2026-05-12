@@ -45,6 +45,26 @@ SITE_FIELDS = [
     "p_value", "n_branches_episodic", "is_episodic",
 ]
 
+# bead -7cy: dual-mode (strict + lenient) concordance-stratified output.
+# Cross-reference is at the column-vector level — two ClipKit passes on the
+# same underlying alignment produce trimmed FASTAs whose columns are subsets
+# of the same original; matching residue-vectors identifies "same column"
+# without needing ClipKit logs. Per-OG counts drive ranking, per-site rows
+# (one per MEME-positive site under either pass) feed sensitivity reports.
+OG_FIELDS_DUAL = [
+    "og_name",
+    "n_strict_positive_sites",
+    "n_lenient_positive_sites",
+    "high_confidence_sites_n",
+    "lenient_only_sites_n",
+    "strict_only_sites_n",
+    "alignment_robustness_index",
+]
+SITE_FIELDS_DUAL = [
+    "og_name", "lenient_site", "strict_site",
+    "strict_pvalue", "lenient_pvalue", "concordance_tier",
+]
+
 
 def _safe_float(x, default: float = float("nan")) -> float:
     try:
@@ -141,6 +161,157 @@ def parse_one(json_path: str, og_name: str, alpha: float = 0.05):
     return sites, og
 
 
+def _read_fasta(path: str) -> list[tuple[str, str]]:
+    """Minimal FASTA reader returning list of (name, sequence) preserving order."""
+    out: list[tuple[str, str]] = []
+    name, seq = None, []
+    with open(path) as f:
+        for line in f:
+            line = line.rstrip()
+            if line.startswith(">"):
+                if name is not None:
+                    out.append((name, "".join(seq)))
+                name = line[1:].split()[0]
+                seq = []
+            elif line:
+                seq.append(line)
+    if name is not None:
+        out.append((name, "".join(seq)))
+    return out
+
+
+def _fasta_columns(path: str) -> list[tuple[str, ...]]:
+    """Return per-column residue-vector tuples (deterministic order = order
+    sequences appear in the FASTA)."""
+    seqs = [s for _, s in _read_fasta(path)]
+    if not seqs:
+        return []
+    L = len(seqs[0])
+    return [tuple(s[i] for s in seqs) for i in range(L)]
+
+
+def map_strict_to_lenient(strict_fa: str, lenient_fa: str) -> list[int | None]:
+    """Map each strict-trimmed column (1-indexed) to its counterpart column
+    in the lenient-trimmed alignment (1-indexed), or None if no match.
+
+    Strict is a column-subset of lenient; equality of the full per-column
+    residue-vector identifies the corresponding column. Linear-time scan
+    with a forward pointer preserves alignment order.
+    """
+    strict_cols = _fasta_columns(strict_fa)
+    lenient_cols = _fasta_columns(lenient_fa)
+    mapping: list[int | None] = []
+    j = 0
+    for s_col in strict_cols:
+        while j < len(lenient_cols) and lenient_cols[j] != s_col:
+            j += 1
+        if j < len(lenient_cols):
+            mapping.append(j + 1)
+            j += 1
+        else:
+            mapping.append(None)
+    return mapping
+
+
+def parse_one_dual(
+    strict_json: str,
+    strict_fa: str,
+    lenient_json: str,
+    lenient_fa: str,
+    og_name: str,
+    alpha: float = 0.05,
+) -> tuple[list[dict], dict]:
+    """Dual-mode parser: read strict + lenient MEME JSONs, map columns
+    across the two trimmed alignments, stratify each MEME-positive site
+    by concordance tier.
+
+    Returns:
+        sites: list of per-site rows (one row per site MEME-positive
+               under EITHER pass; tier identifies which)
+        og:    OG-level summary with concordance counts + robustness index
+    """
+    with open(strict_json) as f:
+        strict_meme = json.load(f)
+    with open(lenient_json) as f:
+        lenient_meme = json.load(f)
+    strict_sites = extract_sites(strict_meme)
+    lenient_sites = extract_sites(lenient_meme)
+
+    def _is_pos(s: dict) -> bool:
+        p, b = s["p_value"], s["beta_plus"]
+        return (p == p) and p < alpha and (b == b) and b > 1.0
+
+    mapping = map_strict_to_lenient(strict_fa, lenient_fa)
+
+    # Build lookup: lenient-1indexed col → strict-1indexed col (inverse of mapping)
+    lenient_to_strict: dict[int, int] = {}
+    for s_idx_0, l_idx in enumerate(mapping):
+        if l_idx is not None:
+            lenient_to_strict[l_idx] = s_idx_0 + 1
+
+    strict_positive_indices = {i + 1 for i, s in enumerate(strict_sites) if _is_pos(s)}
+    lenient_positive_indices = {j + 1 for j, s in enumerate(lenient_sites) if _is_pos(s)}
+
+    # Strict positives translated into lenient column space (drops strict
+    # sites that have no lenient counterpart — should be empty in practice).
+    strict_pos_in_lenient_coords = {
+        mapping[i - 1] for i in strict_positive_indices if mapping[i - 1] is not None
+    }
+
+    high_confidence = strict_pos_in_lenient_coords & lenient_positive_indices
+    lenient_only = lenient_positive_indices - strict_pos_in_lenient_coords
+    strict_only = strict_positive_indices - {
+        i for i in strict_positive_indices
+        if mapping[i - 1] is not None and mapping[i - 1] in lenient_positive_indices
+    }
+
+    n_strict_pos = len(strict_positive_indices)
+    n_lenient_pos = len(lenient_positive_indices)
+    robustness = (len(high_confidence) / n_lenient_pos) if n_lenient_pos else 0.0
+
+    og = {
+        "og_name": og_name,
+        "n_strict_positive_sites": n_strict_pos,
+        "n_lenient_positive_sites": n_lenient_pos,
+        "high_confidence_sites_n": len(high_confidence),
+        "lenient_only_sites_n": len(lenient_only),
+        "strict_only_sites_n": len(strict_only),
+        "alignment_robustness_index": round(robustness, 6),
+    }
+
+    # Per-site rows: one row per MEME-positive site (under either pass).
+    # Indexed by lenient column when possible (since lenient is the superset);
+    # strict-only sites carry their strict column and None for lenient.
+    rows: list[dict] = []
+    # high_confidence + lenient_only — keyed on lenient col
+    for l_idx in sorted(high_confidence | lenient_only):
+        s_idx = lenient_to_strict.get(l_idx)
+        tier = "high_confidence" if l_idx in high_confidence else "lenient_only"
+        rows.append({
+            "og_name": og_name,
+            "lenient_site": l_idx,
+            "strict_site": s_idx,
+            "strict_pvalue": (strict_sites[s_idx - 1]["p_value"]
+                              if s_idx is not None else None),
+            "lenient_pvalue": lenient_sites[l_idx - 1]["p_value"],
+            "concordance_tier": tier,
+        })
+    # strict_only — strict sites with no matching positive lenient
+    for s_idx in sorted(strict_only):
+        l_idx = mapping[s_idx - 1]
+        rows.append({
+            "og_name": og_name,
+            "lenient_site": l_idx,
+            "strict_site": s_idx,
+            "strict_pvalue": strict_sites[s_idx - 1]["p_value"],
+            "lenient_pvalue": (lenient_sites[l_idx - 1]["p_value"]
+                               if l_idx is not None else None),
+            "concordance_tier": "strict_only",
+        })
+
+    return rows, og
+
+
 def discover_batch(directory: str) -> Iterable[tuple[str, str]]:
     suffix = "_meme.json"
     for p in sorted(Path(directory).glob(f"*{suffix}")):
@@ -157,6 +328,15 @@ def main() -> int:
     ap.add_argument("--alpha", type=float, default=0.05)
     ap.add_argument("--out-sites", help="Per-site CSV (optional)")
     ap.add_argument("--out-og", required=True, help="Per-OG aggregate CSV")
+
+    # bead -7cy dual-mode: if all four are supplied, also emit concordance CSVs.
+    ap.add_argument("--lenient-json", help="Lenient-trim MEME JSON for dual-mode")
+    ap.add_argument("--strict-fa", help="Strict-trim protein FASTA (--lenient-json required)")
+    ap.add_argument("--lenient-fa", help="Lenient-trim protein FASTA (--lenient-json required)")
+    ap.add_argument("--out-og-concordance",
+                    help="Per-OG concordance CSV (default: derived from --out-og)")
+    ap.add_argument("--out-sites-concordance",
+                    help="Per-site concordance CSV (default: derived from --out-sites)")
     args = ap.parse_args()
 
     site_rows = []
@@ -192,6 +372,42 @@ def main() -> int:
 
     print(f"Wrote {len(og_rows)} OG-level + {len(site_rows)} site-level "
           f"MEME records to {args.out_og}", file=sys.stderr)
+
+    # Optional dual-mode concordance pass (bead -7cy). Requires the
+    # lenient JSON + both trimmed FASTAs. Single-OG only (--json mode):
+    # batch concordance is left to a future iteration if useful.
+    if args.lenient_json:
+        if not (args.json and args.strict_fa and args.lenient_fa and args.og_name):
+            print("ERROR: --lenient-json requires --json + --strict-fa + "
+                  "--lenient-fa + --og-name", file=sys.stderr)
+            return 1
+        dual_sites, dual_og = parse_one_dual(
+            strict_json=args.json, strict_fa=args.strict_fa,
+            lenient_json=args.lenient_json, lenient_fa=args.lenient_fa,
+            og_name=args.og_name, alpha=args.alpha,
+        )
+        out_og_dual = args.out_og_concordance or args.out_og.replace(
+            ".csv", "_concordance.csv")
+        Path(out_og_dual).parent.mkdir(parents=True, exist_ok=True)
+        with open(out_og_dual, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=OG_FIELDS_DUAL)
+            w.writeheader()
+            w.writerow(dual_og)
+        out_sites_dual = (args.out_sites_concordance
+                          or (args.out_sites and args.out_sites.replace(
+                              ".csv", "_concordance.csv")))
+        if out_sites_dual:
+            Path(out_sites_dual).parent.mkdir(parents=True, exist_ok=True)
+            with open(out_sites_dual, "w", newline="") as f:
+                w = csv.DictWriter(f, fieldnames=SITE_FIELDS_DUAL)
+                w.writeheader()
+                w.writerows(dual_sites)
+        print(f"Wrote concordance: high={dual_og['high_confidence_sites_n']} "
+              f"lenient_only={dual_og['lenient_only_sites_n']} "
+              f"strict_only={dual_og['strict_only_sites_n']} "
+              f"robustness={dual_og['alignment_robustness_index']:.3f} "
+              f"to {out_og_dual}", file=sys.stderr)
+
     return 0
 
 
