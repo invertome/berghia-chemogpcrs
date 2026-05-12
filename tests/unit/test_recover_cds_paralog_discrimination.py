@@ -94,6 +94,49 @@ def test_alignment_identity_rejects_paralog_at_default_threshold() -> None:
     assert mod._alignment_identity(a, b) < mod.CDS_PROTEIN_IDENTITY_MIN
 
 
+def test_alignment_identity_survives_overflow_in_alignments_len(monkeypatch) -> None:
+    """Regression for bead -92m / job 57433902 (Physella acuta CDS recovery,
+    2026-05-08): when a sequence pair produces more than int64 optimal
+    pairwise-alignment paths, Bio.Align.Alignments.__len__ raises
+    OverflowError. The previous ``if len(alignments) == 0`` guard crashed
+    the entire re-extract chain. The function must instead consume the
+    first alignment lazily and return a valid identity."""
+    from Bio.Align import PairwiseAligner
+
+    real_align = PairwiseAligner.align
+
+    class _OverflowingAlignments:
+        """Mimics Biopython's Alignments class but raises OverflowError
+        on len(), exactly as the production failure does for sequence
+        pairs with >2^63 tied optimal paths."""
+
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __len__(self):
+            raise OverflowError(
+                "number of optimal alignments is larger than 9223372036854775807"
+            )
+
+        def __iter__(self):
+            return iter(self._inner)
+
+        def __getitem__(self, i):
+            return self._inner[i]
+
+    def patched_align(self, seq1, seq2):
+        return _OverflowingAlignments(real_align(self, seq1, seq2))
+
+    monkeypatch.setattr(PairwiseAligner, "align", patched_align)
+
+    mod = _fresh_module()
+    identity = mod._alignment_identity("MKILFV", "MKILFV")
+    assert identity == pytest.approx(1.0), (
+        f"expected identity 1.0 for identical sequences even when "
+        f"Alignments.__len__ overflows, got {identity}"
+    )
+
+
 # ---- L2: ambiguity margin (via direct constant + integration) -----------
 
 def test_ambiguity_margin_default_is_five_percent() -> None:

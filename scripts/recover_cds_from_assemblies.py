@@ -203,9 +203,15 @@ def _alignment_identity(seq1: str, seq2: str) -> float:
         alignments = aligner.align(seq1, seq2)
     except Exception:
         return 0.0
-    if len(alignments) == 0:
+    # Bio.Align.Alignments.__len__ enumerates the internal _paths and
+    # overflows int64 for pairs with very many tied optimal alignments
+    # (highly divergent paralogs, repetitive low-complexity regions —
+    # this killed the bead -8st re-extract chain on Physella acuta).
+    # next(iter(...)) yields the first path lazily, without enumeration.
+    try:
+        aln = next(iter(alignments))
+    except StopIteration:
         return 0.0
-    aln = alignments[0]
     # Modern Biopython: aln[0] / aln[1] return the aligned sequences as
     # strings with '-' gaps. Older `str(aln)` text format is too unstable
     # to parse reliably.
