@@ -324,3 +324,53 @@ def normalize_synteny_counts(
     if denom <= 0.0:
         return {k: None for k in counts}
     return {k: (math.log1p(float(v)) / denom if v > 0 else 0.0) for k, v in counts.items()}
+
+
+# -----------------------------------------------------------------------------
+# MEME concordance loader (bead -7cy step 2)
+# -----------------------------------------------------------------------------
+
+def load_meme_concordance(path: str) -> dict:
+    """Read parse_meme.py's dual-mode per-OG concordance CSV.
+
+    The CSV is the output of ``parse_meme.py --lenient-json ...`` (one row
+    per OG). Each row carries strict / lenient / high_confidence /
+    lenient_only / strict_only counts plus the alignment_robustness_index.
+
+    Returns dict og_name -> {high_confidence_sites_n, lenient_only_sites_n,
+    strict_only_sites_n, n_strict_positive_sites, n_lenient_positive_sites,
+    alignment_robustness_index}. Missing file returns {}; blank og_name
+    rows are skipped.
+    """
+    import csv as _csv
+    import os as _os
+    out: dict = {}
+    if not _os.path.exists(path):
+        return out
+    with open(path, newline="") as f:
+        reader = _csv.DictReader(f)
+        for row in reader:
+            og = (row.get("og_name") or "").strip()
+            if not og:
+                continue
+            def _i(k):
+                v = row.get(k, "")
+                try:
+                    return int(v) if v not in ("", None) else 0
+                except (TypeError, ValueError):
+                    return 0
+            def _f(k):
+                v = row.get(k, "")
+                try:
+                    return float(v) if v not in ("", None) else 0.0
+                except (TypeError, ValueError):
+                    return 0.0
+            out[og] = {
+                "n_strict_positive_sites": _i("n_strict_positive_sites"),
+                "n_lenient_positive_sites": _i("n_lenient_positive_sites"),
+                "high_confidence_sites_n": _i("high_confidence_sites_n"),
+                "lenient_only_sites_n": _i("lenient_only_sites_n"),
+                "strict_only_sites_n": _i("strict_only_sites_n"),
+                "alignment_robustness_index": _f("alignment_robustness_index"),
+            }
+    return out

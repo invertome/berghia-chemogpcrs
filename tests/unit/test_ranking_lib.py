@@ -19,6 +19,7 @@ from _rank_candidates_lib import (
     categorize_reference,
     extract_branch_omega,
     get_selection_scores,
+    load_meme_concordance,
     normalize_synteny_counts,
 )
 
@@ -262,3 +263,76 @@ class TestNormalizeSyntenyCounts:
 
     def test_empty_input(self):
         assert normalize_synteny_counts({}) == {}
+
+
+# -----------------------------------------------------------------------------
+# load_meme_concordance (bead -7cy step 2)
+# -----------------------------------------------------------------------------
+
+class TestLoadMemeConcordance:
+    """parse_meme.py's dual-mode writes a per-OG concordance CSV with
+    high_confidence/lenient_only/strict_only counts + robustness index.
+    load_meme_concordance reads it for rank_candidates.py."""
+
+    def _write_csv(self, path, rows):
+        import csv
+        fields = ["og_name", "n_strict_positive_sites",
+                  "n_lenient_positive_sites", "high_confidence_sites_n",
+                  "lenient_only_sites_n", "strict_only_sites_n",
+                  "alignment_robustness_index"]
+        with open(path, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=fields)
+            w.writeheader()
+            w.writerows(rows)
+
+    def test_reads_per_og_concordance_fields(self, tmp_path):
+        f = tmp_path / "meme_concordance.csv"
+        self._write_csv(f, [
+            {"og_name": "OG001", "n_strict_positive_sites": 2,
+             "n_lenient_positive_sites": 3, "high_confidence_sites_n": 2,
+             "lenient_only_sites_n": 1, "strict_only_sites_n": 0,
+             "alignment_robustness_index": 0.6667},
+            {"og_name": "OG002", "n_strict_positive_sites": 0,
+             "n_lenient_positive_sites": 4, "high_confidence_sites_n": 0,
+             "lenient_only_sites_n": 4, "strict_only_sites_n": 0,
+             "alignment_robustness_index": 0.0},
+        ])
+        out = load_meme_concordance(str(f))
+        assert set(out.keys()) == {"OG001", "OG002"}
+        assert out["OG001"]["high_confidence_sites_n"] == 2
+        assert out["OG001"]["lenient_only_sites_n"] == 1
+        assert out["OG001"]["alignment_robustness_index"] == pytest.approx(0.6667)
+        # The all-alignment-sensitive case: lenient finds signal, strict misses entirely
+        assert out["OG002"]["high_confidence_sites_n"] == 0
+        assert out["OG002"]["alignment_robustness_index"] == 0.0
+
+    def test_missing_file_returns_empty_dict(self, tmp_path):
+        out = load_meme_concordance(str(tmp_path / "absent.csv"))
+        assert out == {}
+
+    def test_skips_rows_with_blank_og_name(self, tmp_path):
+        f = tmp_path / "c.csv"
+        self._write_csv(f, [
+            {"og_name": "", "n_strict_positive_sites": 1,
+             "n_lenient_positive_sites": 1, "high_confidence_sites_n": 1,
+             "lenient_only_sites_n": 0, "strict_only_sites_n": 0,
+             "alignment_robustness_index": 1.0},
+            {"og_name": "OGreal", "n_strict_positive_sites": 1,
+             "n_lenient_positive_sites": 1, "high_confidence_sites_n": 1,
+             "lenient_only_sites_n": 0, "strict_only_sites_n": 0,
+             "alignment_robustness_index": 1.0},
+        ])
+        out = load_meme_concordance(str(f))
+        assert set(out.keys()) == {"OGreal"}
+
+    def test_robustness_index_coerced_to_float(self, tmp_path):
+        f = tmp_path / "c.csv"
+        self._write_csv(f, [{
+            "og_name": "OG", "n_strict_positive_sites": 1,
+            "n_lenient_positive_sites": 2, "high_confidence_sites_n": 1,
+            "lenient_only_sites_n": 1, "strict_only_sites_n": 0,
+            "alignment_robustness_index": "0.5",   # stringified
+        }])
+        out = load_meme_concordance(str(f))
+        assert isinstance(out["OG"]["alignment_robustness_index"], float)
+        assert out["OG"]["alignment_robustness_index"] == 0.5

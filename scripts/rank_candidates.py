@@ -37,6 +37,7 @@ from _rank_candidates_lib import (
     extract_branch_omega,
     get_selection_scores as _get_selection_scores_corrected,
     calculate_fair_rank_score as _calculate_fair_rank_score_corrected,
+    load_meme_concordance,
     normalize_synteny_counts,
 )
 
@@ -396,13 +397,31 @@ def load_busted_signals(selective_dir):
         except Exception as e:
             print(f"Warning: could not parse {meme_path}: {e}", file=sys.stderr)
 
+    # Bead -7cy: MEME concordance (strict vs lenient ClipKit trim regimes).
+    # When parse_meme.py was invoked in dual-mode it emits meme_concordance.csv.
+    # The concordance fields are used both as diagnostic columns and to apply
+    # a small positive_score boost when aBSREL's branch-level signal is
+    # corroborated by a non-empty high_confidence MEME set (= the alignment-
+    # robust subset of positive-selection sites).
+    concordance_path = os.path.join(selective_dir, 'meme_concordance.csv')
+    concordance = load_meme_concordance(concordance_path)
+    for og, fields in concordance.items():
+        entry = out.setdefault(og, {})
+        entry.update(fields)
+
     if out:
         n_busted_s_sig = sum(1 for v in out.values() if v.get('busted_s_significant'))
         n_busted_mh_sig = sum(1 for v in out.values() if v.get('busted_mh_significant'))
         n_meme_pos = sum(1 for v in out.values() if v.get('meme_n_episodic', 0) > 0)
-        print(f"Loaded BUSTED/MEME signals for {len(out)} OGs "
-              f"(BUSTED-S sig: {n_busted_s_sig}, BUSTED-MH sig: {n_busted_mh_sig}, "
-              f"MEME with >=1 episodic site: {n_meme_pos})", file=sys.stderr)
+        n_high_conf = sum(1 for v in out.values()
+                          if v.get('high_confidence_sites_n', 0) > 0)
+        msg = (f"Loaded BUSTED/MEME signals for {len(out)} OGs "
+               f"(BUSTED-S sig: {n_busted_s_sig}, BUSTED-MH sig: {n_busted_mh_sig}, "
+               f"MEME with >=1 episodic site: {n_meme_pos}")
+        if concordance:
+            msg += f"; MEME with >=1 high_confidence site: {n_high_conf}"
+        msg += ")"
+        print(msg, file=sys.stderr)
     return out
 
 
@@ -1740,6 +1759,11 @@ for cand_id in candidates['id']:
     busted_mh_sig = False
     meme_n_episodic = 0
     meme_fraction_episodic = 0.0
+    # Bead -7cy concordance fields (NaN/0 when no concordance CSV was loaded).
+    meme_high_confidence_sites = 0
+    meme_lenient_only_sites = 0
+    meme_strict_only_sites = 0
+    meme_alignment_robustness_index = float('nan')
     if cand_og and cand_og in busted_meme_signals:
         sig = busted_meme_signals[cand_og]
         busted_s_p = float(sig.get('busted_s_p', float('nan')))
@@ -1748,6 +1772,11 @@ for cand_id in candidates['id']:
         busted_mh_sig = bool(sig.get('busted_mh_significant', False))
         meme_n_episodic = int(sig.get('meme_n_episodic', 0))
         meme_fraction_episodic = float(sig.get('meme_fraction_episodic', 0.0))
+        meme_high_confidence_sites = int(sig.get('high_confidence_sites_n', 0))
+        meme_lenient_only_sites = int(sig.get('lenient_only_sites_n', 0))
+        meme_strict_only_sites = int(sig.get('strict_only_sites_n', 0))
+        if 'alignment_robustness_index' in sig:
+            meme_alignment_robustness_index = float(sig['alignment_robustness_index'])
         # Boost: BUSTED-MH is the strictest test; positive selection that
         # survives MH correction is the most credible. aBSREL alone can be
         # tricked by short branches; BUSTED + MEME confirmation is the
@@ -1756,6 +1785,13 @@ for cand_id in candidates['id']:
             positive_score *= 1.3
         elif selection_significant and busted_s_sig:
             positive_score *= 1.15
+        # Bead -7cy: additional small boost when aBSREL's branch signal is
+        # corroborated by alignment-robust MEME sites (high_confidence = MEME+
+        # under BOTH strict-trim and lenient-trim regimes). Multiplicative
+        # 1.1x on top of any BUSTED boost above — keeps total boost moderate
+        # (1.3 × 1.1 = 1.43 max in the BUSTED-MH + high_confidence case).
+        if selection_significant and meme_high_confidence_sites > 0:
+            positive_score *= 1.1
 
     # Synteny score (quantitative)
     synteny_score, has_synteny = get_synteny_score(cand_id, synteny_scores)
@@ -1830,6 +1866,12 @@ for cand_id in candidates['id']:
         'busted_mh_significant': busted_mh_sig,
         'meme_n_episodic_sites': meme_n_episodic,
         'meme_fraction_episodic_sites': meme_fraction_episodic,
+        # Bead -7cy: concordance-stratified MEME columns (populated when
+        # meme_concordance.csv exists; zero/NaN otherwise).
+        'meme_high_confidence_sites': meme_high_confidence_sites,
+        'meme_lenient_only_sites': meme_lenient_only_sites,
+        'meme_strict_only_sites': meme_strict_only_sites,
+        'meme_alignment_robustness_index': meme_alignment_robustness_index,
         'synteny_score': synteny_score,
         'has_synteny_data': has_synteny,
         'expression_score': expr_score,
@@ -2005,6 +2047,9 @@ output_cols = [
     # Bead -urk: BUSTED/MEME diagnostic columns
     'busted_s_p', 'busted_s_significant', 'busted_mh_p', 'busted_mh_significant',
     'meme_n_episodic_sites', 'meme_fraction_episodic_sites',
+    # Bead -7cy: MEME concordance stratification (alignment-robust subset).
+    'meme_high_confidence_sites', 'meme_lenient_only_sites',
+    'meme_strict_only_sites', 'meme_alignment_robustness_index',
     'synteny_score', 'has_synteny_data', 'expression_score', 'has_expression_data',
     'lse_depth_score', 'raw_tree_depth',
     # NEW: Phase 1-5 scores
@@ -2217,6 +2262,9 @@ output_cols = [
     # Bead -urk: BUSTED/MEME diagnostic columns
     'busted_s_p', 'busted_s_significant', 'busted_mh_p', 'busted_mh_significant',
     'meme_n_episodic_sites', 'meme_fraction_episodic_sites',
+    # Bead -7cy: MEME concordance stratification (alignment-robust subset).
+    'meme_high_confidence_sites', 'meme_lenient_only_sites',
+    'meme_strict_only_sites', 'meme_alignment_robustness_index',
     'synteny_score', 'has_synteny_data', 'expression_score', 'has_expression_data',
     'lse_depth_score', 'raw_tree_depth',
     # NEW: Phase 1-5 scores
