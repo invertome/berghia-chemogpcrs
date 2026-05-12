@@ -85,14 +85,40 @@ hyphy absrel \
     > "$OUT_DIR/${OG_BASE}_absrel.log" 2>&1 \
     || log --level=WARN "aBSREL failed for ${OG_BASE}"
 
-# 5. MEME — site-level on the OG (HyPhy emits per-site posteriors)
-log "MEME: ${OG_BASE}"
+# 5. MEME — site-level on the OG (HyPhy emits per-site posteriors).
+#    Bead -7cy: MEME runs on a ClipKit-trimmed codon alignment, not on the
+#    raw MACSE output. Two passes:
+#      - strict  (kpic-smart-gap): drops singleton-variant + gappy columns
+#      - lenient (smart-gap only): drops only gappy columns
+#    parse_meme.py concordance-stratifies the per-site results; high-confidence
+#    = MEME+ under BOTH passes feeds rank_candidates' positive_score boost.
+#    GARD, BUSTED-S, BUSTED-MH, aBSREL stay on the raw MACSE output above —
+#    they're column-noise robust and benefit from the wider alignment.
+CODON_STRICT="$OUT_DIR/${OG_BASE}_codon_strict.fa"
+CODON_LENIENT="$OUT_DIR/${OG_BASE}_codon_lenient.fa"
+log "ClipKit codon-aware trims: ${OG_BASE} (strict + lenient)"
+clipkit "$CODON_ALIGN" -co -m kpic-smart-gap -o "$CODON_STRICT" \
+    > "$OUT_DIR/${OG_BASE}_clipkit_codon_strict.log" 2>&1 \
+    || { log --level=WARN "ClipKit strict-trim failed for ${OG_BASE}; falling back to raw MACSE output"; cp "$CODON_ALIGN" "$CODON_STRICT"; }
+clipkit "$CODON_ALIGN" -co -m smart-gap -o "$CODON_LENIENT" \
+    > "$OUT_DIR/${OG_BASE}_clipkit_codon_lenient.log" 2>&1 \
+    || { log --level=WARN "ClipKit lenient-trim failed for ${OG_BASE}; falling back to raw MACSE output"; cp "$CODON_ALIGN" "$CODON_LENIENT"; }
+
+log "MEME (strict): ${OG_BASE}"
 hyphy meme \
-    --alignment "$CODON_ALIGN" \
+    --alignment "$CODON_STRICT" \
     --tree "$TREE" \
     --output "$OUT_DIR/${OG_BASE}_meme.json" \
     > "$OUT_DIR/${OG_BASE}_meme.log" 2>&1 \
-    || log --level=WARN "MEME failed for ${OG_BASE}"
+    || log --level=WARN "MEME (strict) failed for ${OG_BASE}"
+
+log "MEME (lenient): ${OG_BASE}"
+hyphy meme \
+    --alignment "$CODON_LENIENT" \
+    --tree "$TREE" \
+    --output "$OUT_DIR/${OG_BASE}_meme_lenient.json" \
+    > "$OUT_DIR/${OG_BASE}_meme_lenient.log" 2>&1 \
+    || log --level=WARN "MEME (lenient) failed for ${OG_BASE}"
 
 log "Selection stack complete for ${OG_BASE}"
 
@@ -116,24 +142,50 @@ if [ -f "$OUT_DIR/${OG_BASE}_busted_mh.json" ]; then
         2>>"$OUT_DIR/parse_busted_mh.log" || true
 fi
 if [ -f "$OUT_DIR/${OG_BASE}_meme.json" ]; then
-    python3 "$SCRIPTS_DIR/parse_meme.py" \
-        --json "$OUT_DIR/${OG_BASE}_meme.json" \
-        --og-name "$OG_BASE" \
-        --out-og "$OUT_DIR/${OG_BASE}_meme.csv" \
-        --out-sites "$OUT_DIR/${OG_BASE}_meme_sites.csv" \
-        2>>"$OUT_DIR/parse_meme.log" || true
+    # Bead -7cy: dual-mode when the lenient pass succeeded. Falls back to
+    # strict-only parse when lenient is absent (preserves existing behavior).
+    if [ -f "$OUT_DIR/${OG_BASE}_meme_lenient.json" ] \
+       && [ -f "$CODON_STRICT" ] && [ -f "$CODON_LENIENT" ]; then
+        python3 "$SCRIPTS_DIR/parse_meme.py" \
+            --json "$OUT_DIR/${OG_BASE}_meme.json" \
+            --lenient-json "$OUT_DIR/${OG_BASE}_meme_lenient.json" \
+            --strict-fa "$CODON_STRICT" \
+            --lenient-fa "$CODON_LENIENT" \
+            --codon \
+            --og-name "$OG_BASE" \
+            --out-og "$OUT_DIR/${OG_BASE}_meme.csv" \
+            --out-sites "$OUT_DIR/${OG_BASE}_meme_sites.csv" \
+            --out-og-concordance "$OUT_DIR/${OG_BASE}_meme_concordance.csv" \
+            --out-sites-concordance "$OUT_DIR/${OG_BASE}_meme_concordance_sites.csv" \
+            2>>"$OUT_DIR/parse_meme.log" || true
+    else
+        python3 "$SCRIPTS_DIR/parse_meme.py" \
+            --json "$OUT_DIR/${OG_BASE}_meme.json" \
+            --og-name "$OG_BASE" \
+            --out-og "$OUT_DIR/${OG_BASE}_meme.csv" \
+            --out-sites "$OUT_DIR/${OG_BASE}_meme_sites.csv" \
+            2>>"$OUT_DIR/parse_meme.log" || true
+    fi
 fi
 
 # Concatenate per-OG CSVs into the cumulative results consumed by
 # rank_candidates.py (fast, atomic; safe to redo each invocation).
-for variant in busted_s busted_mh meme; do
+# Bead -7cy: added meme_concordance to the variants — same concat pattern.
+for variant in busted_s busted_mh meme meme_concordance; do
     cum="$OUT_DIR/${variant}_results.csv"
+    # meme_concordance has a different output filename suffix
+    if [ "$variant" = "meme_concordance" ]; then
+        cum="$OUT_DIR/meme_concordance.csv"
+    fi
     : > "${cum}.tmp"
     first=1
     for csv in "$OUT_DIR"/*_${variant}.csv; do
         [ -f "$csv" ] || continue
-        # Skip sites variant of MEME (different schema)
-        case "$csv" in *_meme_sites.csv) continue ;; esac
+        # Skip per-site variants (different schema)
+        case "$csv" in
+            *_meme_sites.csv) continue ;;
+            *_meme_concordance_sites.csv) continue ;;
+        esac
         if [ "$first" = "1" ]; then
             cat "$csv" >> "${cum}.tmp"
             first=0

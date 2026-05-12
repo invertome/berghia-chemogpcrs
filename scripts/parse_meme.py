@@ -180,26 +180,44 @@ def _read_fasta(path: str) -> list[tuple[str, str]]:
     return out
 
 
-def _fasta_columns(path: str) -> list[tuple[str, ...]]:
+def _fasta_columns(path: str, codon_aware: bool = False) -> list[tuple[str, ...]]:
     """Return per-column residue-vector tuples (deterministic order = order
-    sequences appear in the FASTA)."""
+    sequences appear in the FASTA).
+
+    When ``codon_aware`` is True, columns are 3-character codons (the input
+    sequences must be DNA with length divisible by 3). This is the mode used
+    by stage 05's codon-level dual-mode parse: ClipKit -co preserves codon
+    boundaries; MEME indexes by codon site; the column-vector comparison
+    therefore must operate at codon granularity to align MEME's site space.
+    """
     seqs = [s for _, s in _read_fasta(path)]
     if not seqs:
         return []
     L = len(seqs[0])
+    if codon_aware:
+        n_codons = L // 3
+        return [tuple(s[3 * i:3 * (i + 1)] for s in seqs) for i in range(n_codons)]
     return [tuple(s[i] for s in seqs) for i in range(L)]
 
 
-def map_strict_to_lenient(strict_fa: str, lenient_fa: str) -> list[int | None]:
+def map_strict_to_lenient(
+    strict_fa: str,
+    lenient_fa: str,
+    codon_aware: bool = False,
+) -> list[int | None]:
     """Map each strict-trimmed column (1-indexed) to its counterpart column
     in the lenient-trimmed alignment (1-indexed), or None if no match.
 
     Strict is a column-subset of lenient; equality of the full per-column
     residue-vector identifies the corresponding column. Linear-time scan
     with a forward pointer preserves alignment order.
+
+    ``codon_aware=True`` operates at codon granularity (3 characters per
+    column-vector entry) — required for matching MEME site indices when
+    the trimmed alignments are DNA codon alignments.
     """
-    strict_cols = _fasta_columns(strict_fa)
-    lenient_cols = _fasta_columns(lenient_fa)
+    strict_cols = _fasta_columns(strict_fa, codon_aware=codon_aware)
+    lenient_cols = _fasta_columns(lenient_fa, codon_aware=codon_aware)
     mapping: list[int | None] = []
     j = 0
     for s_col in strict_cols:
@@ -220,6 +238,7 @@ def parse_one_dual(
     lenient_fa: str,
     og_name: str,
     alpha: float = 0.05,
+    codon_aware: bool = False,
 ) -> tuple[list[dict], dict]:
     """Dual-mode parser: read strict + lenient MEME JSONs, map columns
     across the two trimmed alignments, stratify each MEME-positive site
@@ -241,7 +260,7 @@ def parse_one_dual(
         p, b = s["p_value"], s["beta_plus"]
         return (p == p) and p < alpha and (b == b) and b > 1.0
 
-    mapping = map_strict_to_lenient(strict_fa, lenient_fa)
+    mapping = map_strict_to_lenient(strict_fa, lenient_fa, codon_aware=codon_aware)
 
     # Build lookup: lenient-1indexed col → strict-1indexed col (inverse of mapping)
     lenient_to_strict: dict[int, int] = {}
@@ -337,6 +356,10 @@ def main() -> int:
                     help="Per-OG concordance CSV (default: derived from --out-og)")
     ap.add_argument("--out-sites-concordance",
                     help="Per-site concordance CSV (default: derived from --out-sites)")
+    ap.add_argument("--codon", action="store_true",
+                    help="Treat --strict-fa / --lenient-fa as DNA codon "
+                         "alignments (3-char column-vectors); required when "
+                         "the dual-mode inputs are codon files (ClipKit -co)")
     args = ap.parse_args()
 
     site_rows = []
@@ -385,6 +408,7 @@ def main() -> int:
             strict_json=args.json, strict_fa=args.strict_fa,
             lenient_json=args.lenient_json, lenient_fa=args.lenient_fa,
             og_name=args.og_name, alpha=args.alpha,
+            codon_aware=args.codon,
         )
         out_og_dual = args.out_og_concordance or args.out_og.replace(
             ".csv", "_concordance.csv")

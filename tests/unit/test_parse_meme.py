@@ -295,6 +295,78 @@ class TestConcordanceStratification:
                 assert k in s, f"per-site row missing field: {k}"
 
 
+class TestCodonAwareMapping:
+    """Codon-aware mode groups input FASTA columns in triplets so column-
+    vector matching operates at codon granularity. Critical for stage 05's
+    use case: ClipKit -co trims codons; MEME indexes by codon site; the
+    mapping must be codon-to-codon, not nucleotide-to-nucleotide."""
+
+    def test_codon_aware_groups_triplets(self, tmp_path):
+        """Strict drops codon 2 of an input with 3 codons. Lenient keeps
+        all 3. Each codon = 3 nucleotides; the column-vector at codon i
+        is the tuple of 3-char codons at that position across all seqs.
+        Strict→lenient map under codon_aware=True: [1, 3]."""
+        strict = tmp_path / "s.fa"
+        lenient = tmp_path / "l.fa"
+        _write_fa(strict, {
+            # codons:  1     2 (dropped)  3
+            "A":      "AAA"               "CCC",  # 6 nt = 2 codons
+            "B":      "AAG"               "CCT",
+            "C":      "AAA"               "CCC",
+        })
+        _write_fa(lenient, {
+            # codons:  1     2     3
+            "A":      "AAA" "GGG" "CCC",          # 9 nt = 3 codons
+            "B":      "AAG" "GTA" "CCT",
+            "C":      "AAA" "GGG" "CCC",
+        })
+        mapping = map_strict_to_lenient(str(strict), str(lenient),
+                                         codon_aware=True)
+        assert mapping == [1, 3], (
+            f"expected codon mapping [1,3], got {mapping}"
+        )
+
+    def test_codon_aware_concordance_via_parse_one_dual(self, tmp_path):
+        """End-to-end: strict-trimmed codon (2 codons) + lenient codon
+        (3 codons), MEME positives in strict={1, 2} (both kept codons)
+        and lenient={1, 2, 3}. Expected:
+            strict positives in lenient coords: {1, 3}
+            lenient positives: {1, 2, 3}
+            high_confidence = {1, 3}      (concordant across passes)
+            lenient_only    = {2}         (codon dropped by strict)
+            strict_only     = {}
+        """
+        strict_fa = tmp_path / "codon_strict.fa"
+        lenient_fa = tmp_path / "codon_lenient.fa"
+        _write_fa(strict_fa, {
+            "A": "AAACCC", "B": "AAGCCT", "C": "AAACCC",
+        })
+        _write_fa(lenient_fa, {
+            "A": "AAAGGGCCC", "B": "AAGGTACCT", "C": "AAAGGGCCC",
+        })
+        strict_json = tmp_path / "strict.json"
+        strict_json.write_text(json.dumps(_meme_json([
+            [0.5, 9.0, 0.1, 0.001, 2],   # site 1 (codon 1): positive
+            [0.5, 7.0, 0.1, 0.005, 2],   # site 2 (codon 2 in strict = codon 3 in lenient): positive
+        ])))
+        lenient_json = tmp_path / "lenient.json"
+        lenient_json.write_text(json.dumps(_meme_json([
+            [0.5, 9.0, 0.1, 0.001, 2],   # site 1: positive
+            [0.5, 6.0, 0.1, 0.02,  2],   # site 2 (only in lenient): positive
+            [0.5, 7.0, 0.1, 0.005, 2],   # site 3: positive
+        ])))
+        from parse_meme import parse_one_dual
+        sites, og = parse_one_dual(
+            strict_json=str(strict_json), strict_fa=str(strict_fa),
+            lenient_json=str(lenient_json), lenient_fa=str(lenient_fa),
+            og_name="OGcodon", alpha=0.05, codon_aware=True,
+        )
+        assert og["high_confidence_sites_n"] == 2
+        assert og["lenient_only_sites_n"] == 1
+        assert og["strict_only_sites_n"] == 0
+        assert og["alignment_robustness_index"] == pytest.approx(2 / 3, abs=1e-4)
+
+
 class TestDualModeSchema:
     def test_OG_FIELDS_DUAL_contains_concordance_columns(self):
         for required in ("og_name", "n_strict_positive_sites",
