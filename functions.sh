@@ -156,6 +156,7 @@ create_checkpoint() {
 EOF
 )
 
+    mkdir -p "$checkpoint_dir"
     atomic_write "$checkpoint_file" "$checkpoint_data"
 
     # Also create legacy marker for backwards compatibility
