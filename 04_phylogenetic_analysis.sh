@@ -400,7 +400,8 @@ if [ ! -f "${RESULTS_DIR}/step_completed_${base}_iqtree.txt" ]; then
         "${CPUS}" || { log "Error: filter stack failed for ${base}"; exit 1; }
     check_alignment "${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" || { log "Error: Alignment quality check failed for ${base}"; exit 1; }
     # ClipKit kpic-smart-gap (consistent with global+LSE paths; correctly
-    # handles CLOAK super-alignment).
+    # handles CLOAK super-alignment). This is the STRICT trim that feeds
+    # the per-OG tree below and stage 05's selection stack by default.
     run_command "${base}_clipkit" ${CLIPKIT} "${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" -m kpic-smart-gap -o "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa"
 
     # Drop near-all-gap rows defensively (see comment in the global path).
@@ -408,6 +409,21 @@ if [ ! -f "${RESULTS_DIR}/step_completed_${base}_iqtree.txt" ]; then
         --input "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa" \
         --output "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa" \
         2>>"${LOGS_DIR}/${base}_drop_gappy.log" || true
+
+    # Bead -7cy: also produce the LENIENT trim (smart-gap only, no kpic).
+    # CLOAK's super-alignment spreads disputed-pairing residues into
+    # singleton-variant columns; kpic-smart-gap drops both kinds and
+    # systematically blinds MEME (site-level positive selection) at exactly
+    # the ECL/ICL positions where chemoreceptor positive selection lives.
+    # The lenient trim keeps singletons; stage 05 runs MEME on both and
+    # parse_meme.py concordance-stratifies the per-site results.
+    # Tree inference uses _trimmed.fa unchanged — only stage 05's MEME
+    # consumes _trimmed_lenient.fa.
+    run_command "${base}_clipkit_lenient" ${CLIPKIT} "${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" -m smart-gap -o "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed_lenient.fa"
+    python3 "${SCRIPTS_DIR}/drop_near_all_gap_rows.py" \
+        --input "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed_lenient.fa" \
+        --output "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed_lenient.fa" \
+        2>>"${LOGS_DIR}/${base}_drop_gappy_lenient.log" || true
 
     # FastTree seed strategy for orthogroup trees
     run_command "${base}_fasttree" --stdout="${RESULTS_DIR}/phylogenies/protein/${base}_fasttree.tre" ${FASTTREE} -seed "${FASTTREE_SEED}" -lg -gamma "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa"
