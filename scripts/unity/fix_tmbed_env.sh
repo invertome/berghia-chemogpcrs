@@ -59,6 +59,31 @@ pip install --quiet 'transformers<5'
 TF_VER="$(python3 -c 'import transformers; print(transformers.__version__)')"
 echo "[fix-tmbed]   transformers $TF_VER"
 
+# (2b) Ensure torch retains CUDA support (bead -m1f, 2026-05-13).
+#
+# A prior run of this script reinstalled transformers from the default PyPI
+# index, which pulled the CPU-only `torch-*+cpu` wheel as a side dependency.
+# That kept TMbed importable but silently broke GPU inference: every stage 02
+# run after that point reported `torch.cuda.is_available() = False` and burned
+# its GPU allocation on CPU-bound inference (~3 orders of magnitude slower).
+#
+# Reinstall torch from the cu118 wheel index. cu118 retains Pascal (sm_61)
+# support, which is required for the gypsum-gpu* nodes' GTX 1080 Ti — newer
+# cu124 wheels have dropped sm_61. Override via TORCH_INDEX_URL if you
+# specifically need a different CUDA toolchain.
+TORCH_INDEX="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu118}"
+echo "[fix-tmbed] Reinstalling torch with CUDA support from $TORCH_INDEX..."
+pip install --quiet --upgrade --force-reinstall --index-url "$TORCH_INDEX" torch
+python3 - <<PY
+import torch
+build = torch.version.cuda
+flavor = '+cpu' if '+cpu' in torch.__version__ else (f'+cu{build.replace(".", "")}' if build else '?')
+print(f'[fix-tmbed]   torch {torch.__version__} (cuda build: {build}, flavor: {flavor})')
+if build is None or '+cpu' in torch.__version__:
+    raise SystemExit('[fix-tmbed] FATAL: torch is still CPU-only after reinstall; '
+                     'check TORCH_INDEX_URL and pip resolver output.')
+PY
+
 # (3+4) Clear any tokenizer files written by a different transformers
 # major and re-save under the pinned version. This regenerates spiece.model
 # (a slow-tokenizer file that save_pretrained skips when only the fast

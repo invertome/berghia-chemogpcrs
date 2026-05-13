@@ -88,6 +88,37 @@ record_predictor() {
 # --- Strategy 0: TMbed (preferred when available) ---
 if [ "$TM_PREDICTOR_PRIMARY" = "tmbed" ] && command -v tmbed &>/dev/null; then
     echo "Using TMbed (Bernhofer & Rost 2022)" >&2
+
+    # Regression guard (bead -m1f, 2026-05-13): TMbed silently falls back to CPU
+    # when torch.cuda.is_available() is False, even if the job requested a GPU.
+    # That wastes the GPU allocation and turns a ~5-30 min run into a 1-3 day
+    # CPU run that exceeds typical wall-time. If we are clearly inside a GPU
+    # allocation but torch can't see the device, abort loudly.
+    GPU_REQUESTED=0
+    [ -n "${SLURM_JOB_GPUS:-}" ] && GPU_REQUESTED=1
+    [ -n "${SLURM_GPUS:-}" ] && GPU_REQUESTED=1
+    [ -n "${SLURM_GPUS_ON_NODE:-}" ] && GPU_REQUESTED=1
+    [ -n "${CUDA_VISIBLE_DEVICES:-}" ] && GPU_REQUESTED=1
+    if [ "$GPU_REQUESTED" = "1" ]; then
+        TORCH_PY="$(head -1 "$(command -v tmbed)" | sed 's|^#!||')"
+        if [ -x "$TORCH_PY" ] && ! "$TORCH_PY" -c \
+                'import sys, torch; sys.exit(0 if torch.cuda.is_available() else 2)' \
+                2>/dev/null; then
+            echo "ERROR: GPU allocation present (SLURM_JOB_GPUS/CUDA_VISIBLE_DEVICES set)" >&2
+            echo "       but torch.cuda.is_available() is False under the tmbed python:" >&2
+            echo "       $TORCH_PY" >&2
+            echo "       TMbed would silently fall back to CPU and waste the GPU." >&2
+            echo "       Fix: reinstall torch with a CUDA-enabled wheel, e.g." >&2
+            echo "         pip install --upgrade --index-url \\" >&2
+            echo "           https://download.pytorch.org/whl/cu118 torch" >&2
+            echo "       Or set ALLOW_TMBED_CPU=1 to opt into CPU inference." >&2
+            if [ "${ALLOW_TMBED_CPU:-0}" != "1" ]; then
+                exit 3
+            fi
+            echo "       ALLOW_TMBED_CPU=1 set; continuing on CPU." >&2
+        fi
+    fi
+
     TMBED_OUT="${OUTPUT_DIR}/tmbed_out"
     mkdir -p "$TMBED_OUT"
     # TMbed CLI: -f INPUT.fasta -p OUTPUT.3line --out-format 1.
