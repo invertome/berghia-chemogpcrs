@@ -168,6 +168,44 @@ EOF
     log "Checkpoint created: ${step_name}"
 }
 
+# filter_fasta_by_length INPUT OUTPUT [MAX_LEN]
+#
+# Write to OUTPUT a copy of INPUT (FASTA) containing only sequences whose
+# length is <= MAX_LEN. MAX_LEN defaults to the MAX_AA_LENGTH env var, or
+# 1500 if neither is set. Inclusive on the upper bound.
+#
+# Why this exists (bead -m1f follow-up, stage 02 job 57653730): TMbed sorts
+# inputs by length and processes longest last. ProtT5 has quadratic GPU
+# memory in sequence length, so a few transcript-assembly outliers (chimeras,
+# unspliced run-throughs) at thousands of aa take 130+ s/seq on a 2080 Ti
+# and burn the wallclock. Real chemoreceptor GPCRs are 300-500 aa, so
+# dropping >1500 aa is biologically safe and computationally essential.
+filter_fasta_by_length() {
+    local input="$1"
+    local output="$2"
+    local max_len="${3:-${MAX_AA_LENGTH:-1500}}"
+
+    if [[ ! -f "$input" ]]; then
+        echo "filter_fasta_by_length: input not found: $input" >&2
+        return 1
+    fi
+
+    python3 - "$input" "$output" "$max_len" <<'PYEOF'
+import sys
+from Bio import SeqIO
+src, dst, max_len = sys.argv[1], sys.argv[2], int(sys.argv[3])
+kept = total = 0
+with open(dst, 'w') as out:
+    for rec in SeqIO.parse(src, 'fasta'):
+        total += 1
+        if len(rec.seq) <= max_len:
+            SeqIO.write(rec, out, 'fasta')
+            kept += 1
+print(f'filter_fasta_by_length: kept {kept}/{total} sequences (max_len={max_len})',
+      file=sys.stderr)
+PYEOF
+}
+
 # --- Check if Step Completed ---
 # Arguments: $1 - Step name
 # Returns: 0 if completed, 1 if not

@@ -25,7 +25,16 @@ check_file "${RESULTS_DIR}/step_completed_01.txt"
 log "Starting chemoreceptive GPCR identification."
 
 # --- Process Berghia transcriptome ---
-run_command "deeptmhmm_berghia" ${DEEPTMHMM} -f "${TRANSCRIPTOME}" -o "${RESULTS_DIR}/chemogpcrs/deeptmhmm_berghia"
+# Pre-filter very long sequences (>MAX_AA_LENGTH) before TMbed (bead -m1f).
+# Removes transcript-assembly outliers that hose TMbed's quadratic-memory
+# inference and timed out stage 02 at 99.88% on 2026-05-13. Downstream code
+# uses the ORIGINAL transcriptome for sequence extraction, so dropping these
+# here is safe — they wouldn't have passed the >=6-TM filter anyway.
+filter_fasta_by_length "${TRANSCRIPTOME}" \
+    "${RESULTS_DIR}/chemogpcrs/_tmbed_input_berghia.aa"
+run_command "deeptmhmm_berghia" ${DEEPTMHMM} \
+    -f "${RESULTS_DIR}/chemogpcrs/_tmbed_input_berghia.aa" \
+    -o "${RESULTS_DIR}/chemogpcrs/deeptmhmm_berghia"
 # Filter by TM region count AND confidence score
 # DeepTMHMM output format: ID, prediction_type, confidence, ..., n_tm_regions
 # Column 3 is confidence, column 5 is TM region count
@@ -107,7 +116,12 @@ for trans in "${TRANSCRIPTOME_DIR}"/*.aa; do
     [ "$(realpath "$trans")" = "$(realpath "${TRANSCRIPTOME}")" ] && continue
     sample=$(basename "$trans" .aa)
     taxid_sample="${sample}"
-    run_command "deeptmhmm_${taxid_sample}" ${DEEPTMHMM} -f "$trans" -o "${RESULTS_DIR}/chemogpcrs/deeptmhmm_${taxid_sample}"
+    # Same length pre-filter as Berghia (bead -m1f)
+    filter_fasta_by_length "$trans" \
+        "${RESULTS_DIR}/chemogpcrs/_tmbed_input_${taxid_sample}.aa"
+    run_command "deeptmhmm_${taxid_sample}" ${DEEPTMHMM} \
+        -f "${RESULTS_DIR}/chemogpcrs/_tmbed_input_${taxid_sample}.aa" \
+        -o "${RESULTS_DIR}/chemogpcrs/deeptmhmm_${taxid_sample}"
     # Filter by TM region count AND confidence score
     awk -v min_tm="${MIN_TM_REGIONS}" -v min_conf="${DEEPTMHMM_MIN_CONFIDENCE:-0.5}" \
         'NF >= 5 && $5+0 >= min_tm && $3+0 >= min_conf {print $1}' \

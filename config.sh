@@ -216,6 +216,12 @@ export MIN_TM_REGIONS=6  # Kept at 6 to capture fragmented transcriptome assembl
 # DeepTMHMM confidence threshold (0-1): Filter predictions below this confidence
 # Recommended: 0.5-0.7 (lower = more permissive, higher = more stringent)
 export DEEPTMHMM_MIN_CONFIDENCE=0.5
+# Drop proteins longer than MAX_AA_LENGTH before feeding them to TMbed.
+# Rationale (bead -m1f): ProtT5 has quadratic GPU memory in sequence length;
+# transcript-assembly outliers thousands of aa long take 130+ s/seq on a 2080 Ti
+# and timed out stage 02 at 99.88% on 2026-05-13. Real chemoreceptor GPCRs are
+# 300-500 aa; 1500 is a safe ceiling well above any plausible isoform.
+export MAX_AA_LENGTH=1500
 export MIN_SEQ_LENGTH=100
 export MAX_GAP_PERCENT=30  # 25-30% recommended for robust phylogenetic inference
 # Pre-alignment sequence length filtering (removes gene prediction artifacts)
