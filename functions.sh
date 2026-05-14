@@ -333,6 +333,22 @@ identify_gpcr_candidates() {
     fi
     echo "identify_gpcr_candidates: Stage A -> $n_prelim GPCR-positive candidates (classification + pfam)" >&2
 
+    # Detection-only fast path: when no CENSUS_TSV is requested, the caller
+    # only needs the GPCR-positive sequence subset (e.g., reference taxa in
+    # stage 02's for-loop, which only need chemoreceptor candidates passed
+    # to orthology/phylogeny — not family annotation). Skip Stage B
+    # entirely; the Stage A IDs become the final output. Per-species cost
+    # drops from ~90 min (Stage A + B) to ~10 min (Stage A only).
+    if [[ -z "$census_tsv" ]]; then
+        cp "$prelim_ids" "$ids_out"
+        "${SEQTK:-seqtk}" subseq "$input_fa" "$ids_out" > "$output_fa"
+        local n_in n_gpcr
+        n_in=$(grep -c '^>' "$input_fa" 2>/dev/null || echo 0)
+        n_gpcr=$(grep -c '^>' "$output_fa" 2>/dev/null || echo 0)
+        echo "identify_gpcr_candidates: $n_gpcr / $n_in proteins flagged as GPCR (detection-only mode, no Stage B annotation; input=$(basename "$input_fa"))" >&2
+        return 0
+    fi
+
     # Extract preliminary subset for Stage B (cheap because n_prelim is small)
     "${SEQTK:-seqtk}" subseq "$input_fa" "$prelim_ids" > "$prelim_fa"
 
