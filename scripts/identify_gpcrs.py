@@ -4,27 +4,45 @@
 Bead -m1f restructure: stage 02 used to run TMbed on the full 86k-protein
 Berghia transcriptome and post-filter. That was 99%+ wasted GPU compute
 and forced an ad-hoc length filter to dodge ProtT5's quadratic-memory
-slow-tail. The correct architecture is to HMM-filter FIRST (catches all
-GPCR families: chemoreceptor LSEs + curated bioamine/peptide/opsin/lipid/
-nucleotide/class-B/C/F + Pfam 7tm_1/2/3/F fallback), then run TMbed only
-on the ~500-3000 GPCR-positive proteins.
+slow-tail. The correct architecture is to HMM-filter FIRST, then run
+TMbed only on the ~500-3000 GPCR-positive proteins.
 
-This module owns the post-HMMER merge step:
+This module owns the post-HMMER merge step. Three HMM evidence layers:
 
-  Inputs:
-    - classification TSV (from scripts/classify_via_hmm.py)
-    - hmmsearch --tblout against results/hmms/lse.hmm
+  - classification TSV (from scripts/classify_via_hmm.py): curated
+    Swiss-Prot GPCR family HMMs (bioamine, peptide, opsin, lipid,
+    nucleotide, class-B/C/F) + Pfam fallback (7tm_1/2/3, Frizzled).
+    Per-family LOO-validated thresholds. NON-chemoreceptor families.
+    -> family = specific family/subfamily name, source = 'classification'.
 
-  Outputs:
-    - flat ID list of all GPCR-positive proteins (sorted, unique)
-      -> downstream seqtk subseq + TMbed
-    - census TSV with seq_id, family, subfamily, evalue, source
-      -> follow-up Berghia GPCR/brain-expression paper
+  - lse tblout: hmmsearch against results/hmms/lse.hmm — Nath et al.
+    LINEAGE-SPECIFIC EXPANSION HMMs (one OG per cluster from
+    references/nath_et_al/lse/). Expansion pattern alone does NOT
+    confirm chemoreceptor function — these are uncharacterized GPCRs
+    that happen to have expanded in specific lineages.
+    -> family = 'lse', subfamily = OG name, source = 'lse'.
 
-Precedence rule: classification (curated, specific family/subfamily)
-beats lse-only (project-built chemoreceptor LSE OG HMMs). A protein
-hit by both is annotated with the classification family but tagged
-source='classification+lse' so the lse evidence isn't lost.
+  - nath_ortholog tblout: hmmsearch against results/hmms/conserved.hmm —
+    Nath et al. ONE-TO-ONE ORTHOLOGOUS GPCR HMMs (from
+    references/nath_et_al/one_to_one_ortholog/). Broad metazoan GPCR
+    orthologs; NOT chemoreceptor-specific.
+    -> family = 'nath_ortholog', subfamily = OG name, source = 'nath_ortholog'.
+
+(Future) curated_chemoreceptor: HMMs built from functionally
+confirmed invertebrate chemoreceptor GPCRs (Cummins 2009 Aplysia,
+deorphanized C. elegans SR families, etc.). Bead in progress.
+
+Outputs:
+  - flat ID list of all GPCR-positive proteins (sorted, unique)
+    -> downstream seqtk subseq + TMbed
+  - census TSV with seq_id, family, subfamily, evalue, source
+    -> follow-up Berghia GPCR/brain-expression paper
+
+Precedence rule: classification has named curated family assignments
+so it wins on family/subfamily. lse and nath_ortholog only contribute
+their tag when classification is absent. Source tag concatenates every
+source that hit the protein (e.g., 'classification+lse+nath_ortholog'),
+so no evidence is lost on the multi-hit case.
 """
 from __future__ import annotations
 
@@ -62,12 +80,14 @@ def _parse_classification(path: str) -> dict[str, dict]:
     return out
 
 
-def _parse_lse_tblout(path: str) -> dict[str, dict]:
-    """Return {seq_id: {family='lse_chemoreceptor', subfamily=<OG>,
-    evalue=<best>, source='lse'}} keeping the best (lowest-E) hit per
-    query.
+def _parse_hmm_tblout(path: str, family_tag: str) -> dict[str, dict]:
+    """Generic HMMER --tblout parser keeping the best (lowest-E) hit per
+    query. Used for both lse.hmm and conserved.hmm (Nath ortholog) scans.
 
     HMMER --tblout columns: target query - - eval(full) score(full) ...
+    family_tag is the value put in the 'family' field of the returned
+    record AND in 'source' (e.g., 'lse' or 'nath_ortholog'). Subfamily
+    is the best-hit HMM name (the OG identifier).
     """
     best: dict[str, tuple[str, float]] = {}
     with open(path) as f:
@@ -88,10 +108,10 @@ def _parse_lse_tblout(path: str) -> dict[str, dict]:
                 best[query] = (target, ev)
     return {
         q: {
-            "family": "lse_chemoreceptor",
+            "family": family_tag,
             "subfamily": og,
             "evalue": ev,
-            "source": "lse",
+            "source": family_tag,
         }
         for q, (og, ev) in best.items()
     }
@@ -100,20 +120,37 @@ def _parse_lse_tblout(path: str) -> dict[str, dict]:
 def merge_gpcr_evidence(
     classification_tsv: Optional[str],
     lse_tblout: Optional[str],
+    nath_ortholog_tblout: Optional[str] = None,
 ) -> dict[str, dict]:
-    """Union classification + lse evidence per sequence.
-    Classification family/subfamily wins on overlap; source tagged
-    'classification+lse' when both sources hit the same seq_id."""
+    """Union classification + lse + nath_ortholog evidence per sequence.
+
+    Precedence: classification (curated, named family) wins on
+    family/subfamily over lse/nath_ortholog (tagged generically). The
+    source field concatenates every source that contributed evidence,
+    e.g., 'classification+lse+nath_ortholog', so no evidence is lost.
+    """
     cls = _parse_classification(classification_tsv) if classification_tsv else {}
-    lse = _parse_lse_tblout(lse_tblout) if lse_tblout else {}
+    lse = _parse_hmm_tblout(lse_tblout, "lse") if lse_tblout else {}
+    nath = _parse_hmm_tblout(nath_ortholog_tblout, "nath_ortholog") \
+        if nath_ortholog_tblout else {}
+
     merged: dict[str, dict] = {}
-    for sid, rec in cls.items():
-        merged[sid] = dict(rec)
-    for sid, rec in lse.items():
-        if sid in merged:
-            merged[sid]["source"] = "classification+lse"
-        else:
-            merged[sid] = dict(rec)
+    sources_seen: dict[str, list[str]] = {}
+
+    for source_name, source_dict in (("classification", cls), ("lse", lse),
+                                      ("nath_ortholog", nath)):
+        for sid, rec in source_dict.items():
+            if sid not in merged:
+                merged[sid] = dict(rec)
+                sources_seen[sid] = [source_name]
+            else:
+                sources_seen[sid].append(source_name)
+                # classification only wins family/subfamily if it's first
+                # to set them; the loop above already enforces that order.
+
+    # Rewrite source field as the canonical concatenation
+    for sid, srcs in sources_seen.items():
+        merged[sid]["source"] = "+".join(srcs)
     return merged
 
 
@@ -142,17 +179,23 @@ def main() -> int:
                     help="Output from scripts/classify_via_hmm.py")
     ap.add_argument("--lse-tblout",
                     help="hmmsearch --tblout against results/hmms/lse.hmm")
+    ap.add_argument("--nath-ortholog-tblout",
+                    help="hmmsearch --tblout against results/hmms/conserved.hmm "
+                         "(Nath et al. one_to_one_ortholog GPCR-OG HMMs)")
     ap.add_argument("--ids-out", required=True,
                     help="Output: GPCR-positive sequence IDs, one per line")
     ap.add_argument("--census-out",
                     help="Output: census TSV (seq_id, family, subfamily, "
                          "evalue, source)")
     args = ap.parse_args()
-    if not args.classification_tsv and not args.lse_tblout:
-        print("identify_gpcrs.py: at least one of --classification-tsv or "
-              "--lse-tblout must be provided", file=sys.stderr)
+    if not any((args.classification_tsv, args.lse_tblout,
+                args.nath_ortholog_tblout)):
+        print("identify_gpcrs.py: at least one of --classification-tsv, "
+              "--lse-tblout, or --nath-ortholog-tblout must be provided",
+              file=sys.stderr)
         return 2
-    merged = merge_gpcr_evidence(args.classification_tsv, args.lse_tblout)
+    merged = merge_gpcr_evidence(args.classification_tsv, args.lse_tblout,
+                                  nath_ortholog_tblout=args.nath_ortholog_tblout)
     write_ids(merged, args.ids_out)
     if args.census_out:
         write_census(merged, args.census_out)

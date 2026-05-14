@@ -381,8 +381,20 @@ if [ "${USE_NATH_ET_AL}" = true ]; then
                 fi
             done
 
-            cat "$hmm_dir"/*.hmm > "${RESULTS_DIR}/hmms/${category}.hmm" 2>/dev/null || true
-            log "Built ${og_hmm_count} ${category} orthogroup HMMs"
+            # ARG_MAX-safe consolidation. The naive `cat "$hmm_dir"/*.hmm`
+            # form silently fails when the glob expansion exceeds ARG_MAX
+            # (~2MB): bash can't exec cat, stderr was redirected to /dev/null,
+            # and `|| true` made the script proceed. That's how conserved.hmm
+            # ended up empty after stage 01 job 57594440 built 34,790 HMMs
+            # (lse with 14,267 HMMs squeaked under and worked).
+            find "$hmm_dir" -name '*.hmm' -print0 | sort -z \
+                | xargs -0 cat > "${RESULTS_DIR}/hmms/${category}.hmm"
+            consolidated_size=$(wc -c < "${RESULTS_DIR}/hmms/${category}.hmm")
+            if [ "$consolidated_size" -eq 0 ] && [ "$og_hmm_count" -gt 0 ]; then
+                log --level=ERROR "${category}.hmm is empty despite ${og_hmm_count} OG HMMs being built"
+                exit 1
+            fi
+            log "Built ${og_hmm_count} ${category} orthogroup HMMs (consolidated to ${consolidated_size} bytes)"
         done
 
     # ---- per_species strategy (preliminary, fast) ----
@@ -404,8 +416,9 @@ if [ "${USE_NATH_ET_AL}" = true ]; then
                     conserved_hmm_count=$((conserved_hmm_count + 1))
                 fi
             done
-            # Concatenate all species HMMs into one file for hmmsearch
-            cat "${RESULTS_DIR}/hmms/conserved_species"/*.hmm > "${RESULTS_DIR}/hmms/conserved.hmm" 2>/dev/null || true
+            # Concatenate all species HMMs (ARG_MAX-safe — see line 384 note).
+            find "${RESULTS_DIR}/hmms/conserved_species" -name '*.hmm' -print0 \
+                | sort -z | xargs -0 cat > "${RESULTS_DIR}/hmms/conserved.hmm"
             log "Built ${conserved_hmm_count} conserved species HMMs"
         fi
 
@@ -424,8 +437,9 @@ if [ "${USE_NATH_ET_AL}" = true ]; then
                     lse_hmm_count=$((lse_hmm_count + 1))
                 fi
             done
-            # Concatenate all species HMMs
-            cat "${RESULTS_DIR}/hmms/lse_species"/*.hmm > "${RESULTS_DIR}/hmms/lse.hmm" 2>/dev/null || true
+            # Concatenate all species HMMs (ARG_MAX-safe — see line 384 note).
+            find "${RESULTS_DIR}/hmms/lse_species" -name '*.hmm' -print0 \
+                | sort -z | xargs -0 cat > "${RESULTS_DIR}/hmms/lse.hmm"
             log "Built ${lse_hmm_count} LSE species HMMs"
         fi
     fi

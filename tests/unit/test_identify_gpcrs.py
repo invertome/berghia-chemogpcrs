@@ -38,6 +38,20 @@ OG_lse_00099       -          bste_gene_200        -           4.7e-15    52.1  
 # end
 """
 
+# Nath et al. one_to_one_ortholog GPCR-OG HMMs. NOT functionally confirmed
+# chemoreceptors — these are broad metazoan GPCR orthologs. They give
+# additional GPCR-detection coverage on top of classification + lse, but
+# carry no chemoreceptor-specific labeling.
+NATH_ORTHOLOG_TBLOUT = """\
+#                                                               --- full sequence ---- --- best 1 domain ----
+# target name        accession  query name           accession    E-value  score  bias   E-value  score  bias
+# ------------------- ---------- -------------------- ---------- --------- ------ ----- --------- ------ -----
+OG_nath_00007      -          bste_gene_300        -           5.0e-90   305.0   0.0   5.0e-90   305.0   0.0
+OG_nath_00007      -          bste_gene_100        -           1.0e-30   100.2   0.0   1.0e-30   100.2   0.0
+OG_nath_00050      -          bste_gene_400        -           2.0e-50   180.5   0.0   2.0e-50   180.5   0.0
+# end
+"""
+
 
 def test_merge_classification_only(tmp_path: Path) -> None:
     """When only classification TSV present, returns those classified IDs.
@@ -53,16 +67,31 @@ def test_merge_classification_only(tmp_path: Path) -> None:
 
 
 def test_merge_lse_only(tmp_path: Path) -> None:
-    """When only LSE tblout present, returns those IDs with
-    family='lse_chemoreceptor' and the best-hit OG as subfamily."""
+    """When only LSE tblout present, returns those IDs with family='lse'
+    (lineage-specific expansion — NOT functionally confirmed chemoreceptor)
+    and the best-hit OG as subfamily."""
     lse = tmp_path / "lse.tbl"
     lse.write_text(LSE_TBLOUT)
     merged = ig.merge_gpcr_evidence(None, str(lse))
     # 3 unique queries: 100, 001, 200
     assert set(merged.keys()) == {"bste_gene_100", "bste_gene_001", "bste_gene_200"}
-    assert merged["bste_gene_100"]["family"] == "lse_chemoreceptor"
+    assert merged["bste_gene_100"]["family"] == "lse"
     assert merged["bste_gene_100"]["subfamily"] == "OG_lse_00042"
     assert merged["bste_gene_100"]["source"] == "lse"
+
+
+def test_merge_nath_ortholog_only(tmp_path: Path) -> None:
+    """When only nath-ortholog tblout present, returns those IDs with
+    family='nath_ortholog' (broad metazoan GPCR — NOT chemoreceptor-confirmed)
+    and the best-hit OG as subfamily."""
+    nath = tmp_path / "nath.tbl"
+    nath.write_text(NATH_ORTHOLOG_TBLOUT)
+    merged = ig.merge_gpcr_evidence(None, None, nath_ortholog_tblout=str(nath))
+    # 3 unique queries: 300, 100, 400
+    assert set(merged.keys()) == {"bste_gene_300", "bste_gene_100", "bste_gene_400"}
+    assert merged["bste_gene_300"]["family"] == "nath_ortholog"
+    assert merged["bste_gene_300"]["subfamily"] == "OG_nath_00007"
+    assert merged["bste_gene_300"]["source"] == "nath_ortholog"
 
 
 def test_merge_classification_wins_when_both(tmp_path: Path) -> None:
@@ -87,9 +116,36 @@ def test_merge_classification_wins_when_both(tmp_path: Path) -> None:
                                   "bste_gene_100", "bste_gene_200"}
 
 
+def test_merge_three_sources_precedence(tmp_path: Path) -> None:
+    """Triple-evidence merge: classification > {lse, nath_ortholog}.
+    Source tag should reflect every source that hit the protein. The
+    Nath ortholog set is broad metazoan GPCRs, not chemoreceptors —
+    its family label is 'nath_ortholog', not 'conserved_chemoreceptor'."""
+    cls = tmp_path / "cls.tsv"
+    cls.write_text(CLASS_TSV)
+    lse = tmp_path / "lse.tbl"
+    lse.write_text(LSE_TBLOUT)
+    nath = tmp_path / "nath.tbl"
+    nath.write_text(NATH_ORTHOLOG_TBLOUT)
+    merged = ig.merge_gpcr_evidence(str(cls), str(lse), nath_ortholog_tblout=str(nath))
+    # bste_gene_100 hits lse + nath_ortholog (not classification) -> lse family,
+    # source 'lse+nath_ortholog'
+    assert merged["bste_gene_100"]["family"] == "lse"
+    assert merged["bste_gene_100"]["source"] == "lse+nath_ortholog"
+    # bste_gene_300 only in nath_ortholog
+    assert merged["bste_gene_300"]["family"] == "nath_ortholog"
+    assert merged["bste_gene_300"]["source"] == "nath_ortholog"
+    # bste_gene_001 in classification + lse (not nath_ortholog) -> classification wins
+    assert merged["bste_gene_001"]["family"] == "aminergic"
+    assert merged["bste_gene_001"]["source"] == "classification+lse"
+    # bste_gene_400 only in nath_ortholog
+    assert merged["bste_gene_400"]["family"] == "nath_ortholog"
+
+
 def test_merge_neither_returns_empty(tmp_path: Path) -> None:
-    """Both inputs missing/None -> empty dict."""
+    """All inputs missing/None -> empty dict."""
     assert ig.merge_gpcr_evidence(None, None) == {}
+    assert ig.merge_gpcr_evidence(None, None, nath_ortholog_tblout=None) == {}
 
 
 # ---- write_ids -----------------------------------------------------------

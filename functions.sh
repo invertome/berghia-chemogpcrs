@@ -246,8 +246,10 @@ identify_gpcr_candidates() {
     local pfam_dir="${hmm_dir}/pfam_fallback"
     local loo="${RESULTS_DIR}/classification/loo/loo_metrics.tsv"
     local lse_hmm="${RESULTS_DIR}/hmms/lse.hmm"
+    local conserved_hmm="${RESULTS_DIR}/hmms/conserved.hmm"
     local class_tsv="$work/classification.tsv"
     local lse_tbl="$work/lse_hits.tbl"
+    local nath_tbl="$work/nath_ortholog_hits.tbl"
     local ids_out="$work/gpcr_ids.txt"
 
     # 1. Classification HMMs (curated + Pfam fallback) — single hmmscan
@@ -272,7 +274,7 @@ identify_gpcr_candidates() {
         : > "$class_tsv"
     fi
 
-    # 2. lse.hmm (mollusc chemoreceptor LSE OG HMMs) — direct hmmsearch
+    # 2. lse.hmm (Nath et al. lineage-specific expansion HMMs)
     if [[ -f "$lse_hmm" && -s "$lse_hmm" ]]; then
         hmmsearch --cpu "$threads" -E "$evalue" \
             --tblout "$lse_tbl" \
@@ -285,12 +287,31 @@ identify_gpcr_candidates() {
         : > "$lse_tbl"
     fi
 
-    # 3. Merge evidence -> GPCR-positive IDs (+ census TSV if requested)
+    # 3. conserved.hmm (Nath et al. one_to_one_ortholog broad-GPCR HMMs).
+    # NOT chemoreceptor-specific — these are conserved metazoan GPCR
+    # orthologs. They cast a wider net for GPCR detection on top of the
+    # classification + lse layers. A future curated invertebrate
+    # chemoreceptor HMM layer (bead in progress) will add the
+    # chemoreceptor-specific evidence.
+    if [[ -f "$conserved_hmm" && -s "$conserved_hmm" ]]; then
+        hmmsearch --cpu "$threads" -E "$evalue" \
+            --tblout "$nath_tbl" \
+            "$conserved_hmm" "$input_fa" > /dev/null 2>&1 || {
+                echo "identify_gpcr_candidates: hmmsearch on conserved.hmm failed" >&2
+                return 5
+            }
+    else
+        echo "identify_gpcr_candidates: conserved.hmm not found or empty ($conserved_hmm); skipping Nath-ortholog scan" >&2
+        : > "$nath_tbl"
+    fi
+
+    # 4. Merge evidence -> GPCR-positive IDs (+ census TSV if requested)
     local census_args=()
     [[ -n "$census_tsv" ]] && census_args=(--census-out "$census_tsv")
     python3 "${SCRIPTS_DIR:-./scripts}/identify_gpcrs.py" \
         --classification-tsv "$class_tsv" \
         --lse-tblout "$lse_tbl" \
+        --nath-ortholog-tblout "$nath_tbl" \
         --ids-out "$ids_out" \
         "${census_args[@]}" || {
             echo "identify_gpcr_candidates: identify_gpcrs.py failed" >&2
