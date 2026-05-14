@@ -206,6 +206,106 @@ print(f'filter_fasta_by_length: kept {kept}/{total} sequences (max_len={max_len}
 PYEOF
 }
 
+# identify_gpcr_candidates INPUT_FA OUTPUT_FA [CENSUS_TSV]
+#
+# HMM-first GPCR identification (bead -m1f restructure): runs hmm-scan
+# against curated classification HMMs (results/classification/hmms/*.hmm
+# + pfam_fallback/PF00001-3,PF01534) AND hmmsearch against the project
+# chemoreceptor LSE library (results/hmms/lse.hmm), then unions the
+# GPCR-positive sequence IDs and writes the matching subset of INPUT_FA
+# to OUTPUT_FA.
+#
+# If CENSUS_TSV is provided, also emits a per-sequence classification
+# (seq_id, family, subfamily, evalue, source) for the follow-up Berghia
+# GPCR/brain-expression paper — this is the full GPCR census, including
+# long LGRs/ADGRs/mGluRs that the chemoreceptor 6+TM filter would later
+# discard.
+#
+# This replaces the prior "TMbed-on-full-transcriptome + post-filter"
+# architecture in stage 02, which wasted 99%+ of GPU compute on
+# non-GPCRs and triggered ProtT5's quadratic-memory slow-tail timeout.
+identify_gpcr_candidates() {
+    local input_fa="$1"
+    local output_fa="$2"
+    local census_tsv="${3:-}"
+    local threads="${SLURM_CPUS_PER_TASK:-${CPUS:-4}}"
+    local evalue="${GPCR_HMM_EVALUE:-1e-5}"
+
+    if [[ ! -f "$input_fa" ]]; then
+        echo "identify_gpcr_candidates: input not found: $input_fa" >&2
+        return 1
+    fi
+
+    local out_dir; out_dir=$(dirname "$output_fa")
+    local stem; stem=$(basename "$output_fa")
+    stem="${stem%.fa}"; stem="${stem%.fasta}"
+    local work="$out_dir/_hmm_filter_${stem}"
+    mkdir -p "$work"
+
+    local hmm_dir="${RESULTS_DIR}/classification/hmms"
+    local pfam_dir="${hmm_dir}/pfam_fallback"
+    local loo="${RESULTS_DIR}/classification/loo/loo_metrics.tsv"
+    local lse_hmm="${RESULTS_DIR}/hmms/lse.hmm"
+    local class_tsv="$work/classification.tsv"
+    local lse_tbl="$work/lse_hits.tbl"
+    local ids_out="$work/gpcr_ids.txt"
+
+    # 1. Classification HMMs (curated + Pfam fallback) — single hmmscan
+    if [[ -d "$hmm_dir" ]]; then
+        local pfam_args=()
+        [[ -d "$pfam_dir" ]] && pfam_args=(--pfam-fallback-dir "$pfam_dir")
+        local loo_args=()
+        [[ -f "$loo" ]] && loo_args=(--loo-metrics "$loo")
+        python3 "${SCRIPTS_DIR:-./scripts}/classify_via_hmm.py" \
+            --candidate-fasta "$input_fa" \
+            --hmm-dir "$hmm_dir" \
+            "${pfam_args[@]}" \
+            "${loo_args[@]}" \
+            --output-tsv "$class_tsv" \
+            --threads "$threads" \
+            >&2 || {
+                echo "identify_gpcr_candidates: classify_via_hmm.py failed" >&2
+                return 2
+            }
+    else
+        echo "identify_gpcr_candidates: classification HMM dir not found ($hmm_dir); skipping curated scan" >&2
+        : > "$class_tsv"
+    fi
+
+    # 2. lse.hmm (mollusc chemoreceptor LSE OG HMMs) — direct hmmsearch
+    if [[ -f "$lse_hmm" && -s "$lse_hmm" ]]; then
+        hmmsearch --cpu "$threads" -E "$evalue" \
+            --tblout "$lse_tbl" \
+            "$lse_hmm" "$input_fa" > /dev/null 2>&1 || {
+                echo "identify_gpcr_candidates: hmmsearch on lse.hmm failed" >&2
+                return 3
+            }
+    else
+        echo "identify_gpcr_candidates: lse.hmm not found ($lse_hmm); skipping LSE scan" >&2
+        : > "$lse_tbl"
+    fi
+
+    # 3. Merge evidence -> GPCR-positive IDs (+ census TSV if requested)
+    local census_args=()
+    [[ -n "$census_tsv" ]] && census_args=(--census-out "$census_tsv")
+    python3 "${SCRIPTS_DIR:-./scripts}/identify_gpcrs.py" \
+        --classification-tsv "$class_tsv" \
+        --lse-tblout "$lse_tbl" \
+        --ids-out "$ids_out" \
+        "${census_args[@]}" || {
+            echo "identify_gpcr_candidates: identify_gpcrs.py failed" >&2
+            return 4
+        }
+
+    # 4. Extract GPCR-positive sequences from input
+    "${SEQTK:-seqtk}" subseq "$input_fa" "$ids_out" > "$output_fa"
+
+    local n_in n_gpcr
+    n_in=$(grep -c '^>' "$input_fa" 2>/dev/null || echo 0)
+    n_gpcr=$(grep -c '^>' "$output_fa" 2>/dev/null || echo 0)
+    echo "identify_gpcr_candidates: $n_gpcr / $n_in proteins flagged as GPCR (input=$(basename "$input_fa"))" >&2
+}
+
 # --- Check if Step Completed ---
 # Arguments: $1 - Step name
 # Returns: 0 if completed, 1 if not

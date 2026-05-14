@@ -24,148 +24,106 @@ check_file "${RESULTS_DIR}/step_completed_01.txt"
 
 log "Starting chemoreceptive GPCR identification."
 
-# --- Process Berghia transcriptome ---
-# Pre-filter very long sequences (>MAX_AA_LENGTH) before TMbed (bead -m1f).
-# Removes transcript-assembly outliers that hose TMbed's quadratic-memory
-# inference and timed out stage 02 at 99.88% on 2026-05-13. Downstream code
-# uses the ORIGINAL transcriptome for sequence extraction, so dropping these
-# here is safe — they wouldn't have passed the >=6-TM filter anyway.
-filter_fasta_by_length "${TRANSCRIPTOME}" \
+# --- Process Berghia transcriptome (HMM-first restructure, bead -m1f) ---
+#
+# Architecture: HMM-first GPCR filter -> TMbed only on GPCR-positive subset
+# -> >=6 TM filter for chemoreceptors. The HMM-positive set IS the GPCR
+# census for the follow-up Berghia GPCR/brain-expression paper.
+#
+# Why this order: previously we ran TMbed on the full 86k-protein
+# transcriptome, then post-filtered for 6+ TM + HMM hits. 99%+ of TMbed
+# compute was wasted on non-GPCRs and the few thousand multi-kDa transcript
+# assembly outliers timed out TMbed via ProtT5's quadratic-memory slow-tail.
+# HMM-first is faster (HMM scan is linear in length) and gives us the
+# all-GPCRs census output for free.
+
+mkdir -p "${RESULTS_DIR}/all_gpcrs"
+
+# Step 1: HMM-first filter — full transcriptome -> GPCR-positive subset.
+# Scans classification HMMs (curated bioamine/peptide/opsin/lipid/nucleotide/
+# class-B/C/F) + Pfam fallback (7tm_1/2/3, Frizzled) + lse.hmm (mollusc
+# chemoreceptor LSE OG HMMs). Census TSV preserved for the follow-up paper.
+identify_gpcr_candidates "${TRANSCRIPTOME}" \
+    "${RESULTS_DIR}/chemogpcrs/gpcrs_berghia.fa" \
+    "${RESULTS_DIR}/all_gpcrs/berghia_gpcr_census.tsv"
+
+[ -s "${RESULTS_DIR}/chemogpcrs/gpcrs_berghia.fa" ] || {
+    log "Error: HMM-first filter found no GPCRs in Berghia transcriptome"; exit 1; }
+
+# Step 2: Length pre-filter (defense-in-depth) — drops the rare LGR/ADGR/
+# mGluR >MAX_AA_LENGTH from the TMbed input. Real chemoreceptors are
+# 300-500 aa. The full GPCR-positive set (including long LGRs/ADGRs/mGluRs)
+# remains in gpcrs_berghia.fa and the census TSV for the follow-up paper.
+filter_fasta_by_length "${RESULTS_DIR}/chemogpcrs/gpcrs_berghia.fa" \
     "${RESULTS_DIR}/chemogpcrs/_tmbed_input_berghia.aa"
+
+# Step 3: TMbed on GPCR-positive + length-OK subset (small, fast on GPU)
 run_command "deeptmhmm_berghia" ${DEEPTMHMM} \
     -f "${RESULTS_DIR}/chemogpcrs/_tmbed_input_berghia.aa" \
     -o "${RESULTS_DIR}/chemogpcrs/deeptmhmm_berghia"
-# Filter by TM region count AND confidence score
-# DeepTMHMM output format: ID, prediction_type, confidence, ..., n_tm_regions
-# Column 3 is confidence, column 5 is TM region count
+
+# Step 4: Apply >=6 TM region filter (chemoreceptor signature)
 awk -v min_tm="${MIN_TM_REGIONS}" -v min_conf="${DEEPTMHMM_MIN_CONFIDENCE:-0.5}" \
     'NF >= 5 && $5+0 >= min_tm && $3+0 >= min_conf {print $1}' \
-    "${RESULTS_DIR}/chemogpcrs/deeptmhmm_berghia/prediction" > "${RESULTS_DIR}/chemogpcrs/complete_ids_berghia.txt" || { log "Error: Failed to parse DeepTMHMM"; exit 1; }
+    "${RESULTS_DIR}/chemogpcrs/deeptmhmm_berghia/prediction" \
+    > "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_berghia.txt" || {
+        log "Error: Failed to parse TMbed prediction"; exit 1; }
 
-# Log filtering stats
 total_pred=$(wc -l < "${RESULTS_DIR}/chemogpcrs/deeptmhmm_berghia/prediction" 2>/dev/null || echo 0)
-passed_pred=$(wc -l < "${RESULTS_DIR}/chemogpcrs/complete_ids_berghia.txt" 2>/dev/null || echo 0)
-log "DeepTMHMM: ${passed_pred}/${total_pred} sequences passed filters (>=${MIN_TM_REGIONS} TM regions, >=${DEEPTMHMM_MIN_CONFIDENCE:-0.5} confidence)"
-run_command "seqtk_complete_berghia" --stdout="${RESULTS_DIR}/chemogpcrs/complete_berghia.fa" ${SEQTK} subseq "${TRANSCRIPTOME}" "${RESULTS_DIR}/chemogpcrs/complete_ids_berghia.txt"
+passed_pred=$(wc -l < "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_berghia.txt" 2>/dev/null || echo 0)
+log "TMbed Berghia: ${passed_pred}/${total_pred} GPCR-positive sequences passed >=${MIN_TM_REGIONS} TM filter"
 
-# --- HHblits search (optional - requires proper HH-suite database) ---
-# hhmake requires an MSA input, not a multi-FASTA. Building a proper HH-suite
-# database requires ffindex. Skip HHblits if tools are unavailable or skipped.
-HHBLITS_AVAILABLE=false
-if command -v "${HHMAKE%% *}" &>/dev/null && command -v "${HHBLITS%% *}" &>/dev/null \
-   && [[ "${HHMAKE}" != *SKIPPED* ]] && [[ "${HHBLITS}" != *SKIPPED* ]]; then
-    # Check if we have an aligned reference to build HHM from
-    if [ -f "${RESULTS_DIR}/reference_sequences/conserved_references_aligned.fa" ]; then
-        run_command "hhdb_creation" ${HHMAKE} -i "${RESULTS_DIR}/reference_sequences/conserved_references_aligned.fa" -o "${RESULTS_DIR}/hhdb/references.hhm" -v 1
-        HHBLITS_AVAILABLE=true
-    else
-        log "Warning: No aligned references for HHM building, skipping HHblits"
-    fi
-fi
+[ -s "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_berghia.txt" ] || {
+    log "Error: No chemoreceptor candidates after TM filter"; exit 1; }
 
-touch "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_hhblits_berghia.txt"
-if [ "$HHBLITS_AVAILABLE" = true ] && [ -f "${RESULTS_DIR}/hhdb/references.hhm" ]; then
-    run_command "hhblits_berghia" ${HHBLITS} -i "${RESULTS_DIR}/chemogpcrs/complete_berghia.fa" -d "${RESULTS_DIR}/hhdb/references.hhm" -o "${RESULTS_DIR}/chemogpcrs/hhblits_berghia.hhr" -e "${HHBLITS_EVALUE}" -cpu "${CPUS}"
-    # Parse HHR format: Extract query IDs from hits with E-value below threshold
-    python3 -c "
-import sys, re
-evalue_thresh = float('${HHBLITS_EVALUE}')
-current_query = None
-with open('${RESULTS_DIR}/chemogpcrs/hhblits_berghia.hhr') as f:
-    for line in f:
-        if line.startswith('Query'):
-            current_query = line.split()[1]
-        elif re.match(r'^\s*\d+\s+\S+', line) and current_query:
-            parts = line.split()
-            if len(parts) >= 5:
-                try:
-                    evalue = float(parts[4])
-                    if evalue < evalue_thresh:
-                        print(current_query)
-                except (ValueError, IndexError):
-                    pass
-" | sort -u > "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_hhblits_berghia.txt" || log "Warning: HHblits parsing failed"
-else
-    log "HHblits skipped — using HMMSEARCH as primary identification method"
-fi
+# Step 5: Extract chemoreceptor candidate sequences
+run_command "extract_berghia" \
+    --stdout="${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa" \
+    ${SEQTK} subseq "${RESULTS_DIR}/chemogpcrs/gpcrs_berghia.fa" \
+    "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_berghia.txt"
 
-# --- HMMSEARCH if custom HMMs provided ---
-if [ -f "${RESULTS_DIR}/hmms/conserved.hmm" ]; then
-    run_command "hmmsearch_conserved_berghia" ${HMMSEARCH} --domtblout "${RESULTS_DIR}/chemogpcrs/hmmsearch_conserved_berghia.domtbl" -E "${HMM_EVALUE}" "${RESULTS_DIR}/hmms/conserved.hmm" "${RESULTS_DIR}/chemogpcrs/complete_berghia.fa"
-    awk '$12 < '"${HMM_EVALUE}"' {print $1}' "${RESULTS_DIR}/chemogpcrs/hmmsearch_conserved_berghia.domtbl" | sort -u > "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_hmmsearch_conserved_berghia.txt"
-fi
-
-if [ -f "${RESULTS_DIR}/hmms/lse.hmm" ]; then
-    run_command "hmmsearch_lse_berghia" ${HMMSEARCH} --domtblout "${RESULTS_DIR}/chemogpcrs/hmmsearch_lse_berghia.domtbl" -E "${HMM_EVALUE}" "${RESULTS_DIR}/hmms/lse.hmm" "${RESULTS_DIR}/chemogpcrs/complete_berghia.fa"
-    awk '$12 < '"${HMM_EVALUE}"' {print $1}' "${RESULTS_DIR}/chemogpcrs/hmmsearch_lse_berghia.domtbl" | sort -u > "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_hmmsearch_lse_berghia.txt"
-fi
-
-# --- Combine IDs from all searches ---
-cat "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_hhblits_berghia.txt" \
-    "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_hmmsearch_conserved_berghia.txt" \
-    "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_hmmsearch_lse_berghia.txt" 2>/dev/null | sort -u > "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_berghia.txt"
-[ -s "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_berghia.txt" ] || { log "Error: No GPCR IDs identified"; exit 1; }
-
-# --- Extract GPCR sequences ---
-run_command "extract_berghia" --stdout="${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa" ${SEQTK} subseq "${RESULTS_DIR}/chemogpcrs/complete_berghia.fa" "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_berghia.txt"
-
-# --- Process additional transcriptomes ---
+# --- Process additional reference transcriptomes (same HMM-first flow) ---
 for trans in "${TRANSCRIPTOME_DIR}"/*.aa; do
     [ -f "$trans" ] || continue
     # Skip Berghia transcriptome (already processed above)
     [ "$(realpath "$trans")" = "$(realpath "${TRANSCRIPTOME}")" ] && continue
     sample=$(basename "$trans" .aa)
     taxid_sample="${sample}"
-    # Same length pre-filter as Berghia (bead -m1f)
-    filter_fasta_by_length "$trans" \
+
+    # Step 1: HMM-first GPCR filter (no census for reference species — they
+    # feed orthology/phylogeny stages, not the Berghia census paper)
+    identify_gpcr_candidates "$trans" \
+        "${RESULTS_DIR}/chemogpcrs/gpcrs_${taxid_sample}.fa"
+
+    if [ ! -s "${RESULTS_DIR}/chemogpcrs/gpcrs_${taxid_sample}.fa" ]; then
+        log --level=WARN "${taxid_sample}: no GPCR-positive sequences; skipping TMbed"
+        : > "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_${taxid_sample}.txt"
+        : > "${RESULTS_DIR}/chemogpcrs/chemogpcrs_${taxid_sample}.fa"
+        touch "${RESULTS_DIR}/step_completed_extract_${taxid_sample}.txt"
+        continue
+    fi
+
+    # Step 2: Length pre-filter (defense-in-depth)
+    filter_fasta_by_length "${RESULTS_DIR}/chemogpcrs/gpcrs_${taxid_sample}.fa" \
         "${RESULTS_DIR}/chemogpcrs/_tmbed_input_${taxid_sample}.aa"
+
+    # Step 3: TMbed on GPCR-positive + length-OK subset
     run_command "deeptmhmm_${taxid_sample}" ${DEEPTMHMM} \
         -f "${RESULTS_DIR}/chemogpcrs/_tmbed_input_${taxid_sample}.aa" \
         -o "${RESULTS_DIR}/chemogpcrs/deeptmhmm_${taxid_sample}"
-    # Filter by TM region count AND confidence score
+
+    # Step 4: Apply >=6 TM filter
     awk -v min_tm="${MIN_TM_REGIONS}" -v min_conf="${DEEPTMHMM_MIN_CONFIDENCE:-0.5}" \
         'NF >= 5 && $5+0 >= min_tm && $3+0 >= min_conf {print $1}' \
-        "${RESULTS_DIR}/chemogpcrs/deeptmhmm_${taxid_sample}/prediction" > "${RESULTS_DIR}/chemogpcrs/complete_ids_${taxid_sample}.txt"
-    log "DeepTMHMM ${taxid_sample}: $(wc -l < "${RESULTS_DIR}/chemogpcrs/complete_ids_${taxid_sample}.txt") sequences passed filters"
-    run_command "seqtk_complete_${taxid_sample}" --stdout="${RESULTS_DIR}/chemogpcrs/complete_${taxid_sample}.fa" ${SEQTK} subseq "$trans" "${RESULTS_DIR}/chemogpcrs/complete_ids_${taxid_sample}.txt"
-    
-    touch "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_hhblits_${taxid_sample}.txt"
-    if [ "$HHBLITS_AVAILABLE" = true ] && [ -f "${RESULTS_DIR}/hhdb/references.hhm" ]; then
-        run_command "hhblits_${taxid_sample}" ${HHBLITS} -i "${RESULTS_DIR}/chemogpcrs/complete_${taxid_sample}.fa" -d "${RESULTS_DIR}/hhdb/references.hhm" -o "${RESULTS_DIR}/chemogpcrs/hhblits_${taxid_sample}.hhr" -e "${HHBLITS_EVALUE}" -cpu "${CPUS}"
-        python3 -c "
-import sys, re
-evalue_thresh = float('${HHBLITS_EVALUE}')
-current_query = None
-with open('${RESULTS_DIR}/chemogpcrs/hhblits_${taxid_sample}.hhr') as f:
-    for line in f:
-        if line.startswith('Query'):
-            current_query = line.split()[1]
-        elif re.match(r'^\s*\d+\s+\S+', line) and current_query:
-            parts = line.split()
-            if len(parts) >= 5:
-                try:
-                    evalue = float(parts[4])
-                    if evalue < evalue_thresh:
-                        print(current_query)
-                except (ValueError, IndexError):
-                    pass
-" | sort -u > "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_hhblits_${taxid_sample}.txt" || true
-    fi
-    
-    if [ -f "${RESULTS_DIR}/hmms/conserved.hmm" ]; then
-        run_command "hmmsearch_conserved_${taxid_sample}" ${HMMSEARCH} --domtblout "${RESULTS_DIR}/chemogpcrs/hmmsearch_conserved_${taxid_sample}.domtbl" -E "${HMM_EVALUE}" "${RESULTS_DIR}/hmms/conserved.hmm" "${RESULTS_DIR}/chemogpcrs/complete_${taxid_sample}.fa"
-        awk '$12 < '"${HMM_EVALUE}"' {print $1}' "${RESULTS_DIR}/chemogpcrs/hmmsearch_conserved_${taxid_sample}.domtbl" | sort -u > "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_hmmsearch_conserved_${taxid_sample}.txt"
-    fi
-    
-    if [ -f "${RESULTS_DIR}/hmms/lse.hmm" ]; then
-        run_command "hmmsearch_lse_${taxid_sample}" ${HMMSEARCH} --domtblout "${RESULTS_DIR}/chemogpcrs/hmmsearch_lse_${taxid_sample}.domtbl" -E "${HMM_EVALUE}" "${RESULTS_DIR}/hmms/lse.hmm" "${RESULTS_DIR}/chemogpcrs/complete_${taxid_sample}.fa"
-        awk '$12 < '"${HMM_EVALUE}"' {print $1}' "${RESULTS_DIR}/chemogpcrs/hmmsearch_lse_${taxid_sample}.domtbl" | sort -u > "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_hmmsearch_lse_${taxid_sample}.txt"
-    fi
-    
-    cat "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_hhblits_${taxid_sample}.txt" \
-        "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_hmmsearch_conserved_${taxid_sample}.txt" \
-        "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_hmmsearch_lse_${taxid_sample}.txt" 2>/dev/null | sort -u > "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_${taxid_sample}.txt"
-    run_command "extract_${taxid_sample}" --stdout="${RESULTS_DIR}/chemogpcrs/chemogpcrs_${taxid_sample}.fa" ${SEQTK} subseq "${RESULTS_DIR}/chemogpcrs/complete_${taxid_sample}.fa" "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_${taxid_sample}.txt"
+        "${RESULTS_DIR}/chemogpcrs/deeptmhmm_${taxid_sample}/prediction" \
+        > "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_${taxid_sample}.txt"
+    log "TMbed ${taxid_sample}: $(wc -l < "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_${taxid_sample}.txt") chemoreceptor candidates"
+
+    # Step 5: Extract chemoreceptor candidate sequences
+    run_command "extract_${taxid_sample}" \
+        --stdout="${RESULTS_DIR}/chemogpcrs/chemogpcrs_${taxid_sample}.fa" \
+        ${SEQTK} subseq "${RESULTS_DIR}/chemogpcrs/gpcrs_${taxid_sample}.fa" \
+        "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_${taxid_sample}.txt"
     touch "${RESULTS_DIR}/step_completed_extract_${taxid_sample}.txt"
 done
 
