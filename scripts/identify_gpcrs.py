@@ -117,19 +117,58 @@ def _parse_hmm_tblout(path: str, family_tag: str) -> dict[str, dict]:
     }
 
 
+def _parse_pfam_tblout(path: str) -> dict[str, dict]:
+    """Pfam GPCR detection tblout (PF00001/2/3/F via direct hmmsearch).
+    family='pfam_7tm', subfamily=<Pfam ID like PF00001>, source='pfam'.
+    Keeps the best (lowest-E) hit per query."""
+    best: dict[str, tuple[str, float]] = {}
+    with open(path) as f:
+        for line in f:
+            if line.startswith("#") or not line.strip():
+                continue
+            parts = line.split()
+            if len(parts) < 5:
+                continue
+            target = parts[0]
+            query = parts[2]
+            try:
+                ev = float(parts[4])
+            except ValueError:
+                continue
+            cur = best.get(query)
+            if cur is None or ev < cur[1]:
+                best[query] = (target, ev)
+    return {
+        q: {
+            "family": "pfam_7tm",
+            "subfamily": pf_id,
+            "evalue": ev,
+            "source": "pfam",
+        }
+        for q, (pf_id, ev) in best.items()
+    }
+
+
 def merge_gpcr_evidence(
     classification_tsv: Optional[str],
     lse_tblout: Optional[str],
     nath_ortholog_tblout: Optional[str] = None,
+    pfam_tblout: Optional[str] = None,
 ) -> dict[str, dict]:
-    """Union classification + lse + nath_ortholog evidence per sequence.
+    """Union classification + pfam + lse + nath_ortholog evidence per
+    sequence.
 
-    Precedence: classification (curated, named family) wins on
-    family/subfamily over lse/nath_ortholog (tagged generically). The
-    source field concatenates every source that contributed evidence,
-    e.g., 'classification+lse+nath_ortholog', so no evidence is lost.
+    Precedence order on family/subfamily (most specific first):
+      1. classification — curated Swiss-Prot families with named subfamilies
+      2. pfam — Pfam 7tm signatures (specific Pfam ID as subfamily)
+      3. lse — Nath et al. lineage-specific expansion OGs (generic tag)
+      4. nath_ortholog — Nath et al. one_to_one_ortholog OGs (generic tag)
+
+    The source field concatenates every source that contributed evidence,
+    e.g., 'classification+pfam+lse+nath_ortholog', so no evidence is lost.
     """
     cls = _parse_classification(classification_tsv) if classification_tsv else {}
+    pfam = _parse_pfam_tblout(pfam_tblout) if pfam_tblout else {}
     lse = _parse_hmm_tblout(lse_tblout, "lse") if lse_tblout else {}
     nath = _parse_hmm_tblout(nath_ortholog_tblout, "nath_ortholog") \
         if nath_ortholog_tblout else {}
@@ -137,16 +176,16 @@ def merge_gpcr_evidence(
     merged: dict[str, dict] = {}
     sources_seen: dict[str, list[str]] = {}
 
-    for source_name, source_dict in (("classification", cls), ("lse", lse),
-                                      ("nath_ortholog", nath)):
+    for source_name, source_dict in (("classification", cls), ("pfam", pfam),
+                                      ("lse", lse), ("nath_ortholog", nath)):
         for sid, rec in source_dict.items():
             if sid not in merged:
                 merged[sid] = dict(rec)
                 sources_seen[sid] = [source_name]
             else:
                 sources_seen[sid].append(source_name)
-                # classification only wins family/subfamily if it's first
-                # to set them; the loop above already enforces that order.
+                # First-set wins family/subfamily — loop order enforces
+                # the documented precedence.
 
     # Rewrite source field as the canonical concatenation
     for sid, srcs in sources_seen.items():
@@ -182,6 +221,9 @@ def main() -> int:
     ap.add_argument("--nath-ortholog-tblout",
                     help="hmmsearch --tblout against results/hmms/conserved.hmm "
                          "(Nath et al. one_to_one_ortholog GPCR-OG HMMs)")
+    ap.add_argument("--pfam-tblout",
+                    help="hmmsearch --tblout against Pfam GPCR HMMs "
+                         "(PF00001/2/3/F) — broad detection layer")
     ap.add_argument("--ids-out", required=True,
                     help="Output: GPCR-positive sequence IDs, one per line")
     ap.add_argument("--census-out",
@@ -189,13 +231,14 @@ def main() -> int:
                          "evalue, source)")
     args = ap.parse_args()
     if not any((args.classification_tsv, args.lse_tblout,
-                args.nath_ortholog_tblout)):
+                args.nath_ortholog_tblout, args.pfam_tblout)):
         print("identify_gpcrs.py: at least one of --classification-tsv, "
-              "--lse-tblout, or --nath-ortholog-tblout must be provided",
-              file=sys.stderr)
+              "--lse-tblout, --nath-ortholog-tblout, or --pfam-tblout "
+              "must be provided", file=sys.stderr)
         return 2
     merged = merge_gpcr_evidence(args.classification_tsv, args.lse_tblout,
-                                  nath_ortholog_tblout=args.nath_ortholog_tblout)
+                                  nath_ortholog_tblout=args.nath_ortholog_tblout,
+                                  pfam_tblout=args.pfam_tblout)
     write_ids(merged, args.ids_out)
     if args.census_out:
         write_census(merged, args.census_out)

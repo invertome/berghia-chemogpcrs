@@ -208,22 +208,32 @@ PYEOF
 
 # identify_gpcr_candidates INPUT_FA OUTPUT_FA [CENSUS_TSV]
 #
-# HMM-first GPCR identification (bead -m1f restructure): runs hmm-scan
-# against curated classification HMMs (results/classification/hmms/*.hmm
-# + pfam_fallback/PF00001-3,PF01534) AND hmmsearch against the project
-# chemoreceptor LSE library (results/hmms/lse.hmm), then unions the
-# GPCR-positive sequence IDs and writes the matching subset of INPUT_FA
-# to OUTPUT_FA.
+# Two-stage HMM-first GPCR identification (bead -m1f restructure v2).
 #
-# If CENSUS_TSV is provided, also emits a per-sequence classification
-# (seq_id, family, subfamily, evalue, source) for the follow-up Berghia
-# GPCR/brain-expression paper — this is the full GPCR census, including
-# long LGRs/ADGRs/mGluRs that the chemoreceptor 6+TM filter would later
-# discard.
+# Why two stages: lse.hmm has 14k HMMs and conserved.hmm has 34k HMMs;
+# hmmsearch-ing 86k transcriptome queries against either gives ~10x
+# more hits than necessary because every chemoreceptor-like protein
+# matches dozens of similar OG HMMs. That made stage 02 project to
+# days of wallclock. The fix is to use them for ANNOTATION only, on
+# the GPCR-positive subset that the cheap detection scans produce.
 #
-# This replaces the prior "TMbed-on-full-transcriptome + post-filter"
-# architecture in stage 02, which wasted 99%+ of GPU compute on
-# non-GPCRs and triggered ProtT5's quadratic-memory slow-tail timeout.
+# Stage A (detection, on full transcriptome):
+#   - classify_via_hmm.py against curated classification HMMs + Pfam
+#     fallback. Curated families are LOO-thresholded -> high precision.
+#   - Direct hmmsearch against PF00001/2/3/F at E < GPCR_HMM_EVALUE
+#     (default 1e-5). Catches GPCRs the curated family-specific
+#     thresholds reject (e.g., divergent or hybrid sequences).
+#   -> Union of hits is the GPCR-positive candidate set.
+#
+# Stage B (annotation, on GPCR-positive subset only):
+#   - hmmsearch lse.hmm   -> Nath et al. lineage-specific expansion OG tag
+#   - hmmsearch conserved.hmm -> Nath et al. one_to_one_ortholog OG tag
+#   On ~few thousand sequences instead of 86k, this is minutes not hours.
+#
+# Final output: identify_gpcrs.py merges all four sources into IDs and
+# (optionally) census TSV. Census is for the follow-up Berghia GPCR /
+# brain-expression paper; carries family/subfamily annotations from
+# the strongest source per sequence.
 identify_gpcr_candidates() {
     local input_fa="$1"
     local output_fa="$2"
@@ -248,11 +258,16 @@ identify_gpcr_candidates() {
     local lse_hmm="${RESULTS_DIR}/hmms/lse.hmm"
     local conserved_hmm="${RESULTS_DIR}/hmms/conserved.hmm"
     local class_tsv="$work/classification.tsv"
+    local pfam_tbl="$work/pfam_hits.tbl"
     local lse_tbl="$work/lse_hits.tbl"
     local nath_tbl="$work/nath_ortholog_hits.tbl"
     local ids_out="$work/gpcr_ids.txt"
+    local prelim_fa="$work/gpcr_candidate_subset.fa"
+    local prelim_ids="$work/gpcr_candidate_subset_ids.txt"
 
-    # 1. Classification HMMs (curated + Pfam fallback) — single hmmscan
+    # ===== STAGE A: detection (on full transcriptome) =====
+
+    # A1: classification HMMs (curated + Pfam fallback) via classify_via_hmm.py
     if [[ -d "$hmm_dir" ]]; then
         local pfam_args=()
         [[ -d "$pfam_dir" ]] && pfam_args=(--pfam-fallback-dir "$pfam_dir")
@@ -274,42 +289,87 @@ identify_gpcr_candidates() {
         : > "$class_tsv"
     fi
 
-    # 2. lse.hmm (Nath et al. lineage-specific expansion HMMs)
+    # A2: direct Pfam GPCR hmmsearch (PF00001/2/3/F). 4 HMMs -> fast.
+    # Catches broad 7tm signal that the curated family-specific
+    # thresholds in classify_via_hmm.py may have rejected.
+    if [[ -d "$pfam_dir" ]]; then
+        local pfam_concat="$work/pfam_gpcr.hmm"
+        find "$pfam_dir" -name '*.hmm' -print0 | sort -z | xargs -0 cat > "$pfam_concat"
+        if [[ -s "$pfam_concat" ]]; then
+            hmmsearch --cpu "$threads" -E "$evalue" \
+                --tblout "$pfam_tbl" \
+                "$pfam_concat" "$input_fa" > /dev/null 2>&1 || {
+                    echo "identify_gpcr_candidates: hmmsearch on Pfam GPCR HMMs failed" >&2
+                    return 6
+                }
+        else
+            echo "identify_gpcr_candidates: pfam concatenation empty; skipping Pfam detection scan" >&2
+            : > "$pfam_tbl"
+        fi
+    else
+        echo "identify_gpcr_candidates: pfam fallback dir not found ($pfam_dir); skipping Pfam detection scan" >&2
+        : > "$pfam_tbl"
+    fi
+
+    # A3: build preliminary GPCR-positive ID list (union of classification +
+    # pfam). This is the subset Stage B will annotate.
+    {
+        # Classified rows from classify_via_hmm.py (rows with a family
+        # assignment that isn't 'unclassified-hmm' or empty)
+        awk -F'\t' 'NR>1 && $2!="" && $2!="unclassified-hmm" {print $1}' \
+            "$class_tsv" 2>/dev/null
+        # Queries with any Pfam hit at E<evalue
+        awk '!/^#/ && NF>2 {print $3}' "$pfam_tbl" 2>/dev/null
+    } | sort -u > "$prelim_ids"
+
+    local n_prelim
+    n_prelim=$(wc -l < "$prelim_ids" 2>/dev/null || echo 0)
+    if [[ "$n_prelim" -eq 0 ]]; then
+        echo "identify_gpcr_candidates: WARN no Stage A hits in $(basename "$input_fa"); writing empty outputs" >&2
+        : > "$output_fa"
+        : > "$ids_out"
+        [[ -n "$census_tsv" ]] && : > "$census_tsv"
+        return 0
+    fi
+    echo "identify_gpcr_candidates: Stage A -> $n_prelim GPCR-positive candidates (classification + pfam)" >&2
+
+    # Extract preliminary subset for Stage B (cheap because n_prelim is small)
+    "${SEQTK:-seqtk}" subseq "$input_fa" "$prelim_ids" > "$prelim_fa"
+
+    # ===== STAGE B: annotation (on GPCR-positive subset only) =====
+
+    # B1: lse.hmm (Nath et al. lineage-specific expansion HMMs)
     if [[ -f "$lse_hmm" && -s "$lse_hmm" ]]; then
         hmmsearch --cpu "$threads" -E "$evalue" \
             --tblout "$lse_tbl" \
-            "$lse_hmm" "$input_fa" > /dev/null 2>&1 || {
+            "$lse_hmm" "$prelim_fa" > /dev/null 2>&1 || {
                 echo "identify_gpcr_candidates: hmmsearch on lse.hmm failed" >&2
                 return 3
             }
     else
-        echo "identify_gpcr_candidates: lse.hmm not found ($lse_hmm); skipping LSE scan" >&2
+        echo "identify_gpcr_candidates: lse.hmm not found ($lse_hmm); skipping LSE annotation" >&2
         : > "$lse_tbl"
     fi
 
-    # 3. conserved.hmm (Nath et al. one_to_one_ortholog broad-GPCR HMMs).
-    # NOT chemoreceptor-specific — these are conserved metazoan GPCR
-    # orthologs. They cast a wider net for GPCR detection on top of the
-    # classification + lse layers. A future curated invertebrate
-    # chemoreceptor HMM layer (bead in progress) will add the
-    # chemoreceptor-specific evidence.
+    # B2: conserved.hmm (Nath et al. one_to_one_ortholog HMMs)
     if [[ -f "$conserved_hmm" && -s "$conserved_hmm" ]]; then
         hmmsearch --cpu "$threads" -E "$evalue" \
             --tblout "$nath_tbl" \
-            "$conserved_hmm" "$input_fa" > /dev/null 2>&1 || {
+            "$conserved_hmm" "$prelim_fa" > /dev/null 2>&1 || {
                 echo "identify_gpcr_candidates: hmmsearch on conserved.hmm failed" >&2
                 return 5
             }
     else
-        echo "identify_gpcr_candidates: conserved.hmm not found or empty ($conserved_hmm); skipping Nath-ortholog scan" >&2
+        echo "identify_gpcr_candidates: conserved.hmm not found or empty ($conserved_hmm); skipping Nath-ortholog annotation" >&2
         : > "$nath_tbl"
     fi
 
-    # 4. Merge evidence -> GPCR-positive IDs (+ census TSV if requested)
+    # Merge all four sources -> final IDs + (optional) census
     local census_args=()
     [[ -n "$census_tsv" ]] && census_args=(--census-out "$census_tsv")
     python3 "${SCRIPTS_DIR:-./scripts}/identify_gpcrs.py" \
         --classification-tsv "$class_tsv" \
+        --pfam-tblout "$pfam_tbl" \
         --lse-tblout "$lse_tbl" \
         --nath-ortholog-tblout "$nath_tbl" \
         --ids-out "$ids_out" \
@@ -318,7 +378,7 @@ identify_gpcr_candidates() {
             return 4
         }
 
-    # 4. Extract GPCR-positive sequences from input
+    # Extract final GPCR-positive sequences from input
     "${SEQTK:-seqtk}" subseq "$input_fa" "$ids_out" > "$output_fa"
 
     local n_in n_gpcr
