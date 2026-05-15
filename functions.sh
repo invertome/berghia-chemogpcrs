@@ -305,7 +305,7 @@ identify_gpcr_candidates() {
     [[ -n "$census_tsv" ]] && census_args=(--census-out "$census_tsv")
     python3 "${SCRIPTS_DIR:-./scripts}/identify_gpcrs.py" \
         --classification-tsv "$class_tsv" \
-        --pfam-tblout "$mollusca_tbl" \
+        --mollusca-tblout "$mollusca_tbl" \
         --ids-out "$ids_out" \
         "${census_args[@]}" || {
             echo "identify_gpcr_candidates: identify_gpcrs.py failed" >&2
