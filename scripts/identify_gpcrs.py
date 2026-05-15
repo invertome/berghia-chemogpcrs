@@ -82,12 +82,16 @@ def _parse_classification(path: str) -> dict[str, dict]:
 
 def _parse_hmm_tblout(path: str, family_tag: str) -> dict[str, dict]:
     """Generic HMMER --tblout parser keeping the best (lowest-E) hit per
-    query. Used for both lse.hmm and conserved.hmm (Nath ortholog) scans.
+    sequence. Used for both lse.hmm and conserved.hmm (Nath ortholog)
+    scans, both run via hmmsearch.
 
-    HMMER --tblout columns: target query - - eval(full) score(full) ...
-    family_tag is the value put in the 'family' field of the returned
-    record AND in 'source' (e.g., 'lse' or 'nath_ortholog'). Subfamily
-    is the best-hit HMM name (the OG identifier).
+    hmmsearch --tblout column order (DIFFERENT from hmmscan!):
+      col 1 (target name)  = the SEQUENCE searched (FASTA query)
+      col 3 (query name)   = the HMM profile name (DB record)
+      col 5                = E-value (full sequence)
+
+    family_tag is the value put in the 'family' field AND in 'source'
+    (e.g., 'lse' or 'nath_ortholog'). Subfamily is the best-hit HMM name.
     """
     best: dict[str, tuple[str, float]] = {}
     with open(path) as f:
@@ -97,34 +101,34 @@ def _parse_hmm_tblout(path: str, family_tag: str) -> dict[str, dict]:
             parts = line.split()
             if len(parts) < 5:
                 continue
-            target = parts[0]
-            query = parts[2]
+            seq_id = parts[0]    # hmmsearch: target = sequence
+            hmm_name = parts[2]  # hmmsearch: query  = HMM profile
             try:
                 ev = float(parts[4])
             except ValueError:
                 continue
-            cur = best.get(query)
+            cur = best.get(seq_id)
             if cur is None or ev < cur[1]:
-                best[query] = (target, ev)
+                best[seq_id] = (hmm_name, ev)
     return {
-        q: {
+        sid: {
             "family": family_tag,
-            "subfamily": og,
+            "subfamily": hmm_name,
             "evalue": ev,
             "source": family_tag,
         }
-        for q, (og, ev) in best.items()
+        for sid, (hmm_name, ev) in best.items()
     }
 
 
 def _parse_tiammat_tblout(path: str) -> dict[str, dict]:
-    """TIAMMAT-revised GPCR HMM tblout. family='gpcr_7tm' (broad 7TM
-    GPCR category), subfamily=<HMM name, e.g., 7tm_1_REV or
-    7TM_GPCR_Sra_REV>, source='tiammat'. The HMMs themselves are Pfam
-    7tm_* and invertebrate Sr-style chemoreceptor families retrained
-    by the TIAMMAT method on mollusc sequence data — the source field
-    names the BUILD METHOD, not the training-data taxonomy.
-    Keeps the best (lowest-E) hit per query."""
+    """TIAMMAT-revised GPCR HMM tblout (from hmmsearch). family='gpcr_7tm'
+    (broad 7TM GPCR category), subfamily=<HMM name, e.g., 7tm_1_REV or
+    7TM_GPCR_Sra_REV>, source='tiammat'.
+
+    hmmsearch --tblout column order: col 1 = SEQUENCE (target),
+    col 3 = HMM profile (query). Keeps best (lowest-E) hit per sequence.
+    """
     best: dict[str, tuple[str, float]] = {}
     with open(path) as f:
         for line in f:
@@ -133,23 +137,23 @@ def _parse_tiammat_tblout(path: str) -> dict[str, dict]:
             parts = line.split()
             if len(parts) < 5:
                 continue
-            target = parts[0]
-            query = parts[2]
+            seq_id = parts[0]    # hmmsearch: target = sequence
+            hmm_name = parts[2]  # hmmsearch: query  = HMM profile
             try:
                 ev = float(parts[4])
             except ValueError:
                 continue
-            cur = best.get(query)
+            cur = best.get(seq_id)
             if cur is None or ev < cur[1]:
-                best[query] = (target, ev)
+                best[seq_id] = (hmm_name, ev)
     return {
-        q: {
+        sid: {
             "family": "gpcr_7tm",
             "subfamily": hmm_name,
             "evalue": ev,
             "source": "tiammat",
         }
-        for q, (hmm_name, ev) in best.items()
+        for sid, (hmm_name, ev) in best.items()
     }
 
 

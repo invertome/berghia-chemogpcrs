@@ -28,13 +28,16 @@ bste_gene_010\tunclassified-hmm\t\t\t\thmm
 bste_gene_020\t\t\t\t\thmm
 """
 
+# hmmsearch --tblout layout: col 1 = SEQUENCE (target), col 3 = HMM
+# profile (query). hmmscan flips the two. Production stage 02 uses
+# hmmsearch, so all our fixtures follow that convention.
 LSE_TBLOUT = """\
 #                                                               --- full sequence ---- --- best 1 domain ----
-# target name        accession  query name           accession    E-value  score  bias   E-value  score  bias
-# ------------------- ---------- -------------------- ---------- --------- ------ ----- --------- ------ -----
-OG_lse_00042       -          bste_gene_100        -           1.5e-80   272.4   0.0   1.5e-80   272.4   0.0
-OG_lse_00042       -          bste_gene_001        -           2.3e-12    45.7   0.0   2.3e-12    45.7   0.0
-OG_lse_00099       -          bste_gene_200        -           4.7e-15    52.1   0.0   4.7e-15    52.1   0.0
+# target name (seq)    accession  query name (HMM)     accession    E-value  score  bias   E-value  score  bias
+# -------------------- ---------- -------------------- ---------- --------- ------ ----- --------- ------ -----
+bste_gene_100        -          OG_lse_00042         -           1.5e-80   272.4   0.0   1.5e-80   272.4   0.0
+bste_gene_001        -          OG_lse_00042         -           2.3e-12    45.7   0.0   2.3e-12    45.7   0.0
+bste_gene_200        -          OG_lse_00099         -           4.7e-15    52.1   0.0   4.7e-15    52.1   0.0
 # end
 """
 
@@ -44,11 +47,11 @@ OG_lse_00099       -          bste_gene_200        -           4.7e-15    52.1  
 # carry no chemoreceptor-specific labeling.
 NATH_ORTHOLOG_TBLOUT = """\
 #                                                               --- full sequence ---- --- best 1 domain ----
-# target name        accession  query name           accession    E-value  score  bias   E-value  score  bias
-# ------------------- ---------- -------------------- ---------- --------- ------ ----- --------- ------ -----
-OG_nath_00007      -          bste_gene_300        -           5.0e-90   305.0   0.0   5.0e-90   305.0   0.0
-OG_nath_00007      -          bste_gene_100        -           1.0e-30   100.2   0.0   1.0e-30   100.2   0.0
-OG_nath_00050      -          bste_gene_400        -           2.0e-50   180.5   0.0   2.0e-50   180.5   0.0
+# target name (seq)    accession  query name (HMM)     accession    E-value  score  bias   E-value  score  bias
+# -------------------- ---------- -------------------- ---------- --------- ------ ----- --------- ------ -----
+bste_gene_300        -          OG_nath_00007        -           5.0e-90   305.0   0.0   5.0e-90   305.0   0.0
+bste_gene_100        -          OG_nath_00007        -           1.0e-30   100.2   0.0   1.0e-30   100.2   0.0
+bste_gene_400        -          OG_nath_00050        -           2.0e-50   180.5   0.0   2.0e-50   180.5   0.0
 # end
 """
 
@@ -58,11 +61,11 @@ OG_nath_00050      -          bste_gene_400        -           2.0e-50   180.5  
 # detection scan.
 TIAMMAT_TBLOUT = """\
 #                                                               --- full sequence ---- --- best 1 domain ----
-# target name        accession  query name           accession    E-value  score  bias   E-value  score  bias
-# ------------------- ---------- -------------------- ---------- --------- ------ ----- --------- ------ -----
-7tm_1_REV          -          bste_gene_500        -           3.5e-25    88.7   0.0   3.5e-25    88.7   0.0
-7tm_1_REV          -          bste_gene_100        -           1.0e-50   180.0   0.0   1.0e-50   180.0   0.0
-7TM_GPCR_Sra_REV   -          bste_gene_600        -           7.0e-40   140.0   0.0   7.0e-40   140.0   0.0
+# target name (seq)    accession  query name (HMM)     accession    E-value  score  bias   E-value  score  bias
+# -------------------- ---------- -------------------- ---------- --------- ------ ----- --------- ------ -----
+bste_gene_500        -          7tm_1_REV            -           3.5e-25    88.7   0.0   3.5e-25    88.7   0.0
+bste_gene_100        -          7tm_1_REV            -           1.0e-50   180.0   0.0   1.0e-50   180.0   0.0
+bste_gene_600        -          7TM_GPCR_Sra_REV     -           7.0e-40   140.0   0.0   7.0e-40   140.0   0.0
 # end
 """
 
