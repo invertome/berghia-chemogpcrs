@@ -63,7 +63,7 @@ run_command "deeptmhmm_berghia" ${DEEPTMHMM} \
     -o "${RESULTS_DIR}/chemogpcrs/deeptmhmm_berghia"
 
 # Step 4: Apply >=6 TM region filter (chemoreceptor signature)
-awk -v min_tm="${MIN_TM_REGIONS}" -v min_conf="${DEEPTMHMM_MIN_CONFIDENCE:-0.5}" \
+awk -F"\\t" -v min_tm="${MIN_TM_REGIONS}" -v min_conf="${DEEPTMHMM_MIN_CONFIDENCE:-0.5}" \
     'NF >= 5 && $5+0 >= min_tm && $3+0 >= min_conf {print $1}' \
     "${RESULTS_DIR}/chemogpcrs/deeptmhmm_berghia/prediction" \
     > "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_berghia.txt" || {
@@ -113,7 +113,7 @@ for trans in "${TRANSCRIPTOME_DIR}"/*.aa; do
         -o "${RESULTS_DIR}/chemogpcrs/deeptmhmm_${taxid_sample}"
 
     # Step 4: Apply >=6 TM filter
-    awk -v min_tm="${MIN_TM_REGIONS}" -v min_conf="${DEEPTMHMM_MIN_CONFIDENCE:-0.5}" \
+    awk -F"\\t" -v min_tm="${MIN_TM_REGIONS}" -v min_conf="${DEEPTMHMM_MIN_CONFIDENCE:-0.5}" \
         'NF >= 5 && $5+0 >= min_tm && $3+0 >= min_conf {print $1}' \
         "${RESULTS_DIR}/chemogpcrs/deeptmhmm_${taxid_sample}/prediction" \
         > "${RESULTS_DIR}/chemogpcrs/chemogpcr_ids_${taxid_sample}.txt"
