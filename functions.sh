@@ -223,12 +223,12 @@ PYEOF
 #   - classify_via_hmm.py against curated Swiss-Prot family HMMs +
 #     Pfam fallback. LOO-thresholded, high precision; catches the
 #     non-chemoreceptor families (bioamine, peptide, opsin, lipid, ...).
-#   - Direct hmmsearch against TIAMMAT_MOLLUSCA_GPCR_HMM at E <
+#   - Direct hmmsearch against TIAMMAT_GPCR_HMM at E <
 #     GPCR_HMM_EVALUE (default 1e-5). 17 TIAMMAT-revised HMMs:
-#     5x 7tm_N (Pfam GPCR class A-D revised for mollusc sensitivity)
-#     + 11x 7TM_GPCR_Sr* (invertebrate Sr chemoreceptor families)
-#     + ABA_GPCR. Replaces the plain 4-HMM Pfam fallback — better
-#     mollusc chemoreceptor coverage at no extra runtime cost.
+#     5x 7tm_N (Pfam GPCR class A-D retrained by TIAMMAT)
+#     + 11x 7TM_GPCR_Sr* (invertebrate Sr chemoreceptor families,
+#     retrained) + ABA_GPCR. Replaces the plain 4-HMM Pfam fallback —
+#     better invertebrate-GPCR coverage at no extra runtime cost.
 #
 # Output:
 #   - OUTPUT_FA: GPCR-positive subset of INPUT_FA (passed to TMbed
@@ -257,9 +257,9 @@ identify_gpcr_candidates() {
     local hmm_dir="${RESULTS_DIR}/classification/hmms"
     local pfam_dir="${hmm_dir}/pfam_fallback"
     local loo="${RESULTS_DIR}/classification/loo/loo_metrics.tsv"
-    local tiammat_hmm="${TIAMMAT_MOLLUSCA_GPCR_HMM:-${BASE_DIR}/references/tiammat_mollusca_gpcr.hmm}"
+    local tiammat_hmm="${TIAMMAT_GPCR_HMM:-${BASE_DIR}/references/tiammat_mollusca_gpcr.hmm}"
     local class_tsv="$work/classification.tsv"
-    local mollusca_tbl="$work/mollusca_gpcr_hits.tbl"
+    local tiammat_tbl="$work/tiammat_gpcr_hits.tbl"
     local ids_out="$work/gpcr_ids.txt"
 
     # --- Detection layer 1: classify_via_hmm.py (curated Swiss-Prot
@@ -285,19 +285,19 @@ identify_gpcr_candidates() {
         : > "$class_tsv"
     fi
 
-    # --- Detection layer 2: TIAMMAT-revised mollusc-optimized GPCR HMMs.
-    #     17 HMMs (Pfam 7tm_1-7 revised + invertebrate Sr-family
+    # --- Detection layer 2: TIAMMAT-revised GPCR HMMs.
+    #     17 HMMs (Pfam 7tm_1-7 retrained + invertebrate Sr-family
     #     chemoreceptors + ABA_GPCR). Single small library -> fast scan.
     if [[ -f "$tiammat_hmm" && -s "$tiammat_hmm" ]]; then
         hmmsearch --cpu "$threads" -E "$evalue" \
-            --tblout "$mollusca_tbl" \
+            --tblout "$tiammat_tbl" \
             "$tiammat_hmm" "$input_fa" > /dev/null 2>&1 || {
-                echo "identify_gpcr_candidates: hmmsearch on TIAMMAT mollusca GPCR HMMs failed" >&2
+                echo "identify_gpcr_candidates: hmmsearch on TIAMMAT GPCR HMMs failed" >&2
                 return 6
             }
     else
-        echo "identify_gpcr_candidates: TIAMMAT mollusca GPCR HMM not found ($tiammat_hmm); skipping mollusca scan" >&2
-        : > "$mollusca_tbl"
+        echo "identify_gpcr_candidates: TIAMMAT GPCR HMM not found ($tiammat_hmm); skipping TIAMMAT scan" >&2
+        : > "$tiammat_tbl"
     fi
 
     # --- Merge detection evidence -> GPCR-positive IDs + (optional) census
@@ -305,7 +305,7 @@ identify_gpcr_candidates() {
     [[ -n "$census_tsv" ]] && census_args=(--census-out "$census_tsv")
     python3 "${SCRIPTS_DIR:-./scripts}/identify_gpcrs.py" \
         --classification-tsv "$class_tsv" \
-        --mollusca-tblout "$mollusca_tbl" \
+        --tiammat-tblout "$tiammat_tbl" \
         --ids-out "$ids_out" \
         "${census_args[@]}" || {
             echo "identify_gpcr_candidates: identify_gpcrs.py failed" >&2

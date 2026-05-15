@@ -223,15 +223,19 @@ export DEEPTMHMM_MIN_CONFIDENCE=0.5
 # 300-500 aa; 1500 is a safe ceiling well above any plausible isoform.
 export MAX_AA_LENGTH=1500
 
-# TIAMMAT-revised, mollusc-optimized GPCR HMM library (bead -m1f).
-# 17 HMMs: 5x 7tm_N (Pfam Class A-D GPCR families, revised for mollusc
-# sensitivity) + 11x 7TM_GPCR_Sr* (invertebrate Sr-style chemoreceptor
-# families from C. elegans, revised on molluscs) + ABA_GPCR. Replaces the
-# 4-HMM plain Pfam fallback (PF00001/2/3/F) as the broad detection net
-# in stage 02's HMM-first identification — better coverage of mollusc
-# chemoreceptors AND broad GPCR classes in a single small scan.
-# Source: tiammat_mollusca_v2_workspace REVISED_MODELS.
-export TIAMMAT_MOLLUSCA_GPCR_HMM="${BASE_DIR}/references/tiammat_mollusca_gpcr.hmm"
+# TIAMMAT-revised GPCR HMM library (bead -m1f). 17 HMMs covering broad
+# 7TM GPCR families:
+#   - 5x 7tm_N: Pfam Class A-D GPCR families, retrained by TIAMMAT
+#   - 11x 7TM_GPCR_Sr*: invertebrate Sr-style chemoreceptor families
+#     originally curated from C. elegans, retrained by TIAMMAT
+#   - 1x ABA_GPCR
+# Replaces the 4-HMM plain Pfam fallback (PF00001/2/3/F) as the broad
+# detection net in stage 02's HMM-first identification.
+# Source: tiammat_mollusca_v2_workspace REVISED_MODELS (the WORKSPACE
+# name reflects that TIAMMAT's retraining used mollusc sequence data;
+# the HMMs themselves remain general GPCR family models with
+# mollusc-tuned parameters).
+export TIAMMAT_GPCR_HMM="${BASE_DIR}/references/tiammat_mollusca_gpcr.hmm"
 export MIN_SEQ_LENGTH=100
 export MAX_GAP_PERCENT=30  # 25-30% recommended for robust phylogenetic inference
 # Pre-alignment sequence length filtering (removes gene prediction artifacts)

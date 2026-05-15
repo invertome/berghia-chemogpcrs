@@ -52,11 +52,11 @@ OG_nath_00050      -          bste_gene_400        -           2.0e-50   180.5  
 # end
 """
 
-# TIAMMAT mollusca-optimized GPCR HMM tblout. 17 HMMs total covering
-# Pfam 7tm_1-7 (revised on mollusc data) + invertebrate Sr-style
-# chemoreceptor families (7TM_GPCR_Sra/Srab/Srb/Srh/...) + ABA_GPCR.
-# Replaces the prior plain-Pfam detection scan.
-MOLLUSCA_TBLOUT = """\
+# TIAMMAT-revised GPCR HMM tblout. 17 HMMs total covering Pfam 7tm_1-7
+# (retrained by TIAMMAT) + invertebrate Sr-style chemoreceptor families
+# (7TM_GPCR_Sra/Srab/Srb/Srh/...) + ABA_GPCR. Replaces the prior plain-Pfam
+# detection scan.
+TIAMMAT_TBLOUT = """\
 #                                                               --- full sequence ---- --- best 1 domain ----
 # target name        accession  query name           accession    E-value  score  bias   E-value  score  bias
 # ------------------- ---------- -------------------- ---------- --------- ------ ----- --------- ------ -----
@@ -130,16 +130,18 @@ def test_merge_classification_wins_when_both(tmp_path: Path) -> None:
                                   "bste_gene_100", "bste_gene_200"}
 
 
-def test_merge_mollusca_only(tmp_path: Path) -> None:
-    """TIAMMAT-mollusca-only hits: family='mollusca_gpcr',
-    subfamily=<TIAMMAT HMM name, e.g., 7tm_1_REV>, source='mollusca'."""
-    mol = tmp_path / "mol.tbl"
-    mol.write_text(MOLLUSCA_TBLOUT)
-    merged = ig.merge_gpcr_evidence(None, None, mollusca_tblout=str(mol))
+def test_merge_tiammat_only(tmp_path: Path) -> None:
+    """TIAMMAT-only hits: family='gpcr_7tm' (broad 7TM GPCR category),
+    subfamily=<TIAMMAT HMM name, e.g., 7tm_1_REV>, source='tiammat'.
+    The source field names the BUILD METHOD, not the training-data
+    taxonomy."""
+    tia = tmp_path / "tiammat.tbl"
+    tia.write_text(TIAMMAT_TBLOUT)
+    merged = ig.merge_gpcr_evidence(None, None, tiammat_tblout=str(tia))
     assert set(merged.keys()) == {"bste_gene_500", "bste_gene_100", "bste_gene_600"}
-    assert merged["bste_gene_500"]["family"] == "mollusca_gpcr"
+    assert merged["bste_gene_500"]["family"] == "gpcr_7tm"
     assert merged["bste_gene_500"]["subfamily"] == "7tm_1_REV"
-    assert merged["bste_gene_500"]["source"] == "mollusca"
+    assert merged["bste_gene_500"]["source"] == "tiammat"
     # Best-hit precedence: bste_gene_100 had E=1e-50 at 7tm_1_REV
     assert merged["bste_gene_100"]["subfamily"] == "7tm_1_REV"
     # bste_gene_600 hit a chemoreceptor-style Sr family HMM
@@ -173,8 +175,8 @@ def test_merge_three_sources_precedence(tmp_path: Path) -> None:
 
 
 def test_merge_four_sources_overlap(tmp_path: Path) -> None:
-    """Full four-source merge: classification + mollusca + lse + nath.
-    Order of precedence on family/subfamily: classification > mollusca >
+    """Full four-source merge: classification + tiammat + lse + nath.
+    Order of precedence on family/subfamily: classification > tiammat >
     lse > nath_ortholog. Source field concatenates all sources hit."""
     cls = tmp_path / "cls.tsv"
     cls.write_text(CLASS_TSV)
@@ -182,20 +184,20 @@ def test_merge_four_sources_overlap(tmp_path: Path) -> None:
     lse.write_text(LSE_TBLOUT)
     nath = tmp_path / "nath.tbl"
     nath.write_text(NATH_ORTHOLOG_TBLOUT)
-    mol = tmp_path / "mol.tbl"
-    mol.write_text(MOLLUSCA_TBLOUT)
+    tia = tmp_path / "tiammat.tbl"
+    tia.write_text(TIAMMAT_TBLOUT)
     merged = ig.merge_gpcr_evidence(str(cls), str(lse),
                                     nath_ortholog_tblout=str(nath),
-                                    mollusca_tblout=str(mol))
+                                    tiammat_tblout=str(tia))
     # bste_gene_001 in classification + lse -> classification wins
     assert merged["bste_gene_001"]["family"] == "aminergic"
     assert merged["bste_gene_001"]["source"] == "classification+lse"
-    # bste_gene_500 only in mollusca
-    assert merged["bste_gene_500"]["family"] == "mollusca_gpcr"
-    assert merged["bste_gene_500"]["source"] == "mollusca"
-    # bste_gene_100 in mollusca + lse + nath_ortholog -> mollusca wins
-    assert merged["bste_gene_100"]["family"] == "mollusca_gpcr"
-    assert "mollusca" in merged["bste_gene_100"]["source"]
+    # bste_gene_500 only in tiammat
+    assert merged["bste_gene_500"]["family"] == "gpcr_7tm"
+    assert merged["bste_gene_500"]["source"] == "tiammat"
+    # bste_gene_100 in tiammat + lse + nath_ortholog -> tiammat wins
+    assert merged["bste_gene_100"]["family"] == "gpcr_7tm"
+    assert "tiammat" in merged["bste_gene_100"]["source"]
     assert "lse" in merged["bste_gene_100"]["source"]
     assert "nath_ortholog" in merged["bste_gene_100"]["source"]
 
@@ -204,7 +206,7 @@ def test_merge_neither_returns_empty(tmp_path: Path) -> None:
     """All inputs missing/None -> empty dict."""
     assert ig.merge_gpcr_evidence(None, None) == {}
     assert ig.merge_gpcr_evidence(None, None, nath_ortholog_tblout=None,
-                                  mollusca_tblout=None) == {}
+                                  tiammat_tblout=None) == {}
 
 
 # ---- write_ids -----------------------------------------------------------
