@@ -52,19 +52,17 @@ OG_nath_00050      -          bste_gene_400        -           2.0e-50   180.5  
 # end
 """
 
-# Pfam GPCR detection scan (PF00001 7tm_1, PF00002 7tm_2, PF00003 7tm_3,
-# PF01534 Frizzled). Broad GPCR signal — catches Class A/B/C/F GPCRs
-# the curated classification HMMs might have missed (e.g., divergent or
-# uncharacterized invertebrate GPCRs that don't fit aminergic/peptide/
-# opsin/etc. specifically). Provides Stage-A detection coverage when
-# classify_via_hmm.py's family-specific LOO thresholds reject the hit.
-PFAM_TBLOUT = """\
+# TIAMMAT mollusca-optimized GPCR HMM tblout. 17 HMMs total covering
+# Pfam 7tm_1-7 (revised on mollusc data) + invertebrate Sr-style
+# chemoreceptor families (7TM_GPCR_Sra/Srab/Srb/Srh/...) + ABA_GPCR.
+# Replaces the prior plain-Pfam detection scan.
+MOLLUSCA_TBLOUT = """\
 #                                                               --- full sequence ---- --- best 1 domain ----
 # target name        accession  query name           accession    E-value  score  bias   E-value  score  bias
 # ------------------- ---------- -------------------- ---------- --------- ------ ----- --------- ------ -----
-PF00001            -          bste_gene_500        -           3.5e-25    88.7   0.0   3.5e-25    88.7   0.0
-PF00001            -          bste_gene_100        -           1.0e-50   180.0   0.0   1.0e-50   180.0   0.0
-PF00003            -          bste_gene_600        -           7.0e-40   140.0   0.0   7.0e-40   140.0   0.0
+7tm_1_REV          -          bste_gene_500        -           3.5e-25    88.7   0.0   3.5e-25    88.7   0.0
+7tm_1_REV          -          bste_gene_100        -           1.0e-50   180.0   0.0   1.0e-50   180.0   0.0
+7TM_GPCR_Sra_REV   -          bste_gene_600        -           7.0e-40   140.0   0.0   7.0e-40   140.0   0.0
 # end
 """
 
@@ -132,19 +130,20 @@ def test_merge_classification_wins_when_both(tmp_path: Path) -> None:
                                   "bste_gene_100", "bste_gene_200"}
 
 
-def test_merge_pfam_only(tmp_path: Path) -> None:
-    """Pfam-only hits: family='pfam_7tm', subfamily=<Pfam ID>, source='pfam'.
-    These are broad GPCR detections (PF00001-3, PF01534) not classified to
-    a curated family — but still real GPCRs."""
-    pfam = tmp_path / "pfam.tbl"
-    pfam.write_text(PFAM_TBLOUT)
-    merged = ig.merge_gpcr_evidence(None, None, pfam_tblout=str(pfam))
+def test_merge_mollusca_only(tmp_path: Path) -> None:
+    """TIAMMAT-mollusca-only hits: family='mollusca_gpcr',
+    subfamily=<TIAMMAT HMM name, e.g., 7tm_1_REV>, source='mollusca'."""
+    mol = tmp_path / "mol.tbl"
+    mol.write_text(MOLLUSCA_TBLOUT)
+    merged = ig.merge_gpcr_evidence(None, None, mollusca_tblout=str(mol))
     assert set(merged.keys()) == {"bste_gene_500", "bste_gene_100", "bste_gene_600"}
-    assert merged["bste_gene_500"]["family"] == "pfam_7tm"
-    assert merged["bste_gene_500"]["subfamily"] == "PF00001"
-    assert merged["bste_gene_500"]["source"] == "pfam"
-    # Best-hit precedence within Pfam: bste_gene_100 had E=1e-50 at PF00001
-    assert merged["bste_gene_100"]["subfamily"] == "PF00001"
+    assert merged["bste_gene_500"]["family"] == "mollusca_gpcr"
+    assert merged["bste_gene_500"]["subfamily"] == "7tm_1_REV"
+    assert merged["bste_gene_500"]["source"] == "mollusca"
+    # Best-hit precedence: bste_gene_100 had E=1e-50 at 7tm_1_REV
+    assert merged["bste_gene_100"]["subfamily"] == "7tm_1_REV"
+    # bste_gene_600 hit a chemoreceptor-style Sr family HMM
+    assert merged["bste_gene_600"]["subfamily"] == "7TM_GPCR_Sra_REV"
 
 
 def test_merge_three_sources_precedence(tmp_path: Path) -> None:
@@ -174,33 +173,29 @@ def test_merge_three_sources_precedence(tmp_path: Path) -> None:
 
 
 def test_merge_four_sources_overlap(tmp_path: Path) -> None:
-    """Full four-source merge: classification + lse + nath_ortholog + pfam.
-    bste_gene_100 hits all four — should get classification's aminergic
-    family (classification beats pfam beats lse beats nath_ortholog on
-    family/subfamily), and source field lists all sources."""
+    """Full four-source merge: classification + mollusca + lse + nath.
+    Order of precedence on family/subfamily: classification > mollusca >
+    lse > nath_ortholog. Source field concatenates all sources hit."""
     cls = tmp_path / "cls.tsv"
     cls.write_text(CLASS_TSV)
     lse = tmp_path / "lse.tbl"
     lse.write_text(LSE_TBLOUT)
     nath = tmp_path / "nath.tbl"
     nath.write_text(NATH_ORTHOLOG_TBLOUT)
-    pfam = tmp_path / "pfam.tbl"
-    pfam.write_text(PFAM_TBLOUT)
-    # bste_gene_100 is in lse + nath + pfam (NOT classification)
-    # -> pfam wins on family (broader-but-curated beats lse/nath OG tags)
+    mol = tmp_path / "mol.tbl"
+    mol.write_text(MOLLUSCA_TBLOUT)
     merged = ig.merge_gpcr_evidence(str(cls), str(lse),
                                     nath_ortholog_tblout=str(nath),
-                                    pfam_tblout=str(pfam))
+                                    mollusca_tblout=str(mol))
     # bste_gene_001 in classification + lse -> classification wins
     assert merged["bste_gene_001"]["family"] == "aminergic"
     assert merged["bste_gene_001"]["source"] == "classification+lse"
-    # bste_gene_500 only in pfam -> pfam_7tm
-    assert merged["bste_gene_500"]["family"] == "pfam_7tm"
-    assert merged["bste_gene_500"]["source"] == "pfam"
-    # bste_gene_100 in pfam + lse + nath_ortholog -> pfam family (specific Pfam ID
-    # subfamily is more informative than a generic OG tag)
-    assert merged["bste_gene_100"]["family"] == "pfam_7tm"
-    assert "pfam" in merged["bste_gene_100"]["source"]
+    # bste_gene_500 only in mollusca
+    assert merged["bste_gene_500"]["family"] == "mollusca_gpcr"
+    assert merged["bste_gene_500"]["source"] == "mollusca"
+    # bste_gene_100 in mollusca + lse + nath_ortholog -> mollusca wins
+    assert merged["bste_gene_100"]["family"] == "mollusca_gpcr"
+    assert "mollusca" in merged["bste_gene_100"]["source"]
     assert "lse" in merged["bste_gene_100"]["source"]
     assert "nath_ortholog" in merged["bste_gene_100"]["source"]
 
@@ -209,7 +204,7 @@ def test_merge_neither_returns_empty(tmp_path: Path) -> None:
     """All inputs missing/None -> empty dict."""
     assert ig.merge_gpcr_evidence(None, None) == {}
     assert ig.merge_gpcr_evidence(None, None, nath_ortholog_tblout=None,
-                                  pfam_tblout=None) == {}
+                                  mollusca_tblout=None) == {}
 
 
 # ---- write_ids -----------------------------------------------------------
