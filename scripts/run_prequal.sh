@@ -67,7 +67,16 @@ fi
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/prequal_XXXXXX")"
 trap 'rm -rf "$WORKDIR"' EXIT
 
-cp -L "$INPUT" "$WORKDIR/seqs.fa"
+# Strip '*' (stop codon) characters from sequence lines. PREQUAL rejects
+# them with "error: Illegal character <*>" and exits with code 1 before
+# producing any output. Transcriptome translations (e.g., evidence-gene
+# predictions from Trinity/EvidentialGene) routinely include '*' at the
+# end of sequences (stop codon marker) and sometimes internally for
+# premature stops. sed-strip is safe: '*' is not a meaningful residue
+# code (vs 'X' for ambiguous) so dropping it loses no biological info.
+# Stage 04 job 57844851 array tasks all hit this; PREQUAL exited 1 with
+# the banner-only output we saw in test 57872701. 2026-05-18.
+sed -E '/^>/!s/\*//g' "$INPUT" > "$WORKDIR/seqs.fa"
 
 # PREQUAL default -filterthresh = 0.994 (very strict — only retains
 # residues with >=99.4% homology posterior). On divergent chemoreceptor
