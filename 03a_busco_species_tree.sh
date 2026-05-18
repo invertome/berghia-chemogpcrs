@@ -28,7 +28,14 @@ log "Starting BUSCO species tree generation."
 for trans in "${TRANSCRIPTOME_DIR}"/*.aa "${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa"; do
     sample=$(basename "$trans" .fa | sed 's/chemogpcrs_//')
     taxid_sample="${sample}"
-    run_command "busco_${taxid_sample}" ${BUSCO} -i "$trans" -o "${RESULTS_DIR}/busco/busco_${taxid_sample}" -m transcriptome -l mollusca_odb10 -c "${CPUS}"
+    # `-m proteins`: input is amino-acid sequences (transcriptomes/*.aa and
+    # chemogpcrs_*.fa are both protein). The prior `-m transcriptome` mode
+    # required nucleotide input; passing .aa files made BUSCO abort with
+    # "The input file does not contain nucleotide sequences" (stage 03a
+    # job 57824881, 2026-05-18). Reference taxa only have .aa files
+    # (miniprot-recovered protein translations), so proteins mode is the
+    # correct choice for both Berghia and references.
+    run_command "busco_${taxid_sample}" ${BUSCO} -i "$trans" -o "${RESULTS_DIR}/busco/busco_${taxid_sample}" -m proteins -l mollusca_odb10 -c "${CPUS}"
 done
 
 # --- Extract single-copy BUSCOs ---
