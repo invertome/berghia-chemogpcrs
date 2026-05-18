@@ -68,7 +68,18 @@ WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/prequal_XXXXXX")"
 trap 'rm -rf "$WORKDIR"' EXIT
 
 cp -L "$INPUT" "$WORKDIR/seqs.fa"
-( cd "$WORKDIR" && "$PREQUAL_BIN" seqs.fa > prequal.log 2>&1 )
+
+# PREQUAL default -filterthresh = 0.994 (very strict — only retains
+# residues with >=99.4% homology posterior). On divergent chemoreceptor
+# data (Berghia + ~2000 mollusc refs), this dropped 71.5% of sequences
+# in the all_berghia_refs tree (2829 -> 805) and was the root cause of
+# the apparent "PREQUAL failed" WARN cascade in stage 04 array tasks
+# (job 57844031, 2026-05-18). The original paper (Whelan 2018) recommends
+# 0.95 for typical sets and looser for divergent families. Use 0.90 by
+# default; override via PREQUAL_FILTERTHRESH env var.
+PREQUAL_FILTERTHRESH="${PREQUAL_FILTERTHRESH:-0.90}"
+
+( cd "$WORKDIR" && "$PREQUAL_BIN" -filterthresh "$PREQUAL_FILTERTHRESH" seqs.fa > prequal.log 2>&1 )
 PREQUAL_RC=$?
 
 if [[ $PREQUAL_RC -ne 0 ]] || [[ ! -s "$WORKDIR/seqs.fa.filtered" ]]; then
