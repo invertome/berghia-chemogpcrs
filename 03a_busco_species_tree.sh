@@ -24,8 +24,25 @@ check_file "${RESULTS_DIR}/step_completed_extract_berghia.txt"
 
 log "Starting BUSCO species tree generation."
 
-# --- Run BUSCO on all transcriptomes ---
+# --- Build dedup'd input-sample list ---
+# Same realpath = same data (the transcriptomes/ dir has Berghia .aa as
+# both the real file and a lowercase-symlink alias; running BUSCO on
+# both wastes ~11 min and produces a fake "second species" in the
+# combine loop). Resolve realpaths and skip duplicates. 2026-05-18.
+declare -A _seen_realpath
+unique_inputs=()
 for trans in "${TRANSCRIPTOME_DIR}"/*.aa "${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa"; do
+    [ -f "$trans" ] || continue
+    real=$(realpath "$trans" 2>/dev/null) || continue
+    if [ -z "${_seen_realpath[$real]:-}" ]; then
+        _seen_realpath[$real]=1
+        unique_inputs+=("$trans")
+    fi
+done
+log "BUSCO inputs (after realpath dedup): ${#unique_inputs[@]} unique sample(s)"
+
+# --- Run BUSCO on all unique transcriptomes ---
+for trans in "${unique_inputs[@]}"; do
     sample=$(basename "$trans" .fa | sed 's/chemogpcrs_//')
     taxid_sample="${sample}"
     # `-m proteins`: input is amino-acid sequences (transcriptomes/*.aa and
@@ -121,19 +138,22 @@ done
 shopt -s nullglob
 trimmed_alns=("${RESULTS_DIR}/busco/alignments/"*_trimmed.afa)
 shopt -u nullglob
-if [ "${#trimmed_alns[@]}" -eq 0 ]; then
-    # Graceful degradation when there are fewer than 2 species in the input
-    # (the per-BUSCO combine loop only emits combined files for BUSCOs present
-    # in ≥2 species; with only Berghia data, every busco_id has 1 file ->
-    # nothing is combined -> nothing to align -> nothing to tree).
-    # The species tree is only consumed by 03c (CAFE) and 03d (Notung),
-    # which aren't on the chemoreceptor-ranking critical path (stages 04-09
-    # don't use SPECIES_TREE). Mark 03a complete so downstream gates can
-    # proceed; flag the limitation explicitly. Bead -? (P3): rebuild with
-    # full reference proteomes from RefSeq.
-    log --level=WARN "03a: 0 multi-species BUSCO alignments produced (only Berghia data in pipeline). Skipping IQ-TREE + ASTRAL; species tree will be empty. This is OK for the chemoreceptor pipeline (gates 4-7) — only blocks CAFE/Notung (03c/03d)."
+# Graceful degradation conditions:
+#   (a) Zero multi-species BUSCO alignments produced (combine loop saw
+#       no busco_id in >=2 samples).
+#   (b) <3 distinct sample inputs in total. Even if (a) didn't fire (the
+#       combine loop saw 2 samples that happen to be the same species —
+#       e.g., chemogpcrs_berghia.fa shares a BUSCO with transcriptomes/
+#       *.aa), there's no meaningful tree to build from 2 species.
+# The species tree is only consumed by 03c (CAFE) and 03d (Notung),
+# which aren't on the chemoreceptor-ranking critical path (stages 04-09
+# don't use SPECIES_TREE). Mark 03a complete so downstream gates can
+# proceed; flag the limitation explicitly. Bead -? (P3): rebuild with
+# full reference proteomes from RefSeq.
+if [ "${#trimmed_alns[@]}" -eq 0 ] || [ "${#unique_inputs[@]}" -lt 3 ]; then
+    log --level=WARN "03a: degenerate species tree case (${#unique_inputs[@]} unique sample(s), ${#trimmed_alns[@]} multi-sample alignments). Skipping IQ-TREE + ASTRAL; species tree empty. OK for the chemoreceptor pipeline (gates 4-7); only blocks CAFE/Notung (03c/03d)."
     touch "${RESULTS_DIR}/step_completed_busco_species_tree.txt"
-    log "BUSCO species tree generation completed (degenerate mode — single-species input)."
+    log "BUSCO species tree generation completed (degenerate mode — insufficient species)."
     exit 0
 fi
 for aln in "${trimmed_alns[@]}"; do
