@@ -55,8 +55,13 @@ for busco_dir in "${RESULTS_DIR}/busco/busco_"*; do
     # Create per-sample directory for BUSCO sequences
     mkdir -p "${RESULTS_DIR}/busco/single_copy/${taxid_sample}"
 
-    # Copy single-copy BUSCO sequences, prefixing with sample name
-    for busco_faa in "${busco_dir}/run_mollusca_odb10/single_copy_busco_sequences/"*.faa; do
+    # Copy single-copy BUSCO sequences, prefixing with sample name.
+    # BUSCO 5.x layout: run_<lineage>/busco_sequences/single_copy_busco_sequences/
+    # (the `busco_sequences/` parent dir was added in BUSCO 5; older
+    # versions had single_copy_busco_sequences/ directly under run_*).
+    # Job 57824897 silently extracted 0 single-copies because the
+    # `busco_sequences/` level was missing from the path. 2026-05-18.
+    for busco_faa in "${busco_dir}/run_mollusca_odb10/busco_sequences/single_copy_busco_sequences/"*.faa; do
         [ -f "$busco_faa" ] || continue
         busco_name=$(basename "$busco_faa")
         cp "$busco_faa" "${RESULTS_DIR}/busco/single_copy/${taxid_sample}/${busco_name}"
@@ -113,7 +118,25 @@ done
 # Also force `-st AA` and run the defensive near-all-gap filter to match
 # stages 04 and the classification tree builder (avoids "Unknown sequence
 # type" on TrimAl outputs where one species is entirely missing).
-for aln in "${RESULTS_DIR}/busco/alignments/"*_trimmed.afa; do
+shopt -s nullglob
+trimmed_alns=("${RESULTS_DIR}/busco/alignments/"*_trimmed.afa)
+shopt -u nullglob
+if [ "${#trimmed_alns[@]}" -eq 0 ]; then
+    # Graceful degradation when there are fewer than 2 species in the input
+    # (the per-BUSCO combine loop only emits combined files for BUSCOs present
+    # in ≥2 species; with only Berghia data, every busco_id has 1 file ->
+    # nothing is combined -> nothing to align -> nothing to tree).
+    # The species tree is only consumed by 03c (CAFE) and 03d (Notung),
+    # which aren't on the chemoreceptor-ranking critical path (stages 04-09
+    # don't use SPECIES_TREE). Mark 03a complete so downstream gates can
+    # proceed; flag the limitation explicitly. Bead -? (P3): rebuild with
+    # full reference proteomes from RefSeq.
+    log --level=WARN "03a: 0 multi-species BUSCO alignments produced (only Berghia data in pipeline). Skipping IQ-TREE + ASTRAL; species tree will be empty. This is OK for the chemoreceptor pipeline (gates 4-7) — only blocks CAFE/Notung (03c/03d)."
+    touch "${RESULTS_DIR}/step_completed_busco_species_tree.txt"
+    log "BUSCO species tree generation completed (degenerate mode — single-species input)."
+    exit 0
+fi
+for aln in "${trimmed_alns[@]}"; do
     base=$(basename "$aln" _trimmed.afa)
     python3 "${SCRIPTS_DIR}/drop_near_all_gap_rows.py" \
         --input "$aln" --output "$aln" \
