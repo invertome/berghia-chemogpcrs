@@ -100,6 +100,12 @@ export CLOAK="${CLOAK:-${BASE_DIR}/tools/CLOAK/cloak.py}"
 # TAPER (Zhang 2021) — Julia script; per-sequence outlier residue masking.
 export TAPER="${TAPER:-${BASE_DIR}/tools/TAPER/correction_multi.jl}"
 export JULIA="${JULIA:-julia}"
+# MACSE v2 — frameshift-aware codon aligner used by stage 05's selective
+# pressure step (run_macse.sh). Falls back to pal2nal when unset, but
+# pal2nal isn't installed in the conda env — so the JAR path MUST be set
+# for stage 05 to produce codon alignments for HyPhy. Bead -? (2026-05-18
+# Gate 4 audit): config.sh was missing this export.
+export MACSE_JAR="${MACSE_JAR:-${BASE_DIR}/tools/macse_v2.07.jar}"
 export CDHIT="cd-hit"
 export CAFE="cafe5"
 export NOTUNG="java -jar ${BASE_DIR}/tools/Notung-2.9.jar"
