@@ -35,7 +35,16 @@ for trans in "${TRANSCRIPTOME_DIR}"/*.aa "${RESULTS_DIR}/chemogpcrs/chemogpcrs_b
     # job 57824881, 2026-05-18). Reference taxa only have .aa files
     # (miniprot-recovered protein translations), so proteins mode is the
     # correct choice for both Berghia and references.
-    run_command "busco_${taxid_sample}" ${BUSCO} -i "$trans" -o "${RESULTS_DIR}/busco/busco_${taxid_sample}" -m proteins -l mollusca_odb10 -c "${CPUS}"
+    #
+    # BUSCO's `-o` argument is a run NAME (no slashes allowed); the prior
+    # full-path form `-o /scratch3/.../busco_<sample>` produced misleading
+    # "A run with the name scratch3/... already exists" errors (job
+    # 57824889). Use `--out_path` for the directory, `-o` for just the
+    # run name.
+    run_command "busco_${taxid_sample}" ${BUSCO} -i "$trans" \
+        --out_path "${RESULTS_DIR}/busco" \
+        -o "busco_${taxid_sample}" \
+        -m proteins -l mollusca_odb10 -c "${CPUS}" -f
 done
 
 # --- Extract single-copy BUSCOs ---
