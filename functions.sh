@@ -1532,9 +1532,18 @@ run_alignment_filter_stack() {
     local cur="$input"
 
     # --- Stage 1: PREQUAL ---
+    # Reuse pre-computed PREQUAL output when present (idempotent +
+    # avoids re-running PREQUAL's O(n^2) pairwise step on big inputs
+    # like all_berghia_refs_filtered.fa which has 2829 seqs and takes
+    # 6-24h). For per-OG calls with <100 seqs, PREQUAL runs in seconds
+    # and the precompute step is no-op for them. The big-tree precompute
+    # is shipped via scripts/unity/precompute_prequal_big.sh.
     if [ "${RUN_PREQUAL:-1}" = "1" ]; then
         local prequal_out="${workdir}/${tag}_prequal.fa"
-        if bash "${SCRIPTS_DIR}/run_prequal.sh" \
+        if [ -s "$prequal_out" ]; then
+            log "filter_stack[$tag]: reusing existing PREQUAL output ($(grep -c '^>' "$prequal_out") seqs)"
+            cur="$prequal_out"
+        elif bash "${SCRIPTS_DIR}/run_prequal.sh" \
                 --input="$cur" --output="$prequal_out" \
                 2>"${LOGS_DIR:-/tmp}/prequal_${tag}.err"; then
             cur="$prequal_out"
