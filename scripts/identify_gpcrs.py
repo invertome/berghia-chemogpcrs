@@ -121,6 +121,49 @@ def _parse_hmm_tblout(path: str, family_tag: str) -> dict[str, dict]:
     }
 
 
+def _parse_curated_chemo_tblout(path: str) -> dict[str, dict]:
+    """Curated invertebrate chemoreceptor HMM tblout. Each HMM in this
+    library represents a single functionally validated chemoreceptor
+    family (e.g., apgr from Aplysia Cummins 2009, schisto_chemo from
+    deorphanized platyhelminth receptors, etc.). The hit's HMM name IS
+    the family name. family='<hmm_name>', subfamily='<hmm_name>'
+    (per-family granularity is what we have), source='curated_chemo'.
+
+    This is the HIGHEST CONFIDENCE detection layer in identify_gpcrs.py
+    because every HMM is built from functionally validated sequences,
+    not just sequence-similarity-based annotation.
+
+    hmmsearch --tblout column order: col 1 = SEQUENCE (target),
+    col 3 = HMM profile (query). Keeps best (lowest-E) hit per sequence.
+    """
+    best: dict[str, tuple[str, float]] = {}
+    with open(path) as f:
+        for line in f:
+            if line.startswith("#") or not line.strip():
+                continue
+            parts = line.split()
+            if len(parts) < 5:
+                continue
+            seq_id = parts[0]
+            hmm_name = parts[2]
+            try:
+                ev = float(parts[4])
+            except ValueError:
+                continue
+            cur = best.get(seq_id)
+            if cur is None or ev < cur[1]:
+                best[seq_id] = (hmm_name, ev)
+    return {
+        sid: {
+            "family": hmm_name,
+            "subfamily": hmm_name,
+            "evalue": ev,
+            "source": "curated_chemo",
+        }
+        for sid, (hmm_name, ev) in best.items()
+    }
+
+
 def _parse_tiammat_tblout(path: str) -> dict[str, dict]:
     """TIAMMAT-revised GPCR HMM tblout (from hmmsearch). family='gpcr_7tm'
     (broad 7TM GPCR category), subfamily=<HMM name, e.g., 7tm_1_REV or
@@ -162,22 +205,35 @@ def merge_gpcr_evidence(
     lse_tblout: Optional[str],
     nath_ortholog_tblout: Optional[str] = None,
     tiammat_tblout: Optional[str] = None,
+    curated_chemo_tblout: Optional[str] = None,
 ) -> dict[str, dict]:
-    """Union classification + tiammat + lse + nath_ortholog evidence per
-    sequence.
+    """Union curated_chemo + classification + tiammat + lse +
+    nath_ortholog evidence per sequence.
 
-    Precedence order on family/subfamily (most specific first):
-      1. classification — curated Swiss-Prot families with named subfamilies
-      2. tiammat — TIAMMAT-revised 7TM GPCR HMMs (specific Pfam/Sr family
-         as subfamily, e.g., 7TM_GPCR_Sra_REV)
-      3. lse — Nath et al. lineage-specific expansion OGs (generic tag)
-      4. nath_ortholog — Nath et al. one_to_one_ortholog OGs (generic tag)
+    Precedence order on family/subfamily (most specific / highest
+    confidence first):
+      1. curated_chemo — functionally validated invertebrate
+         chemoreceptors (Cummins 2009 Aplysia, deorphanized platyhelminth
+         GPCRs, etc.). HIGHEST CONFIDENCE detection.
+      2. classification — curated Swiss-Prot families (LOO-validated
+         but non-chemoreceptor families like bioamine, peptide, opsin)
+      3. tiammat — TIAMMAT-revised 7TM GPCR HMMs (mollusc-tuned Pfam +
+         invertebrate Sr-style)
+      4. lse — Nath et al. lineage-specific expansion OGs (generic tag)
+      5. nath_ortholog — Nath et al. one_to_one_ortholog OGs (generic)
+
+    Why curated_chemo beats classification: a protein hitting both
+    apgr (functionally validated rhinophore chemoreceptor) AND
+    aminergic (Swiss-Prot bioamine family signature) is clearly a
+    chemoreceptor that happens to share some structural features with
+    bioamine GPCRs — the chemoreceptor identity is the BIOLOGICALLY
+    INTERESTING one for our paper.
 
     The source field concatenates every source that contributed evidence,
-    e.g., 'classification+tiammat+lse+nath_ortholog', so no evidence is
-    lost. Stage 02 currently invokes only classification + tiammat;
-    lse/nath_ortholog are kept available for a future annotation script.
+    e.g., 'curated_chemo+classification+tiammat+lse+nath_ortholog'.
     """
+    cur = _parse_curated_chemo_tblout(curated_chemo_tblout) \
+        if curated_chemo_tblout else {}
     cls = _parse_classification(classification_tsv) if classification_tsv else {}
     tia = _parse_tiammat_tblout(tiammat_tblout) if tiammat_tblout else {}
     lse = _parse_hmm_tblout(lse_tblout, "lse") if lse_tblout else {}
@@ -187,8 +243,11 @@ def merge_gpcr_evidence(
     merged: dict[str, dict] = {}
     sources_seen: dict[str, list[str]] = {}
 
-    for source_name, source_dict in (("classification", cls), ("tiammat", tia),
-                                      ("lse", lse), ("nath_ortholog", nath)):
+    for source_name, source_dict in (("curated_chemo", cur),
+                                      ("classification", cls),
+                                      ("tiammat", tia),
+                                      ("lse", lse),
+                                      ("nath_ortholog", nath)):
         for sid, rec in source_dict.items():
             if sid not in merged:
                 merged[sid] = dict(rec)
@@ -236,6 +295,11 @@ def main() -> int:
                     help="hmmsearch --tblout against TIAMMAT-revised GPCR "
                          "HMMs (Pfam 7tm_* + invertebrate Sr-style "
                          "chemoreceptors, retrained on mollusc data)")
+    ap.add_argument("--curated-chemo-tblout",
+                    help="hmmsearch --tblout against curated invertebrate "
+                         "chemoreceptor HMMs (functionally validated; "
+                         "Cummins 2009 Aplysia + deorphanized lophotrochozoan "
+                         "chemoreceptor families)")
     ap.add_argument("--ids-out", required=True,
                     help="Output: GPCR-positive sequence IDs, one per line")
     ap.add_argument("--census-out",
@@ -243,14 +307,16 @@ def main() -> int:
                          "evalue, source)")
     args = ap.parse_args()
     if not any((args.classification_tsv, args.lse_tblout,
-                args.nath_ortholog_tblout, args.tiammat_tblout)):
+                args.nath_ortholog_tblout, args.tiammat_tblout,
+                args.curated_chemo_tblout)):
         print("identify_gpcrs.py: at least one of --classification-tsv, "
-              "--lse-tblout, --nath-ortholog-tblout, or --tiammat-tblout "
-              "must be provided", file=sys.stderr)
+              "--lse-tblout, --nath-ortholog-tblout, --tiammat-tblout, "
+              "or --curated-chemo-tblout must be provided", file=sys.stderr)
         return 2
     merged = merge_gpcr_evidence(args.classification_tsv, args.lse_tblout,
                                   nath_ortholog_tblout=args.nath_ortholog_tblout,
-                                  tiammat_tblout=args.tiammat_tblout)
+                                  tiammat_tblout=args.tiammat_tblout,
+                                  curated_chemo_tblout=args.curated_chemo_tblout)
     write_ids(merged, args.ids_out)
     if args.census_out:
         write_census(merged, args.census_out)

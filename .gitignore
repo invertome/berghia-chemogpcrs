@@ -34,6 +34,12 @@ references/**/*
 !references/hcr_positive_controls.csv
 !references/cummins2009_aplysia_chemoreceptors.csv
 !references/aplysia_classification_validation.csv
+# Curated invertebrate chemoreceptor HMM library (bead -k0g): manifest +
+# fetched FASTAs are the source-of-truth for the build. HMM artifacts
+# go to results/classification/hmms_curated_chemo/ which the default
+# results/ rule excludes.
+!references/curated_chemoreceptors_lophotrochozoa/
+!references/curated_chemoreceptors_lophotrochozoa/**/*
 
 # Transcriptomes and genomes (large, user-provided)
 transcriptomes/

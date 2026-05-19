@@ -242,6 +242,16 @@ export MAX_AA_LENGTH=1500
 # the HMMs themselves remain general GPCR family models with
 # mollusc-tuned parameters).
 export TIAMMAT_GPCR_HMM="${BASE_DIR}/references/tiammat_mollusca_gpcr.hmm"
+# Curated invertebrate chemoreceptor HMM library (bead -k0g).
+# Built from functionally validated lophotrochozoan chemoreceptors
+# (Cummins 2009 Aplysia Apgr family + deorphanized Schistosoma + …).
+# This is the HIGHEST-confidence detection layer in identify_gpcrs.py
+# (precedence: curated_chemo > classification > tiammat > lse > nath_ortholog).
+# Built by scripts/build_curated_chemo_hmms.sh from
+# references/curated_chemoreceptors_lophotrochozoa/manifest.tsv.
+# Single consolidated HMM file (all families catted together) for
+# one hmmsearch call in stage 02.
+export CURATED_CHEMO_HMM="${CURATED_CHEMO_HMM:-${RESULTS_DIR}/classification/hmms_curated_chemo/curated_chemo.hmm}"
 export MIN_SEQ_LENGTH=100
 export MAX_GAP_PERCENT=30  # 25-30% recommended for robust phylogenetic inference
 # Pre-alignment sequence length filtering (removes gene prediction artifacts)

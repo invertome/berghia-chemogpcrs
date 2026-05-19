@@ -258,8 +258,10 @@ identify_gpcr_candidates() {
     local pfam_dir="${hmm_dir}/pfam_fallback"
     local loo="${RESULTS_DIR}/classification/loo/loo_metrics.tsv"
     local tiammat_hmm="${TIAMMAT_GPCR_HMM:-${BASE_DIR}/references/tiammat_mollusca_gpcr.hmm}"
+    local curated_hmm="${CURATED_CHEMO_HMM:-${RESULTS_DIR}/classification/hmms_curated_chemo/curated_chemo.hmm}"
     local class_tsv="$work/classification.tsv"
     local tiammat_tbl="$work/tiammat_gpcr_hits.tbl"
+    local curated_tbl="$work/curated_chemo_hits.tbl"
     local ids_out="$work/gpcr_ids.txt"
 
     # --- Detection layer 1: classify_via_hmm.py (curated Swiss-Prot
@@ -300,12 +302,31 @@ identify_gpcr_candidates() {
         : > "$tiammat_tbl"
     fi
 
+    # --- Detection layer 3: curated invertebrate chemoreceptor HMMs.
+    #     HIGHEST-confidence detection: HMMs built from functionally
+    #     validated lophotrochozoan chemoreceptors (Cummins 2009 Aplysia
+    #     + deorphanized Schistosoma + ...). Each HMM is one family
+    #     (apgr, schisto_chemo, annelid_chemo, other_gastropod_chemo).
+    #     Bead -k0g, 2026-05-19.
+    if [[ -f "$curated_hmm" && -s "$curated_hmm" ]]; then
+        hmmsearch --cpu "$threads" -E "$evalue" \
+            --tblout "$curated_tbl" \
+            "$curated_hmm" "$input_fa" > /dev/null 2>&1 || {
+                echo "identify_gpcr_candidates: hmmsearch on curated chemoreceptor HMMs failed" >&2
+                return 7
+            }
+    else
+        echo "identify_gpcr_candidates: curated chemoreceptor HMM not found or empty ($curated_hmm); skipping curated_chemo scan (run scripts/build_curated_chemo_hmms.sh if you want this layer)" >&2
+        : > "$curated_tbl"
+    fi
+
     # --- Merge detection evidence -> GPCR-positive IDs + (optional) census
     local census_args=()
     [[ -n "$census_tsv" ]] && census_args=(--census-out "$census_tsv")
     python3 "${SCRIPTS_DIR:-./scripts}/identify_gpcrs.py" \
         --classification-tsv "$class_tsv" \
         --tiammat-tblout "$tiammat_tbl" \
+        --curated-chemo-tblout "$curated_tbl" \
         --ids-out "$ids_out" \
         "${census_args[@]}" || {
             echo "identify_gpcr_candidates: identify_gpcrs.py failed" >&2

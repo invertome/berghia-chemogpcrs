@@ -1,0 +1,22 @@
+family	subfamily	gene_name	organism	taxid	accession_type	accession	citation_doi	validation_method	notes
+apgr	Apgr.A	ApGPCR-A	Aplysia_californica	6500	refseq	NP_001191513.1	10.1186/1741-7007-7-28	expression_organ_enriched	Cummins 2009 BMC Biology 7:28. Rhinophore-enriched expression. RefSeq curated entry; original submission ACL13286.1. Gold-standard chemoreceptor.
+apgr	Apgr.B	ApGPCR-B	Aplysia_californica	6500	refseq	NP_001191494.1	10.1186/1741-7007-7-28	expression_organ_enriched	Cummins 2009 BMC Biology 7:28. Rhinophore + oral-tentacle expression. RefSeq curated entry; original submission ACH72066.1.
+apgr	Apgr.C	ApGPCR-C	Aplysia_californica	6500	refseq	NP_001191495.1	10.1186/1741-7007-7-28	expression_organ_enriched	Cummins 2009 BMC Biology 7:28. Rhinophore-enriched expression. RefSeq curated entry; original submission ACH72065.1.
+apgr	Apgr.A_ortholog	AdCR_multitransmembrane	Aplysia_dactylomela	144766	genbank	ACN91301.1	10.1242/jeb.026427	expression_organ_enriched	Cummins/Leblanc/Degnan/Nagle 2009 JEB 212:2037. Cloned multitransmembrane GPCR (286 aa, 6 TMs); in situ hybridization (Fig. 2) shows expression restricted to A. dactylomela rhinophore sensory epithelium. Partial CDS spanning TM2-TM7.
+apgr	Apgr.C_ortholog	AdCR_putative_chemoR	Aplysia_dactylomela	144766	genbank	ACN22082.1	10.1242/jeb.026427	expression_organ_enriched	Cummins/Leblanc/Degnan/Nagle 2009 JEB 212:2037. Cloned putative chemosensory receptor (246 aa, 5 TMs); in situ (Fig. 2) localizes transcript to rhinophore sensory cells. Partial CDS spanning TM3-TM7.
+# --- Families flagged insufficient_curation (no functionally validated entries) ---
+# schisto_chemo: All published deorphanized S. mansoni class-A GPCRs (Phan 2022,
+#   Mader 2023) are neuropeptide/aminergic family members (orexin Smp_173010,
+#   sulfakinin Smp_007070, NPF Smp_126730, serotonin Smp_180030, opsin Smp_203500,
+#   allatostatin Smp_049330, FMRFa Smp_131980/140620, SmGPCR20) — these would be
+#   filtered OUT by stage 06c as non-chemoreceptors and must not seed a
+#   chemoreceptor HMM.
+# annelid_chemo: Platynereis whole-head chemo recordings (Chartier 2018 Open Biol)
+#   characterize organ-level chemoresponsiveness but identify no individual GPCR.
+#   Capitella metamorphic transcriptomics (Burns 2017) lists upregulated transcript
+#   classes without per-gene validation. Carbone 2025 (MBE) is comparative
+#   genomics only.
+# other_gastropod_chemo: Biomphalaria chemo is IRs not GPCRs (Mahapatra 2016).
+#   Lymnaea FMRFa-R expansion (Vu 2024) is neuropeptide class. Ucciferri 2023
+#   Lymnaea tentacle electrophys identifies no receptor.
+

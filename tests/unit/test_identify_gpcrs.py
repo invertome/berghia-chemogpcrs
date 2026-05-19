@@ -69,6 +69,22 @@ bste_gene_600        -          7TM_GPCR_Sra_REV     -           7.0e-40   140.0
 # end
 """
 
+# Curated invertebrate chemoreceptor HMM tblout. The HIGHEST confidence
+# detection layer because every HMM is built from functionally validated
+# lophotrochozoan chemoreceptors (Cummins 2009 Aplysia, Schistosoma
+# deorphanized receptors, etc.). Each HMM represents a single
+# functionally-confirmed family (apgr, schisto_chemo, annelid_chemo,
+# other_gastropod_chemo).
+CURATED_CHEMO_TBLOUT = """\
+#                                                               --- full sequence ---- --- best 1 domain ----
+# target name (seq)    accession  query name (HMM)     accession    E-value  score  bias   E-value  score  bias
+# -------------------- ---------- -------------------- ---------- --------- ------ ----- --------- ------ -----
+bste_gene_001        -          apgr                 -           1.0e-95   330.1   0.0   1.0e-95   330.1   0.0
+bste_gene_700        -          apgr                 -           4.0e-70   250.0   0.0   4.0e-70   250.0   0.0
+bste_gene_800        -          schisto_chemo        -           8.0e-30   110.0   0.0   8.0e-30   110.0   0.0
+# end
+"""
+
 
 def test_merge_classification_only(tmp_path: Path) -> None:
     """When only classification TSV present, returns those classified IDs.
@@ -205,11 +221,59 @@ def test_merge_four_sources_overlap(tmp_path: Path) -> None:
     assert "nath_ortholog" in merged["bste_gene_100"]["source"]
 
 
+def test_merge_curated_chemo_only(tmp_path: Path) -> None:
+    """Curated-chemo-only hits: family='<hmm_name>' (e.g., 'apgr'),
+    subfamily=<hmm_name>, source='curated_chemo'. This is the highest-
+    confidence detection layer (functionally validated chemoreceptors)."""
+    cur = tmp_path / "curated.tbl"
+    cur.write_text(CURATED_CHEMO_TBLOUT)
+    merged = ig.merge_gpcr_evidence(None, None, curated_chemo_tblout=str(cur))
+    assert set(merged.keys()) == {"bste_gene_001", "bste_gene_700", "bste_gene_800"}
+    assert merged["bste_gene_001"]["family"] == "apgr"
+    assert merged["bste_gene_001"]["subfamily"] == "apgr"
+    assert merged["bste_gene_001"]["source"] == "curated_chemo"
+    assert merged["bste_gene_800"]["family"] == "schisto_chemo"
+    assert merged["bste_gene_800"]["source"] == "curated_chemo"
+
+
+def test_merge_five_sources_curated_chemo_wins(tmp_path: Path) -> None:
+    """Full five-source merge: curated_chemo + classification + tiammat
+    + lse + nath. Precedence: curated_chemo wins over all (highest
+    confidence, functionally validated chemoreceptor). Source field
+    concatenates all sources hit."""
+    cls = tmp_path / "cls.tsv"
+    cls.write_text(CLASS_TSV)
+    lse = tmp_path / "lse.tbl"
+    lse.write_text(LSE_TBLOUT)
+    nath = tmp_path / "nath.tbl"
+    nath.write_text(NATH_ORTHOLOG_TBLOUT)
+    tia = tmp_path / "tiammat.tbl"
+    tia.write_text(TIAMMAT_TBLOUT)
+    cur = tmp_path / "curated.tbl"
+    cur.write_text(CURATED_CHEMO_TBLOUT)
+    merged = ig.merge_gpcr_evidence(str(cls), str(lse),
+                                    nath_ortholog_tblout=str(nath),
+                                    tiammat_tblout=str(tia),
+                                    curated_chemo_tblout=str(cur))
+    # bste_gene_001 is in classification (aminergic) + lse + curated_chemo (apgr)
+    # -> curated_chemo wins (functionally validated chemoreceptor beats
+    # generic Swiss-Prot bioamine family on this protein)
+    assert merged["bste_gene_001"]["family"] == "apgr"
+    assert merged["bste_gene_001"]["subfamily"] == "apgr"
+    assert "curated_chemo" in merged["bste_gene_001"]["source"]
+    assert "classification" in merged["bste_gene_001"]["source"]
+    assert "lse" in merged["bste_gene_001"]["source"]
+    # bste_gene_700 only in curated_chemo
+    assert merged["bste_gene_700"]["family"] == "apgr"
+    assert merged["bste_gene_700"]["source"] == "curated_chemo"
+
+
 def test_merge_neither_returns_empty(tmp_path: Path) -> None:
     """All inputs missing/None -> empty dict."""
     assert ig.merge_gpcr_evidence(None, None) == {}
     assert ig.merge_gpcr_evidence(None, None, nath_ortholog_tblout=None,
-                                  tiammat_tblout=None) == {}
+                                  tiammat_tblout=None,
+                                  curated_chemo_tblout=None) == {}
 
 
 # ---- write_ids -----------------------------------------------------------
