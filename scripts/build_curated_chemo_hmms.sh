@@ -42,15 +42,27 @@ total=0
 
 for family_dir in "${family_dirs[@]}"; do
     family=$(basename "${family_dir%/}")
-    seqs="$family_dir/${family}_seqs.fa"
 
-    if [ ! -s "$seqs" ]; then
-        echo "[$family] no sequences file ($seqs); skipping" >&2
+    # Multiple FASTA sources per family are supported via *_seqs*.fa glob.
+    # Pattern intent: ${family}_seqs.fa (NCBI fetcher output) +
+    # ${family}_seqs_<source>.fa (per-source contributions, e.g.,
+    # audino2024). Combined into a single input for MAFFT.
+    shopt -s nullglob
+    seq_files=("$family_dir"/*_seqs*.fa)
+    shopt -u nullglob
+    if [ "${#seq_files[@]}" -eq 0 ]; then
+        echo "[$family] no *_seqs*.fa file in $family_dir; skipping" >&2
         continue
     fi
 
+    out_family_dir="$OUT_DIR/$family"
+    mkdir -p "$out_family_dir"
+    seqs="$out_family_dir/${family}_combined_seqs.fa"
+    cat "${seq_files[@]}" > "$seqs"
+
     n_seqs=$(grep -c '^>' "$seqs" 2>/dev/null || echo 0)
     total=$((total + 1))
+    echo "[$family] combined $n_seqs sequences from ${#seq_files[@]} source(s): $(printf '%s ' "${seq_files[@]##*/}")" >&2
 
     if [ "$n_seqs" -lt 3 ]; then
         echo "[$family] only $n_seqs sequences (need >=3 for hmmbuild); skipping" >&2
@@ -58,8 +70,6 @@ for family_dir in "${family_dirs[@]}"; do
         continue
     fi
 
-    out_family_dir="$OUT_DIR/$family"
-    mkdir -p "$out_family_dir"
     aligned="$out_family_dir/${family}_aligned.fa"
     hmm="$out_family_dir/${family}.hmm"
 

@@ -19,4 +19,21 @@ apgr	Apgr.C_ortholog	AdCR_putative_chemoR	Aplysia_dactylomela	144766	genbank	ACN
 # other_gastropod_chemo: Biomphalaria chemo is IRs not GPCRs (Mahapatra 2016).
 #   Lymnaea FMRFa-R expansion (Vu 2024) is neuropeptide class. Ucciferri 2023
 #   Lymnaea tentacle electrophys identifies no receptor.
+#
+# --- Audino et al. 2024 Sci Rep 14:31539 batch (added 2026-05-19) ---
+# 23 sequences added to apgr family via scripts/fetch_audino2024_chemoreceptors.sh.
+# Source: Figshare 10.6084/m9.figshare.26058316 (Asim_chemoGPCR_ali.fasta +
+#   Asim_chemoGPCR.treefile, accessed via api.figshare.com).
+# Validation_method: phylogenetic_clustering (tree-verified close-cluster
+#   of the 11 Anomia simplex tentacle chemoreceptors via per-Asim LCA walk
+#   on Audino's published tree, clade-size cap ≤15).
+# Breakdown: 11 Anomia simplex (Asim) + 5 Lottia ventricosa (Lven) + 3
+#   Schmidtea mediterranea (Smed) + 3 Pomacea canaliculata (Pcan) + 1
+#   Caenorhabditis elegans (Cele_NP_502887.1_Rho, sister of TRINITY_DN29133).
+# Cele included despite ecdysozoan scope because it IS the tightest
+# phylogenetic neighbor of an Anomia chemoreceptor in the published tree.
+# Sequences live at apgr/apgr_seqs_audino2024.fa with standardized headers
+# (>apgr__<gene>__<taxid>__audino2024_<token>); the build pipeline combines
+# them with apgr_seqs.fa via the *_seqs*.fa glob in build_curated_chemo_hmms.sh.
+
 
