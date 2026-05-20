@@ -35,5 +35,41 @@ apgr	Apgr.C_ortholog	AdCR_putative_chemoR	Aplysia_dactylomela	144766	genbank	ACN
 # Sequences live at apgr/apgr_seqs_audino2024.fa with standardized headers
 # (>apgr__<gene>__<taxid>__audino2024_<token>); the build pipeline combines
 # them with apgr_seqs.fa via the *_seqs*.fa glob in build_curated_chemo_hmms.sh.
+#
+# --- Post-Audino gap-fill 2026-05-20 (NEGATIVE RESULT) ---
+# After the Audino batch, targeted PubMed searches were run for two
+# residual gaps from the -k0g bead description:
+#   (1) Cummins SF[Author] 2010-2026 follow-ups to BMC Biology 7:28
+#       — query: "Cummins SF"[Author] AND (chemoreceptor OR rhinophore
+#         OR GPCR OR "G protein-coupled" OR olfactory) AND 2010-2026
+#       — 14 hits; 12 OUT (echinoderm Acanthaster x4, crustacean
+#         Nephrops/Penaeus x2, insect Sirex/IGluR x2, Biomphalaria-IR
+#         already-flagged, Schisto-already-flagged x2, woodwasp-venom).
+#       — Klein/Cummins 2021 Mar Biotech 23:501 (Charonia tritonis) IN
+#         scope (gastropod cephalic tentacle GPCRs) BUT: the 47 candidate
+#         ORs identified are predominantly Pomacea-canaliculata neuropeptide-
+#         receptor BLAST hits (frpr-1, GPR139, daf-37, CCHamide-2, bradykinin
+#         B1, FMRFamide R) — i.e. exactly the false-positive class that
+#         stage 06c filters out as non-chemoreceptors. Additionally the
+#         protein sequences are Trinity assembly transcript IDs not
+#         deposited to NCBI Protein/TSA (only raw FASTQ at PRJNA699909),
+#         so re-use would require re-assembling from raw reads — out
+#         of scope.
+#       — Cummins/Degnan 2010 Commun Integr Biol 3:423 is a commentary
+#         on Cummins 2009 with no new accessions.
+#   (2) Osphradium-focused gastropod GPCR papers
+#       — query: osphradium[TI/AB] AND (GPCR OR "G protein-coupled"
+#         OR chemoreceptor OR "olfactory receptor" OR transcriptome)
+#       — 4 hits; 2 in scope. Hong et al. 2026 Comp Biochem Physiol D
+#         59:101841 (Babylonia areolata osphradium feeding transcriptomics)
+#         is pathway-level WGCNA — no individual curated receptors named.
+#         Liu et al. 2023 BMC Genomics 24:679 (Phymorhynchus buccinoides
+#         deep-sea snail genome) is cold-seep adaptation focused (hemoglobin,
+#         sulfur metabolism), no chemoreceptor catalog.
+# Net new sequences from gap-fill: 0. Curated library considered saturated
+# within currently available evidence as of 2026-05-20. Future re-check
+# should target newly published gastropod / bivalve genomes with explicit
+# organ-localized chemoreceptor functional studies (rather than pathway-
+# level or comparative-genomics-only work).
 
 
