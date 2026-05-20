@@ -8,10 +8,15 @@
 #SBATCH --job-name=structural_analysis
 #SBATCH --output=${LOGS_DIR}/08_structural_analysis_%j.out
 #SBATCH --error=${LOGS_DIR}/08_structural_analysis_%j.err
-#SBATCH --time=${DEFAULT_TIME}
-#SBATCH $(scale_resources)
-# Note: To enable GPU, uncomment the line below or submit with: sbatch --gres=gpu:1 08_structural_analysis.sh
-##SBATCH --gres=gpu:1
+#SBATCH --time=24:00:00
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=64G
+# Bead -05o (2026-05-20): switched to GPU partition because AF3 inference
+# requires CUDA (Ampere+ for Triton flash-attention; XLA fallback is
+# portable but ~3x slower). CPU-only AF3 is impractical (hours per
+# protein) — the wrapper aborts if no GPU is allocated.
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=${SLURM_EMAIL}
 

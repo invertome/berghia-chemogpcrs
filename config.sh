@@ -77,12 +77,24 @@ export JCVI_PYTHON="${JCVI_PYTHON:-python3}"
 # branch removal. Distributed via pip as `treeshrink` which installs a
 # `run_treeshrink.py` shim on PATH.
 export TREESHRINK="${TREESHRINK:-run_treeshrink.py}"
-export ALPHAFOLD="run_alphafold.sh"
+export ALPHAFOLD="${SCRIPTS_DIR}/run_alphafold.sh"
+# AlphaFold3 wiring (bead -05o, 2026-05-20):
+#   - DB_DIR points to Unity's shared dataset directory (/datasets/bio/alphafold3,
+#     downloaded 2024-11-17 per /datasets/bio/alphafold3/unity_readme.md). This
+#     contains sequence/structure databases only.
+#   - MODEL_DIR holds the AF3 model weights. These are Google-gated; the user
+#     must request them via the AF3 GitHub form and download separately. The
+#     wrapper aborts loudly if this path is unset or missing.
+#   - APPTAINER_CACHEDIR lives off /home (Unity admins explicitly request this)
+#     to avoid filling small home quotas.
+export ALPHAFOLD3_DB_DIR="${ALPHAFOLD3_DB_DIR:-/datasets/bio/alphafold3}"
+export ALPHAFOLD3_MODEL_DIR="${ALPHAFOLD3_MODEL_DIR:-}"
+export APPTAINER_CACHEDIR="${APPTAINER_CACHEDIR:-${BASE_DIR}/.apptainer/cache}"
 export FOLDTREE="foldtree"
 export TMALIGN="TMalign"
+export FOLDSEEK="${FOLDSEEK:-foldseek}"
 export SEQTK="seqtk"
 export ORTHOFINDER="orthofinder"
-export PHYLOFORMER="phyloformer"
 export PDFLATEX="pdflatex"
 export BUSCO="busco"
 export DEEPTMHMM="bash ${SCRIPTS_DIR}/run_deeptmhmm.sh"  # Tries: Apptainer SIF, local binary, biolib, Kyte-Doolittle fallback
@@ -155,7 +167,9 @@ if [ -f "${BASE_DIR}/config.local.sh" ]; then
     source "${BASE_DIR}/config.local.sh"
 fi
 export RSCRIPT="Rscript"
-export INTERPROSCAN="interproscan.sh"
+# InterProScan was planned in Feb 2026 but never wired; the May 2026 HMM
+# classification stack (scripts/classify_via_hmm.py + 02b / 06c) replaced
+# its protein-family annotation role (bead -05o follow-up, 2026-05-20).
 
 # --- NOTUNG Parameters ---
 export NOTUNG_JAR="${BASE_DIR}/tools/Notung-2.9.jar"
@@ -332,9 +346,6 @@ export OUTGROUP_FASTA="${REFERENCE_DIR}/outgroup.fa"
 
 # --- Orthogroup Confidence Score ---
 export OG_CONFIDENCE_WEIGHT=1
-
-# --- InterProScan Classification (production only) ---
-export RUN_INTERPROSCAN=false
 
 # --- CAFE5 Parameters ---
 export CAFE_LAMBDA_SEARCH=true   # Search for optimal lambda
