@@ -93,7 +93,6 @@ export FOLDTREE="$MOCK_DIR/foldtree"
 export TMALIGN="$MOCK_DIR/TMalign"
 export SEQTK="$MOCK_DIR/seqtk"
 export ORTHOFINDER="$MOCK_DIR/orthofinder"
-export PHYLOFORMER="$MOCK_DIR/phyloformer"
 export PDFLATEX="$MOCK_DIR/pdflatex"
 export BUSCO="$MOCK_DIR/busco"
 export DEEPTMHMM="$MOCK_DIR/deeptmhmm"
@@ -105,7 +104,6 @@ export CAFE="$MOCK_DIR/cafe5"
 export NOTUNG="$MOCK_DIR/java -jar \${BASE_DIR}/tools/Notung-2.9.jar"
 export NOTUNG_JAR="\${BASE_DIR}/tools/Notung-2.9.jar"
 export RSCRIPT="$MOCK_DIR/Rscript"
-export INTERPROSCAN="$MOCK_DIR/interproscan.sh"
 
 # --- NOTUNG Parameters ---
 export NOTUNG_THRESHOLD=90

@@ -285,7 +285,6 @@ with open('${REF_CATEGORIES_FINAL}', 'a') as f:
     fi
     # shellcheck disable=SC2086
     run_command "all_berghia_refs_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa" -st AA -m "${IQTREE_MODEL_FIND}" -mset "${IQTREE_MODEL_SET}" ${IQTREE_BOOT_FLAGS} -seed "${IQTREE_SEED}" -T "${CPUS}" ${iqtree_seed_arg} --prefix "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs"
-    run_command "phyloformer_all_berghia" python3 "${SCRIPTS_DIR}/test_phyloformer_models.py" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_phyloformer" "${CPUS}"
     if [ "$USE_MRBAYES" = true ]; then
         cat <<EOF > "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.nex"
 begin mrbayes;
