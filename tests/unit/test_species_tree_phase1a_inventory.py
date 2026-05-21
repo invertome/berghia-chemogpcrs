@@ -443,6 +443,26 @@ class TestQueryDatasetsForTaxon:
         records = inv.query_datasets_for_taxon(99999)
         assert records == []
 
+    def test_no_genome_data_with_rc1_returns_empty(self, monkeypatch) -> None:
+        # NCBI Datasets returns rc=1 with stderr like:
+        #   "Error: The taxonomy ID '6426' is valid for 'Riftia pachyptila',
+        #    but no genome data is currently available for this taxon."
+        # This is a "valid taxon, no proteome" outcome, NOT a query error.
+        # Real-world: hit on Riftia pachyptila (taxid 6426) during the
+        # 2026-05-21 Phase 1a run.
+        class _Result:
+            returncode = 1
+            stdout = ""
+            stderr = (
+                "Error: The taxonomy ID '6426' is valid for "
+                "'Riftia pachyptila', but no genome data is currently "
+                "available for this taxon."
+            )
+
+        monkeypatch.setattr(inv.subprocess, "run", lambda *a, **k: _Result())
+        records = inv.query_datasets_for_taxon(6426)
+        assert records == []  # should map to no_proteome_in_ncbi downstream
+
     def test_non_zero_returncode_raises_with_stderr(self, monkeypatch) -> None:
         class _Result:
             returncode = 2

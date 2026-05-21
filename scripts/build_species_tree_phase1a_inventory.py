@@ -296,21 +296,31 @@ def query_datasets_for_taxon(
     result = subprocess.run(
         cmd, capture_output=True, text=True, timeout=timeout,
     )
+    # NCBI Datasets uses non-zero rc for several "valid taxid, but no
+    # genome / annotation / proteome" outcomes — these are NOT errors,
+    # they just mean "no proteome for this taxon". Recognize them.
+    NO_HIT_PHRASES = (
+        "no assemblies",
+        "no results",
+        "no genome data",            # "...is valid for 'X', but no genome data..."
+        "no genomes",                # plural form some versions emit
+        "no annotation",             # rarer; assemblies present but no proteome
+        "no proteins",
+        "did not match any genomes",
+    )
+
+    stderr_lower = (result.stderr or "").lower()
+
     if result.returncode != 0:
-        # Treat "no assemblies / no results" as empty, not error
-        stderr_lower = (result.stderr or "").lower()
-        if "no assemblies" in stderr_lower or "no results" in stderr_lower:
+        if any(p in stderr_lower for p in NO_HIT_PHRASES):
             return []
         raise RuntimeError(
             f"datasets failed (returncode={result.returncode}) "
             f"for taxid={taxid}: {result.stderr.strip()}"
         )
 
-    # Some NCBI versions emit "no assemblies" via stderr while returning 0.
-    stderr_lower = (result.stderr or "").lower()
-    if not result.stdout.strip() and (
-        "no assemblies" in stderr_lower or "no results" in stderr_lower
-    ):
+    # Some NCBI versions emit a no-hit phrase via stderr while returning 0.
+    if not result.stdout.strip() and any(p in stderr_lower for p in NO_HIT_PHRASES):
         return []
 
     records: list[dict] = []
