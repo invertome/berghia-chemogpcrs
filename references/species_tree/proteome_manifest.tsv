@@ -1,0 +1,240 @@
+taxid	binomial	clade	source	accession	assembly_level	annotation_status	est_protein_count	submission_date	drop_reason
+6161	Dugesia japonica	platyhelminthes							no_proteome_in_ncbi
+6162	Girardia tigrina	platyhelminthes							no_proteome_in_ncbi
+6182	Schistosoma japonicum	platyhelminthes	GenBank	GCA_021461655.1	Chromosome		9715		
+6183	Schistosoma mansoni	platyhelminthes	RefSeq	GCF_000237925.1	Chromosome	Full annotation	10711		
+6184	Schistosoma bovis	platyhelminthes	GenBank	GCA_944470425.2	Chromosome		9506		
+6185	Schistosoma haematobium	platyhelminthes	RefSeq	GCF_000699445.3	Chromosome	Full annotation	9428		
+6186	Schistosoma curassoni	platyhelminthes	GenBank	GCA_944474815.3	Chromosome		10084		
+6187	Schistosoma intercalatum	platyhelminthes	GenBank	GCA_944470365.2	Chromosome		9676		
+6188	Schistosoma rodhaini	platyhelminthes	GenBank	GCA_944470415.2	Chromosome		9927		
+6192	Fasciola hepatica	platyhelminthes	GenBank	GCA_000947175.1	Scaffold		0		
+6198	Opisthorchis viverrini	platyhelminthes	RefSeq	GCF_000715545.1	Scaffold		16356		
+6204	Taenia solium	platyhelminthes	GenBank	GCA_001870725.1	Scaffold		11854		
+6205	Hydatigera taeniaeformis	platyhelminthes	GenBank	GCA_900622495.1	Scaffold		11598		
+6206	Taenia saginata	platyhelminthes							no_proteome_in_ncbi
+6207	Taenia crassiceps	platyhelminthes	GenBank	GCA_023375655.1	Scaffold		10553		
+6210	Echinococcus granulosus	platyhelminthes	RefSeq	GCF_000524195.1	Scaffold	Full annotation	11319		
+6211	Echinococcus multilocularis	platyhelminthes	GenBank	GCA_000469725.3	Scaffold		9192		
+6212	Echinococcus oligarthrus	platyhelminthes							no_proteome_in_ncbi
+6216	Hymenolepis diminuta	platyhelminthes	GenBank	GCA_056153285.1	Chromosome		10241		
+6347	Owenia fusiformis	annelida	GenBank	GCA_903813345.2	Scaffold		26674		
+6359	Platynereis dumerilii	annelida							no_proteome_in_ncbi
+6398	Lumbricus terrestris	annelida							no_proteome_in_ncbi
+6412	Helobdella robusta	annelida	RefSeq	GCF_000326865.2	Scaffold		23368		
+6421	Hirudo medicinalis	annelida							no_proteome_in_ncbi
+6426	Riftia pachyptila	annelida							no_proteome_in_ncbi
+6446	Sipunculus nudus	annelida							no_proteome_in_ncbi
+6454	Haliotis rufescens	gastropoda	RefSeq	GCF_023055435.1	Scaffold	Full annotation	31171		
+6455	Haliotis cracherodii	gastropoda	RefSeq	GCF_022045235.1	Scaffold	Full annotation	29565		
+6465	Patella vulgata	gastropoda	RefSeq	GCF_932274485.2	Chromosome	Full annotation	16057		
+6500	Aplysia californica	gastropoda	RefSeq	GCF_000002075.1	Scaffold	Full annotation	19405		
+6523	Lymnaea stagnalis	gastropoda	GenBank	GCA_964033795.1	Scaffold		22499		
+6526	Biomphalaria glabrata	gastropoda	RefSeq	GCF_947242115.1	Chromosome	Full annotation	22006		
+6549	Mytilus californianus	bivalvia	RefSeq	GCF_021869535.1	Scaffold	Full annotation	26243		
+6550	Mytilus edulis	bivalvia	RefSeq	GCF_963676685.1	Chromosome	Full annotation	35875		
+6565	Crassostrea virginica	bivalvia	RefSeq	GCF_053477285.1	Chromosome	Full annotation	28649		
+6573	Mizuhopecten yessoensis	bivalvia	RefSeq	GCF_002113885.1	Scaffold	Full annotation	24532		
+6573	Patinopecten yessoensis	bivalvia	RefSeq	GCF_002113885.1	Scaffold	Full annotation	24532		
+6579	Pecten maximus	bivalvia	RefSeq	GCF_902652985.1	Chromosome	Full annotation	26152		
+6596	Mercenaria mercenaria	bivalvia	RefSeq	GCF_021730395.1	Chromosome	Full annotation	38330		
+6604	Mya arenaria	bivalvia	RefSeq	GCF_026914265.1	Chromosome	Full annotation	36031		
+6613	Euprymna scolopes	cephalopoda	RefSeq	GCF_053919585.1	Chromosome	Full annotation	19905		
+6625	Watasenia scintillans	cephalopoda							no_proteome_in_ncbi
+6645	Octopus vulgaris	cephalopoda	GenBank	GCA_951406725.2	Chromosome		23436		
+7574	Lingula anatina	other_lophotrochozoan_phyla	RefSeq	GCF_001039355.2	Scaffold	Full annotation	27068		
+7574	Lingula unguis	other_lophotrochozoan_phyla	RefSeq	GCF_001039355.2	Scaffold	Full annotation	27068		
+10212	Bugula neritina	other_lophotrochozoan_phyla	GenBank	GCA_010799875.2	Contig		25318		
+27845	Fasciolopsis buski	platyhelminthes	GenBank	GCA_008360955.1	Scaffold		11837		
+27848	Echinostoma caproni	platyhelminthes	GenBank	GCA_900618425.1	Scaffold		18599		
+27915	Ridgeia piscesae	annelida	GenBank	GCA_025642075.2	Contig		31608		
+28841	Moniezia expansa	platyhelminthes							no_proteome_in_ncbi
+29158	Mytilus galloprovincialis	bivalvia	RefSeq	GCF_965363235.1	Chromosome	Full annotation	27168		
+29159	Crassostrea gigas	bivalvia	RefSeq	GCF_963853765.1	Chromosome	Full annotation	26073		
+31201	Spisula solida	bivalvia							no_proteome_in_ncbi
+31246	Schistosoma mattheei	platyhelminthes	GenBank	GCA_944470405.2	Chromosome		10770		
+34504	Paragonimus westermani	platyhelminthes	GenBank	GCA_008508345.1	Scaffold		12783		
+34573	Nautilus pompilius	cephalopoda							no_proteome_in_ncbi
+36097	Haliotis laevigata	gastropoda							no_proteome_in_ncbi
+37623	Ostrea edulis	bivalvia	RefSeq	GCF_947568905.1	Chromosome	Full annotation	27763		
+37629	Gyrodactylus salaris	platyhelminthes							no_proteome_in_ncbi
+37653	Octopus bimaculoides	cephalopoda	RefSeq	GCF_001194135.2	Chromosome	Full annotation	15684		
+37655	Octopus rubescens	cephalopoda							no_proteome_in_ncbi
+39320	Heterobilharzia americana	platyhelminthes	GenBank	GCA_944470555.2	Chromosome		10892		
+42192	Mytilus coruscus	bivalvia	GenBank	GCA_011752425.2	Scaffold		58249		
+42344	Haliotis discus hannai	gastropoda							no_proteome_in_ncbi
+43123	Pedicellina cernua	other_lophotrochozoan_phyla							no_proteome_in_ncbi
+45949	Corbicula fluminea	bivalvia							no_proteome_in_ncbi
+45954	Dreissena polymorpha	bivalvia	RefSeq	GCF_020536995.1	Chromosome	Full annotation	36414		
+46595	Harmothoe impar	annelida							no_proteome_in_ncbi
+46835	Fasciola gigantica	platyhelminthes	GenBank	GCA_006461475.1	Scaffold		12669		
+48269	Schistosoma margrebowiei	platyhelminthes	GenBank	GCA_944470205.2	Chromosome		9780		
+50426	Pinctada fucata	bivalvia							no_proteome_in_ncbi
+52793	Radix auricularia	gastropoda							no_proteome_in_ncbi
+53468	Mesocestoides corti	platyhelminthes	GenBank	GCA_900604375.1	Scaffold		10577		
+53620	Paralvinella palmiformis	annelida	GenBank	GCA_025642065.1	Contig		24663		
+55521	Rapana venosa	gastropoda							no_proteome_in_ncbi
+55710	Cerastoderma edule	bivalvia							no_proteome_in_ncbi
+55729	Melanoides tuberculata	gastropoda							no_proteome_in_ncbi
+55837	Unio pictorum	bivalvia							no_proteome_in_ncbi
+57078	Dicrocoelium dendriticum	platyhelminthes	GenBank	GCA_944474145.2	Chromosome		13683		
+59628	Paragonimus skrjabini miyazakii	platyhelminthes	GenBank	GCA_014338405.1	Scaffold		12650		
+60516	Dibothriocephalus latus	platyhelminthes	GenBank	GCA_900617775.1	Scaffold		19930		
+60517	Taenia asiatica	platyhelminthes	GenBank	GCA_900618005.1	Scaffold		10248		
+60958	Piscicola geometra	annelida							no_proteome_in_ncbi
+61363	Acanthopleura granulata	other_molluscan_classes							no_proteome_in_ncbi
+61716	Hapalochlaena maculosa	cephalopoda							no_proteome_in_ncbi
+61718	Japetella diaphana	cephalopoda							no_proteome_in_ncbi
+64606	Sparganum proliferum	platyhelminthes	GenBank	GCA_053814205.1	Chromosome		28993		
+66713	Pinctada fucata martensii	bivalvia	GenBank	GCA_033119305.1	Scaffold		25526		
+66713	Pinctada imbricata	bivalvia	GenBank	GCA_033119305.1	Scaffold		25526		
+66787	Dipylidium caninum	platyhelminthes							no_proteome_in_ncbi
+67896	Cristatella mucedo	other_lophotrochozoan_phyla							no_proteome_in_ncbi
+70667	Schistocephalus solidus	platyhelminthes	GenBank	GCA_900618435.1	Scaffold		20185		
+73031	Perna viridis	bivalvia							no_proteome_in_ncbi
+79327	Schmidtea mediterranea	platyhelminthes							no_proteome_in_ncbi
+79923	Clonorchis sinensis	platyhelminthes	GenBank	GCA_003604175.2	Chromosome		13489		
+80818	Hippopus hippopus	bivalvia							no_proteome_in_ncbi
+80821	Fragum fragum	bivalvia							no_proteome_in_ncbi
+80829	Tridacna gigas	bivalvia							no_proteome_in_ncbi
+80833	Tridacna crocea	bivalvia							no_proteome_in_ncbi
+82660	Gyrodactylus bullatarudis	platyhelminthes							no_proteome_in_ncbi
+83531	Octopus mimus	cephalopoda							no_proteome_in_ncbi
+85432	Taenia pisiformis	platyhelminthes							no_proteome_in_ncbi
+87960	Patella depressa	gastropoda							no_proteome_in_ncbi
+88005	Patella pellucida	gastropoda							no_proteome_in_ncbi
+88925	Lineus longissimus	other_lophotrochozoan_phyla	RefSeq	GCF_910592395.1	Chromosome	Full annotation	17976		
+89764	Conus betulinus	gastropoda							no_proteome_in_ncbi
+94034	Taenia multiceps	platyhelminthes							no_proteome_in_ncbi
+95170	Membranipora membranacea	other_lophotrochozoan_phyla							no_proteome_in_ncbi
+95538	Streblospio benedicti	annelida							no_proteome_in_ncbi
+98310	Sinonovacula constricta	bivalvia							no_proteome_in_ncbi
+99802	Spirometra erinaceieuropaei	platyhelminthes							no_proteome_in_ncbi
+100268	Paragonimus heterotremus	platyhelminthes	GenBank	GCA_013368495.1	Scaffold		12487		
+100269	Paragonimus kellicotti	platyhelminthes	GenBank	GCA_014220965.1	Scaffold		12850		
+100452	Candidula unifasciata	gastropoda	GenBank	GCA_905116865.2	Scaffold		22464		
+101297	Conus consors	gastropoda							no_proteome_in_ncbi
+101761	Conus tribblei	gastropoda							no_proteome_in_ncbi
+102285	Rodentolepis nana	platyhelminthes	GenBank	GCA_900617975.1	Scaffold		13631		
+104711	Lamellibrachia satsuma	annelida	GenBank	GCA_022478865.1	Contig		32394		
+106299	Chlamys farreri	bivalvia							no_proteome_in_ncbi
+109671	Physella acuta	gastropoda	RefSeq	GCF_028476545.2	Contig	Full annotation	24890		
+112136	Lithophaga nigra	bivalvia							no_proteome_in_ncbi
+112525	Biomphalaria pfeifferi	gastropoda	GenBank	GCA_030265305.1	Contig		31612		
+112526	Biomphalaria straminea	gastropoda							no_proteome_in_ncbi
+115415	Phoronis australis	other_lophotrochozoan_phyla							no_proteome_in_ncbi
+116851	Eudiplozoon nipponicum	platyhelminthes							no_proteome_in_ncbi
+117903	Protopolystoma xenopodis	platyhelminthes	GenBank	GCA_900617795.1	Scaffold		37859		
+120570	Mactra quadrangularis	bivalvia							no_proteome_in_ncbi
+126420	Acanthochitona crinita	other_molluscan_classes							no_proteome_in_ncbi
+129788	Ruditapes philippinarum	bivalvia	RefSeq	GCF_026571515.1	Contig	Full annotation	40909		
+147828	Opisthorchis felineus	platyhelminthes	GenBank	GCA_004794785.1	Scaffold		11427		
+148819	Scapharca broughtonii	bivalvia							no_proteome_in_ncbi
+152013	Congeria kusceri	bivalvia							no_proteome_in_ncbi
+157069	Trichobilharzia regenti	platyhelminthes	GenBank	GCA_944472135.2	Chromosome		14478		
+157728	Saccostrea glomerata	bivalvia							no_proteome_in_ncbi
+158019	Sepia pharaonis	cephalopoda	GenBank	GCA_903632075.3	Contig		51538		
+165446	Cristaria plicata	bivalvia							no_proteome_in_ncbi
+165450	Hyriopsis cumingii	bivalvia							no_proteome_in_ncbi
+169957	Eudrilus eugeniae	annelida							no_proteome_in_ncbi
+188477	Elysia chlorotica	gastropoda	GenBank	GCA_003991915.1	Scaffold		23871		
+205083	Dreissena rostriformis	bivalvia							no_proteome_in_ncbi
+216257	Chrysomallon squamiferum	gastropoda							no_proteome_in_ncbi
+216498	Hydroides elegans	annelida							no_proteome_in_ncbi
+220873	Tegillarca granosa	bivalvia	GenBank	GCA_029721355.1	Chromosome		25076		
+225164	Lottia gigantea	gastropoda	RefSeq	GCF_000327385.1	Scaffold		23818		
+225169	Lottia scabra	gastropoda							no_proteome_in_ncbi
+228297	Argopecten purpuratus	bivalvia							no_proteome_in_ncbi
+228457	Laternula elliptica	bivalvia							no_proteome_in_ncbi
+231999	Epimenia babai	other_molluscan_classes							no_proteome_in_ncbi
+238240	Lamellibrachia luymesi	annelida							no_proteome_in_ncbi
+256136	Architeuthis dux	cephalopoda							no_proteome_in_ncbi
+259542	Plakobranchus ocellatus	gastropoda	GenBank	GCA_019648995.1	Scaffold		77230		
+262603	Goniobranchus geometricus	gastropoda							no_proteome_in_ncbi
+262604	Goniobranchus kuniei	gastropoda							no_proteome_in_ncbi
+262605	Goniobranchus leopardus	gastropoda							no_proteome_in_ncbi
+271030	Anisus vortex	gastropoda							no_proteome_in_ncbi
+271774	Alentia gelatinosa	annelida							no_proteome_in_ncbi
+282301	Macrostomum lignano	platyhelminthes	GenBank	GCA_002269645.1	Scaffold		49013		
+283909	Capitella teleta	annelida	GenBank	GCA_000328365.1	Scaffold		31977		
+294695	Argonauta argo	cephalopoda							no_proteome_in_ncbi
+302032	Aporrectodea caliginosa	annelida							no_proteome_in_ncbi
+304850	Babylonia areolata	gastropoda	RefSeq	GCF_041734735.1	Chromosome	Full annotation	22796		
+310899	Modiolus philippinarum	bivalvia							no_proteome_in_ncbi
+310900	Lithophaga antillarum	bivalvia							no_proteome_in_ncbi
+311201	Saxidomus purpurata	bivalvia							no_proteome_in_ncbi
+311461	Hirudo verbana	annelida							no_proteome_in_ncbi
+335511	Cardicola forsteri	platyhelminthes							no_proteome_in_ncbi
+351238	Amynthas corticis	annelida							no_proteome_in_ncbi
+356393	Limnoperna fortunei	bivalvia							no_proteome_in_ncbi
+358449	Laevipilina antarctica	other_molluscan_classes							no_proteome_in_ncbi
+366651	Atrina japonica	bivalvia							no_proteome_in_ncbi
+370345	Batillaria attramentaria	gastropoda	GenBank	GCA_018292915.2	Contig		40596		
+393876	Schistosoma guineensis	platyhelminthes	GenBank	GCA_944470375.2	Chromosome		9715		
+400727	Pomacea canaliculata	gastropoda	RefSeq	GCF_003073045.1	Chromosome	Full annotation	21144		
+413429	Mopalia swanii	other_molluscan_classes							no_proteome_in_ncbi
+416868	Notospermus geniculatus	other_lophotrochozoan_phyla							no_proteome_in_ncbi
+430714	Mopalia vespertina	other_molluscan_classes							no_proteome_in_ncbi
+461120	Unio delphinus	bivalvia							no_proteome_in_ncbi
+486152	Whitmania pigra	annelida							no_proteome_in_ncbi
+492055	Phoronis ovalis	other_lophotrochozoan_phyla							no_proteome_in_ncbi
+492056	Phoronis pallida	other_lophotrochozoan_phyla							no_proteome_in_ncbi
+499925	Chromodoris orientalis	gastropoda							no_proteome_in_ncbi
+508130	Goniobranchus fidelis	gastropoda							no_proteome_in_ncbi
+515824	Octopus minor	cephalopoda							no_proteome_in_ncbi
+519352	Echinococcus canadensis	platyhelminthes							no_proteome_in_ncbi
+558755	Cryptosula pallasiana	other_lophotrochozoan_phyla							no_proteome_in_ncbi
+582868	Ampullaceana balthica	gastropoda							no_proteome_in_ncbi
+623738	Octopus maya	cephalopoda							no_proteome_in_ncbi
+627230	Ostrea lurida	bivalvia							no_proteome_in_ncbi
+669229	Wirenia argentea	other_molluscan_classes							no_proteome_in_ncbi
+683711	Macrostomum hystrix	platyhelminthes							no_proteome_in_ncbi
+703304	Gibbula magus	gastropoda							no_proteome_in_ncbi
+857299	Botula fusca	bivalvia							no_proteome_in_ncbi
+880429	Alitta virens	annelida							no_proteome_in_ncbi
+1028688	Arion vulgaris	gastropoda							no_proteome_in_ncbi
+1049056	Panopea generosa	bivalvia							no_proteome_in_ncbi
+1077242	Gadila tolmiei	other_molluscan_classes							no_proteome_in_ncbi
+1093978	Elysia marginata	gastropoda	GenBank	GCA_019649035.1	Scaffold		70752		
+1131437	Terebella lapidaria	annelida							no_proteome_in_ncbi
+1163369	Schistosoma turkestanicum	platyhelminthes	GenBank	GCA_944470395.2	Chromosome		11134		
+1196096	Metaphire vulgaris	annelida							no_proteome_in_ncbi
+1209993	Amphiduros pacificus	annelida							no_proteome_in_ncbi
+1210411	Lepidonotus clava	annelida							no_proteome_in_ncbi
+1210413	Sthenelais limicola	annelida							no_proteome_in_ncbi
+1348078	Hirudinaria manillensis	annelida							no_proteome_in_ncbi
+1348078	Poecilobdella manillensis	annelida							no_proteome_in_ncbi
+1353015	Muusoctopus longibrachus	cephalopoda							no_proteome_in_ncbi
+1423836	Octopus insularis	cephalopoda							no_proteome_in_ncbi
+1491186	Alviniconcha marisindica	gastropoda							no_proteome_in_ncbi
+1582096	Octopoteuthis deletron	cephalopoda							no_proteome_in_ncbi
+1620919	Phorcus lineatus	gastropoda							no_proteome_in_ncbi
+1699438	Fragum whitleyi	bivalvia							no_proteome_in_ncbi
+1735272	Gigantopelta aegis	gastropoda	RefSeq	GCF_016097555.1	Chromosome	Full annotation	22556		
+1803738	Conchocele bisecta	bivalvia							no_proteome_in_ncbi
+1918950	Gymnomenia pellucida	other_molluscan_classes							no_proteome_in_ncbi
+2038759	Dracogyra subfuscus	gastropoda							no_proteome_in_ncbi
+2080241	Paraescarpia echinospica	annelida							no_proteome_in_ncbi
+2172688	Dirona pellucida	gastropoda							no_proteome_in_ncbi
+2201794	Muusoctopus leioderma	cephalopoda							no_proteome_in_ncbi
+2291463	Prostheceraeus crozieri	platyhelminthes							no_proteome_in_ncbi
+2291877	Archivesica marissinica	bivalvia							no_proteome_in_ncbi
+2493646	Potamilus streckersoni	bivalvia	GenBank	GCA_016746295.1	Scaffold		34937		
+2505931	Margaritifera margaritifera	bivalvia							no_proteome_in_ncbi
+2547956	Mytilisepta virgata	bivalvia							no_proteome_in_ncbi
+2559711	Macrostomum cliftonense	platyhelminthes							no_proteome_in_ncbi
+2584915	Oreohelix idahoensis	gastropoda							no_proteome_in_ncbi
+2589376	Gari tellinella	bivalvia							no_proteome_in_ncbi
+2607531	Octopus sinensis	cephalopoda	RefSeq	GCF_006345805.1	Chromosome	Full annotation	18886		
+2653900	Crassostrea hongkongensis	bivalvia							no_proteome_in_ncbi
+2653900	Magallana hongkongensis	bivalvia							no_proteome_in_ncbi
+2664684	Dimorphilus gyrociliatus	annelida	GenBank	GCA_904063045.1	Scaffold		14031		
+2682772	Atriophallophorus winterbourni	platyhelminthes							no_proteome_in_ncbi
+2718619	Terminoflustra membranaceotruncata	other_lophotrochozoan_phyla							no_proteome_in_ncbi
+2723957	Goniobranchus coi	gastropoda							no_proteome_in_ncbi
+2780533	Tritonia tetraquetra	gastropoda							no_proteome_in_ncbi
+2784310	Crassostrea angulata	bivalvia	RefSeq	GCF_025612915.1	Chromosome	Full annotation	29810		
+2830794	Bathymodiolus platifrons	bivalvia							no_proteome_in_ncbi
+2922911	Acholoe squamosa	annelida							no_proteome_in_ncbi
+3003519	Proteocephalus fallax	platyhelminthes							no_proteome_in_ncbi
+3244846	Crassostrea ariakensis	bivalvia							no_proteome_in_ncbi
