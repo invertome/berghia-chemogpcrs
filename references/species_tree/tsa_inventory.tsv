@@ -1,0 +1,149 @@
+taxid	binomial	clade	has_tsa	n_tsa_records	tsa_master_prefix	tsa_first_accession	query_error
+6161	Dugesia japonica	platyhelminthes	yes	11	GJEZ	GJEZ00000000.1	
+6162	Girardia tigrina	platyhelminthes	no	0			
+6206	Taenia saginata	platyhelminthes	no	0			
+6212	Echinococcus oligarthrus	platyhelminthes	no	0			
+6359	Platynereis dumerilii	annelida	yes	10928	GBZT	GBZT00000000.1	
+6398	Lumbricus terrestris	annelida	yes	3	GAND	GAND00000000.1	
+6421	Hirudo medicinalis	annelida	yes	1	GBRF	GBRF00000000.1	
+6426	Riftia pachyptila	annelida	no	0			
+6446	Sipunculus nudus	annelida	yes	1	GIKY	GIKY00000000.1	
+6625	Watasenia scintillans	cephalopoda	yes	3	GEDW	GEDW00000000.1	
+28841	Moniezia expansa	platyhelminthes	yes	49601	JL321728.1	JL321728.1	
+31201	Spisula solida	bivalvia	no	0			
+34573	Nautilus pompilius	cephalopoda	no	0			
+36097	Haliotis laevigata	gastropoda	yes	1	GFTT	GFTT00000000.1	
+37629	Gyrodactylus salaris	platyhelminthes	no	0			
+37655	Octopus rubescens	cephalopoda	no	0			
+42344	Haliotis discus hannai	gastropoda	yes	4	GLKB	GLKB00000000.1	
+43123	Pedicellina cernua	other_lophotrochozoan_phyla	yes	1	GIMK	GIMK00000000.1	
+45949	Corbicula fluminea	bivalvia	yes	1	GFYR	GFYR00000000.1	
+46595	Harmothoe impar	annelida	no	0			
+50426	Pinctada fucata	bivalvia	yes	1093	GELH	GELH00000000.1	
+52793	Radix auricularia	gastropoda	no	0			
+55521	Rapana venosa	gastropoda	yes	3	GISM	GISM00000000.1	
+55710	Cerastoderma edule	bivalvia	yes	1	GJGL	GJGL00000000.1	
+55729	Melanoides tuberculata	gastropoda	no	0			
+55837	Unio pictorum	bivalvia	no	0			
+60958	Piscicola geometra	annelida	no	0			
+61363	Acanthopleura granulata	other_molluscan_classes	no	0			
+61716	Hapalochlaena maculosa	cephalopoda	yes	9	GEXH	GEXH00000000.1	
+61718	Japetella diaphana	cephalopoda	no	0			
+66787	Dipylidium caninum	platyhelminthes	no	0			
+67896	Cristatella mucedo	other_lophotrochozoan_phyla	yes	1	GKVJ	GKVJ00000000.1	
+73031	Perna viridis	bivalvia	yes	59	GLLT	GLLT00000000.1	
+79327	Schmidtea mediterranea	platyhelminthes	yes	156031	GFPN	GFPN00000000.1	
+80818	Hippopus hippopus	bivalvia	no	0			
+80821	Fragum fragum	bivalvia	no	0			
+80829	Tridacna gigas	bivalvia	no	0			
+80833	Tridacna crocea	bivalvia	no	0			
+82660	Gyrodactylus bullatarudis	platyhelminthes	no	0			
+83531	Octopus mimus	cephalopoda	no	0			
+85432	Taenia pisiformis	platyhelminthes	no	0			
+87960	Patella depressa	gastropoda	no	0			
+88005	Patella pellucida	gastropoda	no	0			
+89764	Conus betulinus	gastropoda	no	0			
+94034	Taenia multiceps	platyhelminthes	yes	31282	JR948020.1	JR948020.1	
+95170	Membranipora membranacea	other_lophotrochozoan_phyla	no	0			
+95538	Streblospio benedicti	annelida	yes	1	GDBG	GDBG00000000.1	
+98310	Sinonovacula constricta	bivalvia	yes	16099	GJBG	GJBG00000000.1	
+99802	Spirometra erinaceieuropaei	platyhelminthes	yes	1	GJLF	GJLF00000000.1	
+101297	Conus consors	gastropoda	no	0			
+101761	Conus tribblei	gastropoda	yes	234	GCVM	GCVM00000000.1	
+106299	Chlamys farreri	bivalvia	no	0			
+112136	Lithophaga nigra	bivalvia	no	0			
+112526	Biomphalaria straminea	gastropoda	no	0			
+115415	Phoronis australis	other_lophotrochozoan_phyla	yes	1	GFSC	GFSC00000000.1	
+116851	Eudiplozoon nipponicum	platyhelminthes	yes	1	GFYM	GFYM00000000.1	
+120570	Mactra quadrangularis	bivalvia	no	0			
+126420	Acanthochitona crinita	other_molluscan_classes	yes	1	GJJB	GJJB00000000.1	
+148819	Scapharca broughtonii	bivalvia	yes	1	GEXI	GEXI00000000.1	
+152013	Congeria kusceri	bivalvia	no	0			
+157728	Saccostrea glomerata	bivalvia	yes	28600	GGZL	GGZL00000000.1	
+165446	Cristaria plicata	bivalvia	no	0			
+165450	Hyriopsis cumingii	bivalvia	no	0			
+169957	Eudrilus eugeniae	annelida	no	0			
+205083	Dreissena rostriformis	bivalvia	yes	2	GHIX	GHIX00000000.1	
+216257	Chrysomallon squamiferum	gastropoda	no	0			
+216498	Hydroides elegans	annelida	no	0			
+225169	Lottia scabra	gastropoda	no	0			
+228297	Argopecten purpuratus	bivalvia	no	0			
+228457	Laternula elliptica	bivalvia	no	0			
+231999	Epimenia babai	other_molluscan_classes	no	0			
+238240	Lamellibrachia luymesi	annelida	no	0			
+256136	Architeuthis dux	cephalopoda	no	0			
+262603	Goniobranchus geometricus	gastropoda	no	0			
+262604	Goniobranchus kuniei	gastropoda	no	0			
+262605	Goniobranchus leopardus	gastropoda	no	0			
+271030	Anisus vortex	gastropoda	no	0			
+271774	Alentia gelatinosa	annelida	no	0			
+294695	Argonauta argo	cephalopoda	no	0			
+302032	Aporrectodea caliginosa	annelida	yes	2	GLCB	GLCB00000000.1	
+310899	Modiolus philippinarum	bivalvia	no	0			
+310900	Lithophaga antillarum	bivalvia	no	0			
+311201	Saxidomus purpurata	bivalvia	no	0			
+311461	Hirudo verbana	annelida	yes	1	GGIQ	GGIQ00000000.1	
+335511	Cardicola forsteri	platyhelminthes	no	0			
+351238	Amynthas corticis	annelida	no	0			
+356393	Limnoperna fortunei	bivalvia	yes	64495	GBGC	GBGC00000000.1	
+358449	Laevipilina antarctica	other_molluscan_classes	no	0			
+366651	Atrina japonica	bivalvia	no	0			
+413429	Mopalia swanii	other_molluscan_classes	no	0			
+416868	Notospermus geniculatus	other_lophotrochozoan_phyla	yes	1	GFRY	GFRY00000000.1	
+430714	Mopalia vespertina	other_molluscan_classes	no	0			
+461120	Unio delphinus	bivalvia	no	0			
+486152	Whitmania pigra	annelida	no	0			
+492055	Phoronis ovalis	other_lophotrochozoan_phyla	no	0			
+492056	Phoronis pallida	other_lophotrochozoan_phyla	no	0			
+499925	Chromodoris orientalis	gastropoda	no	0			
+508130	Goniobranchus fidelis	gastropoda	no	0			
+515824	Octopus minor	cephalopoda	no	0			
+519352	Echinococcus canadensis	platyhelminthes	no	0			
+558755	Cryptosula pallasiana	other_lophotrochozoan_phyla	no	0			
+582868	Ampullaceana balthica	gastropoda	no	0			
+623738	Octopus maya	cephalopoda	yes	8	GJZI	GJZI00000000.1	
+627230	Ostrea lurida	bivalvia	no	0			
+669229	Wirenia argentea	other_molluscan_classes	no	0			
+683711	Macrostomum hystrix	platyhelminthes	no	0			
+703304	Gibbula magus	gastropoda	no	0			
+857299	Botula fusca	bivalvia	no	0			
+880429	Alitta virens	annelida	yes	1	GINI	GINI00000000.1	
+1028688	Arion vulgaris	gastropoda	no	0			
+1049056	Panopea generosa	bivalvia	no	0			
+1077242	Gadila tolmiei	other_molluscan_classes	no	0			
+1131437	Terebella lapidaria	annelida	no	0			
+1196096	Metaphire vulgaris	annelida	no	0			
+1209993	Amphiduros pacificus	annelida	no	0			
+1210411	Lepidonotus clava	annelida	no	0			
+1210413	Sthenelais limicola	annelida	no	0			
+1348078	Hirudinaria manillensis	annelida	no	0			
+1348078	Poecilobdella manillensis	annelida	no	0			
+1353015	Muusoctopus longibrachus	cephalopoda	no	0			
+1423836	Octopus insularis	cephalopoda	no	0			
+1491186	Alviniconcha marisindica	gastropoda	no	0			
+1582096	Octopoteuthis deletron	cephalopoda	yes	1	GGNB	GGNB00000000.1	
+1620919	Phorcus lineatus	gastropoda	no	0			
+1699438	Fragum whitleyi	bivalvia	no	0			
+1803738	Conchocele bisecta	bivalvia	no	0			
+1918950	Gymnomenia pellucida	other_molluscan_classes	no	0			
+2038759	Dracogyra subfuscus	gastropoda	no	0			
+2080241	Paraescarpia echinospica	annelida	yes	2	GHDL	GHDL00000000.1	
+2172688	Dirona pellucida	gastropoda	no	0			
+2201794	Muusoctopus leioderma	cephalopoda	no	0			
+2291463	Prostheceraeus crozieri	platyhelminthes	no	0			
+2291877	Archivesica marissinica	bivalvia	yes	1	GIAS	GIAS00000000.1	
+2505931	Margaritifera margaritifera	bivalvia	yes	1	GFHD	GFHD00000000.1	
+2547956	Mytilisepta virgata	bivalvia	yes	1	GFKS	GFKS00000000.1	
+2559711	Macrostomum cliftonense	platyhelminthes	no	0			
+2584915	Oreohelix idahoensis	gastropoda	no	0			
+2589376	Gari tellinella	bivalvia	no	0			
+2653900	Crassostrea hongkongensis	bivalvia	yes	1	GGKN	GGKN00000000.1	
+2653900	Magallana hongkongensis	bivalvia	yes	1	GGKN	GGKN00000000.1	
+2682772	Atriophallophorus winterbourni	platyhelminthes	no	0			
+2718619	Terminoflustra membranaceotruncata	other_lophotrochozoan_phyla	yes	1	GIMX	GIMX00000000.1	
+2723957	Goniobranchus coi	gastropoda	no	0			
+2780533	Tritonia tetraquetra	gastropoda	no	0			
+2830794	Bathymodiolus platifrons	bivalvia	yes	20	GBXK	GBXK00000000.1	
+2922911	Acholoe squamosa	annelida	no	0			
+3003519	Proteocephalus fallax	platyhelminthes	no	0			
+3244846	Crassostrea ariakensis	bivalvia	no	0			
