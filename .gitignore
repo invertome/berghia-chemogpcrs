@@ -40,6 +40,16 @@ references/**/*
 # results/ rule excludes.
 !references/curated_chemoreceptors_lophotrochozoa/
 !references/curated_chemoreceptors_lophotrochozoa/**/*
+# Species-tree small manifests + final tree (bead -dnk and children).
+# Heavy intermediates (downloaded proteomes, BUSCO outputs, per-gene
+# alignments, per-gene trees) live in references/species_tree/cache/
+# which is excluded just below.
+!references/species_tree/
+!references/species_tree/*.tsv
+!references/species_tree/*.nwk
+!references/species_tree/*.json
+!references/species_tree/*.md
+references/species_tree/cache/
 
 # Transcriptomes and genomes (large, user-provided)
 transcriptomes/
