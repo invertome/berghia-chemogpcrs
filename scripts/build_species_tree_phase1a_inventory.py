@@ -118,13 +118,19 @@ _ASSEMBLY_LEVEL_RANK = {
 class AssemblyChoice:
     """Best annotated assembly for one taxid, distilled from a list
     of `datasets summary genome taxon` records.
+
+    Phase 1e extends with `contig_n50` + `total_length_bp` from
+    assembly_stats; these help Phase 1f prioritize species with
+    higher-quality assemblies for BRAKER3 annotation.
     """
     accession: str
     source: str               # "RefSeq" | "GenBank"
     assembly_level: str       # "Chromosome" | "Scaffold" | "Contig" | "" (missing)
-    annotation_status: str    # "Current" | "" (missing)
+    annotation_status: str    # "Current" | "" (missing == unannotated)
     est_protein_count: int    # 0 when unknown
     submission_date: str      # "" when unknown
+    contig_n50: int = 0       # 0 when unknown
+    total_length_bp: int = 0  # 0 when unknown
 
 
 def _is_annotated(record: dict) -> bool:
@@ -144,47 +150,88 @@ def _source_label(record: dict) -> str:
     return src or "Unknown"
 
 
-def pick_best_assembly(records: list[dict]) -> AssemblyChoice | None:
-    """Choose the best annotated assembly from a list of NCBI Datasets
-    summary records (the per-line JSON objects returned by
+def _assembly_stats(record: dict) -> tuple[int, int]:
+    """Return (contig_n50, total_length_bp) from a datasets record.
+    Both default to 0 when missing.
+    """
+    stats = record.get("assembly_stats") or {}
+    try:
+        n50 = int(stats.get("contig_n50", 0) or 0)
+    except (TypeError, ValueError):
+        n50 = 0
+    try:
+        total = int(stats.get("total_sequence_length", 0) or 0)
+    except (TypeError, ValueError):
+        total = 0
+    return n50, total
+
+
+def pick_best_assembly(
+    records: list[dict],
+    require_annotation: bool = True,
+) -> AssemblyChoice | None:
+    """Choose the best assembly from a list of NCBI Datasets summary
+    records (the per-line JSON objects returned by
     `datasets summary genome taxon <taxid> --as-json-lines`).
 
-    Priority:
+    Default (Phase 1a, require_annotation=True) priority:
       1) source == RefSeq AND annotated
       2) source == GenBank AND annotated
       (records that aren't annotated are excluded)
 
+    Phase 1e mode (require_annotation=False) extends priority to:
+      1) RefSeq AND annotated
+      2) GenBank AND annotated
+      3) GenBank AND unannotated  <-- BRAKER3 candidates
+      (RefSeq+unannotated effectively doesn't exist on NCBI)
+
     Tie-breaks within priority class:
       a) higher assembly_level (Complete Genome > Chromosome > Scaffold > Contig)
-      b) more recent submission_date (lex sort on ISO-ish YYYY-MM-DD)
+      b) more recent submission_date
 
-    Returns None if no annotated record exists.
+    Returns None when no candidate passes the priority filter.
     """
-    annotated = [r for r in records if _is_annotated(r)]
-    if not annotated:
+    candidates = []
+    for r in records:
+        if _is_annotated(r):
+            candidates.append((r, True))   # (record, is_annotated)
+        elif not require_annotation:
+            candidates.append((r, False))
+    if not candidates:
         return None
 
-    def sort_key(r: dict) -> tuple:
+    def sort_key(item) -> tuple:
+        r, annotated = item
         src = _source_label(r)
-        # Priority: RefSeq (rank 2) > GenBank (rank 1) > Unknown (0)
         src_rank = {"RefSeq": 2, "GenBank": 1}.get(src, 0)
+        # Annotation rank: annotated (rank 1) beats unannotated (rank 0)
+        # within the same source. Combined with source rank this gives:
+        # RefSeq+annot=22, GenBank+annot=12, GenBank+unannot=10, etc.
+        ann_rank = 1 if annotated else 0
         level = (r.get("assembly_info") or {}).get("assembly_level", "") or ""
         level_rank = _ASSEMBLY_LEVEL_RANK.get(level, 0)
         date = (r.get("assembly_info") or {}).get("submission_date", "") or ""
-        # Negate for descending sort on first three; date is descending too
-        return (-src_rank, -level_rank, _negate_date(date))
+        # Encode as a single tuple where lower sorts first; negate ranks
+        # for descending. Use (src*10+ann) to keep "annotated source X"
+        # beating "unannotated source X" before assembly level matters.
+        combined_rank = src_rank * 10 + ann_rank
+        return (-combined_rank, -level_rank, _negate_date(date))
 
-    annotated.sort(key=sort_key)
-    best = annotated[0]
-    ann = best.get("annotation_info") or {}
+    candidates.sort(key=sort_key)
+    best, best_annotated = candidates[0]
+
+    ann = best.get("annotation_info") or {} if best_annotated else {}
     ann_stats = (ann.get("stats") or {}).get("gene_counts") or {}
+    n50, total_len = _assembly_stats(best)
     return AssemblyChoice(
         accession=best.get("accession", ""),
         source=_source_label(best),
         assembly_level=(best.get("assembly_info") or {}).get("assembly_level", "") or "",
-        annotation_status=ann.get("status", "") or "",
+        annotation_status=(ann.get("status", "") or "") if best_annotated else "",
         est_protein_count=int(ann_stats.get("protein_coding", 0) or 0),
         submission_date=(best.get("assembly_info") or {}).get("submission_date", "") or "",
+        contig_n50=n50,
+        total_length_bp=total_len,
     )
 
 
@@ -241,15 +288,25 @@ class ManifestEntry:
     drop_reason: str
 
 
-def write_manifest_tsv(path: Union[str, Path], entries: list[ManifestEntry]) -> None:
+def write_manifest_tsv(
+    path: Union[str, Path],
+    entries: list[ManifestEntry],
+    include_assembly_stats: bool = False,
+) -> None:
     """Write a TSV with MANIFEST_COLUMNS header, then one row per entry,
     sorted ascending by taxid. Dropped entries have empty assembly fields.
+
+    When `include_assembly_stats=True` (Phase 1e), two extra columns
+    `contig_n50` and `total_length_bp` are appended.
     """
     rows = sorted(entries, key=lambda e: e.taxon.taxid)
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
+    columns = list(MANIFEST_COLUMNS)
+    if include_assembly_stats:
+        columns += ["contig_n50", "total_length_bp"]
     with out.open("w") as f:
-        f.write("\t".join(MANIFEST_COLUMNS) + "\n")
+        f.write("\t".join(columns) + "\n")
         for e in rows:
             t = e.taxon
             c = e.choice
@@ -259,6 +316,8 @@ def write_manifest_tsv(path: Union[str, Path], entries: list[ManifestEntry]) -> 
                     "", "", "", "", "", "",
                     e.drop_reason,
                 ]
+                if include_assembly_stats:
+                    row += ["", ""]
             else:
                 row = [
                     str(t.taxid), t.binomial, t.clade,
@@ -267,6 +326,8 @@ def write_manifest_tsv(path: Union[str, Path], entries: list[ManifestEntry]) -> 
                     c.submission_date,
                     e.drop_reason,
                 ]
+                if include_assembly_stats:
+                    row += [str(c.contig_n50), str(c.total_length_bp)]
             f.write("\t".join(row) + "\n")
 
 
@@ -353,21 +414,78 @@ class InventorySummary:
     n_query_errors: int
 
 
+def read_taxids_to_skip(
+    manifest_path: Union[str, Path],
+    mode: str = "dropped_only",
+) -> set[int]:
+    """Read a prior manifest TSV and return the set of taxids to SKIP
+    when re-running the inventory.
+
+    `mode="dropped_only"` (default for Phase 1e): skip taxa that had
+    a successful Phase 1a entry (drop_reason == ""), so we only
+    re-query the taxa Phase 1a dropped.
+
+    `mode="successful_only"`: skip taxa that were dropped — useful if
+    you want to re-run only the previously-successful subset (e.g.,
+    to refresh assembly stats).
+    """
+    path = Path(manifest_path)
+    if not path.exists():
+        raise FileNotFoundError(f"manifest not found: {path}")
+    skip: set[int] = set()
+    import csv as _csv
+    with path.open() as f:
+        reader = _csv.DictReader(f, delimiter="\t")
+        for row in reader:
+            try:
+                taxid = int(row["taxid"])
+            except (KeyError, ValueError):
+                continue
+            drop_reason = (row.get("drop_reason") or "").strip()
+            if mode == "dropped_only" and not drop_reason:
+                skip.add(taxid)
+            elif mode == "successful_only" and drop_reason:
+                skip.add(taxid)
+    return skip
+
+
 def build_inventory_manifest(
     refs_root: Union[str, Path],
     out_path: Union[str, Path],
     query_fn: Callable[[int], list[dict]] = query_datasets_for_taxon,
     progress_every: int = 10,
+    require_annotation: bool = True,
+    taxids_to_skip: set[int] | None = None,
+    include_assembly_stats: bool = False,
 ) -> InventorySummary:
     """Walk `refs_root`, query NCBI Datasets per taxon (via `query_fn`,
     injectable for testing), pick best assembly, write the manifest TSV
     to `out_path`. Returns an InventorySummary.
 
+    Phase 1e args:
+    - `require_annotation=False`: also accept unannotated GenBank
+      assemblies as fallback candidates (3rd-priority).
+    - `taxids_to_skip`: set of taxids to omit entirely from this run
+      (e.g., skip Phase 1a's successful 91 species when re-querying
+      only the dropped 148).
+    - `include_assembly_stats=True`: emit contig_n50 + total_length_bp
+      columns.
+
     Query failures (RuntimeError from query_fn) are recorded as
     drop_reason="query_error" so the whole batch doesn't abort on a
     transient NCBI hiccup — those taxa can be retried later.
     """
-    taxa = collect_reference_taxa(refs_root)
+    taxa_all = collect_reference_taxa(refs_root)
+    if taxids_to_skip:
+        taxa = [t for t in taxa_all if t.taxid not in taxids_to_skip]
+        skipped_n = len(taxa_all) - len(taxa)
+        if skipped_n:
+            print(
+                f"Skipping {skipped_n} taxa per --limit-taxids-from filter",
+                file=sys.stderr,
+            )
+    else:
+        taxa = taxa_all
     entries: list[ManifestEntry] = []
     n_refseq = 0
     n_genbank = 0
@@ -386,7 +504,7 @@ def build_inventory_manifest(
             n_query_errors += 1
             continue
 
-        choice = pick_best_assembly(records)
+        choice = pick_best_assembly(records, require_annotation=require_annotation)
         if choice is None:
             entries.append(ManifestEntry(
                 taxon=taxon, choice=None, drop_reason="no_proteome_in_ncbi",
@@ -404,7 +522,7 @@ def build_inventory_manifest(
                 file=sys.stderr,
             )
 
-    write_manifest_tsv(out_path, entries)
+    write_manifest_tsv(out_path, entries, include_assembly_stats=include_assembly_stats)
 
     n_total = len(taxa)
     n_dropped = sum(1 for e in entries if e.drop_reason)
@@ -460,6 +578,32 @@ def _build_argparser() -> argparse.ArgumentParser:
         default=60,
         help="Per-query subprocess timeout in seconds",
     )
+    p.add_argument(
+        "--allow-unannotated",
+        action="store_true",
+        help=(
+            "Phase 1e mode: also accept unannotated GenBank assemblies "
+            "as fallback candidates (priority: RefSeq+annot > GenBank+annot > "
+            "GenBank+unannotated). When set, output TSV gains contig_n50 + "
+            "total_length_bp columns for Phase 1f BRAKER3 prioritization."
+        ),
+    )
+    p.add_argument(
+        "--limit-taxids-from",
+        type=Path,
+        default=None,
+        help=(
+            "Path to a prior manifest TSV. When provided, restrict this run "
+            "to taxa NOT yet covered there. Default mode 'dropped_only' "
+            "skips successful Phase 1a entries."
+        ),
+    )
+    p.add_argument(
+        "--limit-mode",
+        choices=("dropped_only", "successful_only"),
+        default="dropped_only",
+        help="Which subset to keep when --limit-taxids-from is given",
+    )
     return p
 
 
@@ -471,10 +615,22 @@ def main(argv: list[str] | None = None) -> int:
             taxid, datasets_bin=args.datasets_bin, timeout=args.timeout,
         )
 
+    skip_set: set[int] | None = None
+    if args.limit_taxids_from:
+        skip_set = read_taxids_to_skip(args.limit_taxids_from, mode=args.limit_mode)
+        print(
+            f"--limit-taxids-from {args.limit_taxids_from} (mode={args.limit_mode}): "
+            f"{len(skip_set)} taxa will be skipped",
+            file=sys.stderr,
+        )
+
     summary = build_inventory_manifest(
         refs_root=args.refs_root,
         out_path=args.out,
         query_fn=query_fn,
+        require_annotation=not args.allow_unannotated,
+        taxids_to_skip=skip_set,
+        include_assembly_stats=args.allow_unannotated,
     )
     return 0 if summary.n_total > 0 else 1
 

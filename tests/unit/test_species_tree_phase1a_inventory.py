@@ -617,3 +617,154 @@ class TestBuildInventoryManifest:
         taxid_to_drop = {r.split("\t")[0]: r.split("\t")[9] for r in rows}
         assert taxid_to_drop["29159"] == "query_error"
         assert taxid_to_drop["6500"] == "no_proteome_in_ncbi"
+
+
+# ----------------------------------------------------------------------
+# Phase 1e extensions: --allow-unannotated + --limit-taxids-from
+# ----------------------------------------------------------------------
+
+class TestPickBestAssemblyUnannotated:
+    """When require_annotation=False, unannotated GenBank assemblies
+    become a 3rd-priority candidate: RefSeq+annot > GenBank+annot >
+    GenBank+unannotated > drop. This is Phase 1e behavior — Nath et al.
+    annotated unannotated GenBank assemblies themselves with BRAKER3.
+    """
+
+    @staticmethod
+    def _genbank_unannotated(acc: str, level: str = "Scaffold",
+                              date: str = "2024-01-01",
+                              n50: int = 50000,
+                              total_len: int = 500_000_000) -> dict:
+        # No annotation_info key → unannotated
+        return {
+            "accession": acc,
+            "source_database": "SOURCE_DATABASE_GENBANK",
+            "assembly_info": {
+                "assembly_level": level,
+                "submission_date": date,
+            },
+            "assembly_stats": {
+                "contig_n50": n50,
+                "total_sequence_length": total_len,
+            },
+        }
+
+    def test_strict_mode_rejects_unannotated(self) -> None:
+        # require_annotation default behavior is unchanged
+        records = [self._genbank_unannotated("GCA_999.1")]
+        assert inv.pick_best_assembly(records) is None
+
+    def test_allow_unannotated_picks_unannotated_when_present(self) -> None:
+        records = [self._genbank_unannotated("GCA_999.1")]
+        best = inv.pick_best_assembly(records, require_annotation=False)
+        assert best is not None
+        assert best.accession == "GCA_999.1"
+        assert best.source == "GenBank"
+        assert best.annotation_status == ""  # unannotated
+
+    def test_allow_unannotated_still_prefers_annotated(self) -> None:
+        # When both annotated and unannotated are present, annotated wins
+        annotated = {
+            "accession": "GCF_AAA.1",
+            "source_database": "SOURCE_DATABASE_REFSEQ",
+            "annotation_info": {"status": "Current",
+                "stats": {"gene_counts": {"protein_coding": 20000}}},
+            "assembly_info": {"assembly_level": "Scaffold",
+                              "submission_date": "2024-01-01"},
+        }
+        unannotated = self._genbank_unannotated("GCA_BBB.1")
+        best = inv.pick_best_assembly(
+            [unannotated, annotated], require_annotation=False,
+        )
+        assert best.accession == "GCF_AAA.1"
+        assert best.annotation_status == "Current"
+
+    def test_assembly_stats_carried_into_choice(self) -> None:
+        records = [self._genbank_unannotated(
+            "GCA_999.1", n50=125000, total_len=1_500_000_000,
+        )]
+        best = inv.pick_best_assembly(records, require_annotation=False)
+        assert best.contig_n50 == 125000
+        assert best.total_length_bp == 1_500_000_000
+
+
+class TestManifestTsvUnannotatedColumns:
+    """Manifest TSV gains contig_n50 + total_length_bp columns when
+    --allow-unannotated mode is on (Phase 1e). These help Phase 1f
+    prioritize species with higher-quality assemblies for BRAKER3.
+    """
+
+    def test_extra_columns_appended(self, tmp_path: Path) -> None:
+        out = tmp_path / "manifest.tsv"
+        inv.write_manifest_tsv(out, [], include_assembly_stats=True)
+        header = out.read_text().splitlines()[0].split("\t")
+        assert "contig_n50" in header
+        assert "total_length_bp" in header
+
+    def test_default_schema_unchanged(self, tmp_path: Path) -> None:
+        # Phase 1a's existing output schema (without the new columns)
+        out = tmp_path / "manifest.tsv"
+        inv.write_manifest_tsv(out, [])
+        header = out.read_text().splitlines()[0].split("\t")
+        assert header == [
+            "taxid", "binomial", "clade", "source", "accession",
+            "assembly_level", "annotation_status", "est_protein_count",
+            "submission_date", "drop_reason",
+        ]
+
+
+class TestLimitTaxidsFromManifest:
+    """When provided a prior Phase 1a manifest, build_inventory_manifest
+    can restrict to dropped taxa only — supports Phase 1e re-query of
+    only the 148 species that had no proteome in Phase 1a, without
+    re-querying the 91 successful species.
+    """
+
+    def test_dropped_subset_picked(self, tmp_path: Path) -> None:
+        # Write a fake prior manifest with one success + one drop
+        prior = tmp_path / "prior.tsv"
+        cols = ("taxid","binomial","clade","source","accession",
+                "assembly_level","annotation_status","est_protein_count",
+                "submission_date","drop_reason")
+        with prior.open("w") as f:
+            f.write("\t".join(cols) + "\n")
+            f.write("6500\tAplysia californica\tgastropoda\tRefSeq\t"
+                    "GCF_000002075.1\tScaffold\tCurrent\t17654\t2024-01-01\t\n")
+            f.write("6359\tPlatynereis dumerilii\tannelida\t\t\t\t\t\t\t"
+                    "no_proteome_in_ncbi\n")
+        skip = inv.read_taxids_to_skip(prior, mode="dropped_only")
+        # In dropped_only mode, only 6359 is queriable; 6500 is skipped
+        assert 6500 in skip
+        assert 6359 not in skip
+
+
+class TestUnannotatedQueryFlag:
+    """The datasets-CLI wrapper supports an --assembly-source flag.
+    For Phase 1e we may need a separate query path that doesn't
+    filter to annotated assemblies. Tested via query construction.
+    """
+
+    def test_include_unannotated_passes_proper_args(self, monkeypatch) -> None:
+        captured: dict = {}
+
+        class _R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return _R()
+
+        monkeypatch.setattr(inv.subprocess, "run", fake_run)
+        inv.query_datasets_for_taxon(6359)
+        # The default query doesn't pass --reference or filter flags;
+        # NCBI returns both annotated and unannotated assemblies by
+        # default. Our pick_best_assembly is what filters by annotation.
+        # This test just confirms the CLI invocation stays minimal so
+        # Phase 1e can rely on the same wrapper.
+        assert "datasets" in captured["cmd"][0] or captured["cmd"][0] == "datasets"
+        assert "--reference" not in captured["cmd"]
+        # We DO want to make sure no flag silently filters out
+        # unannotated assemblies on the CLI side.
+        assert "--annotated" not in captured["cmd"]
