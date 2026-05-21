@@ -96,5 +96,6 @@ docs/plans/
 
 tools/deeptmhmm/
 containers/*.sif
+external/braker4/
 methods_log.md
 .gitignore

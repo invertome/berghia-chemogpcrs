@@ -1,0 +1,20 @@
+# Conda env spec for the BRAKER4 standalone Snakemake driver (bead -p49).
+# Pinned to the versions the BRAKER4 maintainers test against — newer
+# Snakemake releases sometimes break BRAKER4's per-rule SLURM configuration,
+# so don't bump these without re-validating.
+#
+# Bootstrap on Unity via scripts/unity/install_braker4.sh.
+name: braker4_runner
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python>=3.10
+  - snakemake==8.18.2
+  - snakemake-executor-plugin-slurm==2.6.0
+  - pyyaml>=6.0
+  - mamba
+  # Unity provides Apptainer system-wide (Apptainer/Singularity compat); the
+  # `singularity` conda package is included as a backup if the system
+  # binary is missing in the activated env's PATH.
+  - singularity>=3.8
