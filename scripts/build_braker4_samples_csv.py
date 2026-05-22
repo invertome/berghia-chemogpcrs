@@ -61,29 +61,46 @@ def sanitize_sample_name(name: str) -> str:
     return s.strip("_")
 
 
-def read_targets(manifest_path: Union[str, Path]) -> list[SpeciesTarget]:
-    """Read Phase 1e manifest, return rows with non-empty accession.
+def read_targets(*manifest_paths: Union[str, Path]) -> list[SpeciesTarget]:
+    """Read one or more manifest TSVs; return rows with non-empty
+    accession. Variadic so a single Phase 1e manifest still works, or
+    a Phase 1e + Phase 1d extension manifest can be combined.
 
-    Only the 4 standard columns are read; Phase 1e's extra contig_n50 +
-    total_length_bp are ignored.
+    Supports two column schemas:
+      - Phase 1e (genome_inventory_unannotated.tsv): clade column is
+        named `clade`.
+      - Phase 1d (extension_inventory.tsv): clade column is named
+        `clade_name`; its `policy_class` column is not carried into
+        SpeciesTarget (BRAKER4 doesn't need it).
+
+    Dedup: when the same taxid appears in multiple manifests, the
+    FIRST manifest in `manifest_paths` order wins. Pass Phase 1e first
+    so its annotation lineage takes precedence over a Phase 1d entry
+    for the same species.
     """
     targets: list[SpeciesTarget] = []
-    with Path(manifest_path).open() as f:
-        reader = csv.DictReader(f, delimiter="\t")
-        for row in reader:
-            accession = (row.get("accession") or "").strip()
-            if not accession:
-                continue
-            try:
-                taxid = int(row["taxid"])
-            except (KeyError, ValueError):
-                continue
-            targets.append(SpeciesTarget(
-                taxid=taxid,
-                binomial=(row.get("binomial") or "").strip(),
-                clade=(row.get("clade") or "").strip(),
-                accession=accession,
-            ))
+    seen: set[int] = set()
+    for manifest_path in manifest_paths:
+        with Path(manifest_path).open() as f:
+            reader = csv.DictReader(f, delimiter="\t")
+            for row in reader:
+                accession = (row.get("accession") or "").strip()
+                if not accession:
+                    continue
+                try:
+                    taxid = int(row["taxid"])
+                except (KeyError, ValueError):
+                    continue
+                if taxid in seen:
+                    continue
+                seen.add(taxid)
+                clade = (row.get("clade") or row.get("clade_name") or "").strip()
+                targets.append(SpeciesTarget(
+                    taxid=taxid,
+                    binomial=(row.get("binomial") or "").strip(),
+                    clade=clade,
+                    accession=accession,
+                ))
     targets.sort(key=lambda t: t.taxid)
     return targets
 
@@ -142,8 +159,14 @@ def _build_argparser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
-        "--manifest", type=Path, required=True,
-        help="Phase 1e manifest TSV.",
+        "--manifest", type=Path, required=True, nargs="+",
+        help=(
+            "One or more manifest TSVs. Accepts Phase 1e "
+            "(genome_inventory_unannotated.tsv, clade column 'clade') "
+            "and/or Phase 1d (extension_inventory.tsv, clade column "
+            "'clade_name'). When passing both, list Phase 1e first so "
+            "its entries win the per-taxid dedup."
+        ),
     )
     p.add_argument(
         "--genome-cache", type=Path, required=True,
@@ -175,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
 
-    targets = read_targets(args.manifest)
+    targets = read_targets(*args.manifest)
     rows: list[dict[str, str]] = []
     n_missing = 0
     for target in targets:

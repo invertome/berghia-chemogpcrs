@@ -46,6 +46,132 @@ def _write_phase1e_manifest(path: Path, rows: list[dict]) -> None:
             f.write("\t".join(r.get(c, "") for c in PHASE1E_COLUMNS) + "\n")
 
 
+PHASE1D_COLUMNS = (
+    "taxid", "binomial", "policy_class", "clade_name", "source",
+    "accession", "assembly_level", "annotation_status",
+    "est_protein_count", "submission_date", "contig_n50",
+    "total_length_bp",
+)
+
+
+def _write_phase1d_manifest(path: Path, rows: list[dict]) -> None:
+    with path.open("w") as f:
+        f.write("\t".join(PHASE1D_COLUMNS) + "\n")
+        for r in rows:
+            f.write("\t".join(r.get(c, "") for c in PHASE1D_COLUMNS) + "\n")
+
+
+# ----------------------------------------------------------------------
+# read_targets — multi-manifest + clade_name column support
+# ----------------------------------------------------------------------
+
+class TestReadTargetsMultiManifest:
+    """Bead -vqh: Phase 1d extension manifest must flow into the same
+    samples.csv as Phase 1e, with per-taxid dedup (Phase 1e wins) and
+    transparent handling of the `clade` vs `clade_name` column rename.
+    """
+
+    def test_single_phase1e_manifest_still_works(self, tmp_path: Path) -> None:
+        m = tmp_path / "p1e.tsv"
+        _write_phase1e_manifest(m, [
+            {"taxid": "10", "binomial": "Aaa bbb", "clade": "gastropoda",
+             "accession": "GCA_1"},
+        ])
+        targets = gen.read_targets(m)
+        assert len(targets) == 1
+        assert targets[0].taxid == 10
+        assert targets[0].clade == "gastropoda"
+
+    def test_phase1d_clade_name_column_recognized(self, tmp_path: Path) -> None:
+        m = tmp_path / "p1d.tsv"
+        _write_phase1d_manifest(m, [
+            {"taxid": "20", "binomial": "Ccc ddd",
+             "policy_class": "heterobranchia",
+             "clade_name": "Heterobranchia", "accession": "GCA_2"},
+        ])
+        targets = gen.read_targets(m)
+        assert len(targets) == 1
+        assert targets[0].taxid == 20
+        # The Phase 1d clade_name maps into SpeciesTarget.clade
+        assert targets[0].clade == "Heterobranchia"
+
+    def test_combines_phase1e_and_phase1d_dedup_first_wins(
+        self, tmp_path: Path,
+    ) -> None:
+        m1 = tmp_path / "p1e.tsv"
+        m2 = tmp_path / "p1d.tsv"
+        _write_phase1e_manifest(m1, [
+            {"taxid": "10", "binomial": "Phase1e sp", "clade": "p1e_clade",
+             "accession": "GCA_E1"},
+            {"taxid": "20", "binomial": "Other sp", "clade": "p1e_clade",
+             "accession": "GCA_E2"},
+        ])
+        _write_phase1d_manifest(m2, [
+            # taxid 10 overlaps with Phase 1e — Phase 1e must win
+            {"taxid": "10", "binomial": "Phase1d sp",
+             "policy_class": "heterobranchia",
+             "clade_name": "Heterobranchia", "accession": "GCA_D1"},
+            # taxid 30 is Phase 1d-only — must be picked up
+            {"taxid": "30", "binomial": "New sp",
+             "policy_class": "other_mollusca",
+             "clade_name": "Bivalvia", "accession": "GCA_D3"},
+        ])
+        targets = gen.read_targets(m1, m2)
+        by_taxid = {t.taxid: t for t in targets}
+        assert set(by_taxid) == {10, 20, 30}
+        # Phase 1e wins the dedup — clade and accession come from m1, not m2
+        assert by_taxid[10].clade == "p1e_clade"
+        assert by_taxid[10].accession == "GCA_E1"
+        # New Phase 1d entry comes through cleanly
+        assert by_taxid[30].clade == "Bivalvia"
+
+    def test_empty_manifest_in_combination_does_no_harm(
+        self, tmp_path: Path,
+    ) -> None:
+        m1 = tmp_path / "p1e.tsv"
+        m2 = tmp_path / "p1d.tsv"
+        _write_phase1e_manifest(m1, [
+            {"taxid": "10", "binomial": "A b", "clade": "x",
+             "accession": "GCA_1"},
+        ])
+        _write_phase1d_manifest(m2, [])  # header only
+        targets = gen.read_targets(m1, m2)
+        assert len(targets) == 1
+        assert targets[0].taxid == 10
+
+    def test_main_accepts_multiple_manifests(self, tmp_path: Path) -> None:
+        m1 = tmp_path / "p1e.tsv"
+        m2 = tmp_path / "p1d.tsv"
+        _write_phase1e_manifest(m1, [
+            {"taxid": "10", "binomial": "Aaa bbb", "clade": "p1e",
+             "accession": "GCA_1"},
+        ])
+        _write_phase1d_manifest(m2, [
+            {"taxid": "20", "binomial": "Ccc ddd",
+             "policy_class": "heterobranchia",
+             "clade_name": "Heterobranchia", "accession": "GCA_2"},
+        ])
+        genome_cache = tmp_path / "g"
+        genome_cache.mkdir()
+        (genome_cache / "10_Aaa_bbb.fasta").write_text(">x\nA\n")
+        (genome_cache / "20_Ccc_ddd.fasta").write_text(">x\nA\n")
+        protein_db = tmp_path / "p.fa"
+        protein_db.write_text(">x\nM\n")
+        out = tmp_path / "samples.csv"
+
+        rc = gen.main([
+            "--manifest", str(m1), str(m2),
+            "--genome-cache", str(genome_cache),
+            "--protein-db", str(protein_db),
+            "--out", str(out),
+        ])
+        assert rc == 0
+        with out.open() as f:
+            rows = list(csv.DictReader(f))
+        sample_names = sorted(r["sample_name"] for r in rows)
+        assert sample_names == ["10_Aaa_bbb", "20_Ccc_ddd"]
+
+
 # ----------------------------------------------------------------------
 # sanitize_sample_name
 # ----------------------------------------------------------------------

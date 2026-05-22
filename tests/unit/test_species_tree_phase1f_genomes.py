@@ -95,6 +95,90 @@ class TestReadDownloadTargets:
 
 
 # ----------------------------------------------------------------------
+# read_download_targets — Phase 1d extension support + dedup
+# (Bead -vqh: download script must also consume extension_inventory.tsv)
+# ----------------------------------------------------------------------
+
+class TestReadDownloadTargetsExtensionManifest:
+
+    PHASE1E_COLUMNS = (
+        "taxid", "binomial", "clade", "source", "accession",
+        "assembly_level", "annotation_status", "est_protein_count",
+        "submission_date", "drop_reason", "contig_n50", "total_length_bp",
+    )
+    PHASE1D_COLUMNS = (
+        "taxid", "binomial", "policy_class", "clade_name", "source",
+        "accession", "assembly_level", "annotation_status",
+        "est_protein_count", "submission_date", "contig_n50",
+        "total_length_bp",
+    )
+
+    def _write_p1e(self, path: Path, rows: list[dict]) -> None:
+        with path.open("w") as f:
+            f.write("\t".join(self.PHASE1E_COLUMNS) + "\n")
+            for r in rows:
+                f.write("\t".join(r.get(c, "") for c in self.PHASE1E_COLUMNS) + "\n")
+
+    def _write_p1d(self, path: Path, rows: list[dict]) -> None:
+        with path.open("w") as f:
+            f.write("\t".join(self.PHASE1D_COLUMNS) + "\n")
+            for r in rows:
+                f.write("\t".join(r.get(c, "") for c in self.PHASE1D_COLUMNS) + "\n")
+
+    def test_phase1d_clade_name_column_recognized(self, tmp_path: Path) -> None:
+        m = tmp_path / "p1d.tsv"
+        self._write_p1d(m, [
+            {"taxid": "20", "binomial": "Ccc ddd",
+             "policy_class": "heterobranchia",
+             "clade_name": "Heterobranchia", "accession": "GCA_D2"},
+        ])
+        targets = dl.read_download_targets(m)
+        assert len(targets) == 1
+        assert targets[0].clade == "Heterobranchia"
+        assert targets[0].accession == "GCA_D2"
+
+    def test_combined_dedup_first_wins(self, tmp_path: Path) -> None:
+        m1 = tmp_path / "p1e.tsv"
+        m2 = tmp_path / "p1d.tsv"
+        self._write_p1e(m1, [
+            {"taxid": "10", "binomial": "Phase1e", "clade": "p1e_clade",
+             "accession": "GCA_E1"},
+            {"taxid": "20", "binomial": "Other", "clade": "p1e_clade",
+             "accession": "GCA_E2"},
+        ])
+        self._write_p1d(m2, [
+            # taxid 10 overlaps Phase 1e — Phase 1e wins
+            {"taxid": "10", "binomial": "Phase1d",
+             "policy_class": "heterobranchia",
+             "clade_name": "Heterobranchia", "accession": "GCA_D1"},
+            # taxid 30 is new
+            {"taxid": "30", "binomial": "Brand new",
+             "policy_class": "other_mollusca",
+             "clade_name": "Bivalvia", "accession": "GCA_D3"},
+        ])
+        targets = dl.read_download_targets(m1, m2)
+        by_taxid = {t.taxid: t for t in targets}
+        assert set(by_taxid) == {10, 20, 30}
+        # Phase 1e wins dedup for taxid 10
+        assert by_taxid[10].accession == "GCA_E1"
+        assert by_taxid[10].clade == "p1e_clade"
+        # New Phase 1d entry came through
+        assert by_taxid[30].clade == "Bivalvia"
+        assert by_taxid[30].accession == "GCA_D3"
+
+    def test_single_phase1d_only(self, tmp_path: Path) -> None:
+        m = tmp_path / "only_p1d.tsv"
+        self._write_p1d(m, [
+            {"taxid": "100", "binomial": "Aa bb",
+             "policy_class": "rare_basal",
+             "clade_name": "Polyplacophora", "accession": "GCA_X"},
+        ])
+        targets = dl.read_download_targets(m)
+        assert len(targets) == 1
+        assert targets[0].clade == "Polyplacophora"
+
+
+# ----------------------------------------------------------------------
 # target_output_path — single FASTA, not paired
 # ----------------------------------------------------------------------
 
@@ -427,7 +511,8 @@ class TestArgparser:
         args = parser.parse_args([
             "--manifest", "m.tsv", "--cache-dir", "out",
         ])
-        assert args.manifest == Path("m.tsv")
+        # nargs='+' wraps the value in a list
+        assert args.manifest == [Path("m.tsv")]
         assert args.cache_dir == Path("out")
         assert args.datasets_bin == "datasets"
 
