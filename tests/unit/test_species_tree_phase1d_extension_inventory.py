@@ -301,6 +301,59 @@ class TestSelectForClade:
         out = ext.select_for_clade(records, self._policy(), set())
         assert out[0].binomial == "Genus species"
 
+    def test_drops_mitochondrial_only_complete_genome(self) -> None:
+        # NCBI marks complete mtDNA-only deposits (~16 kb) as
+        # "Complete Genome". They pass any assembly_level filter but
+        # are useless for BRAKER4 annotation; must be filtered by size.
+        records = [
+            _record("GCA_mito1", taxid=10, organism_name="Mito only",
+                    assembly_level="Complete Genome", total_length=16_500),
+            _record("GCA_real", taxid=20, organism_name="Real genome",
+                    assembly_level="Chromosome", total_length=1_000_000_000),
+        ]
+        out = ext.select_for_clade(records, self._policy(), set())
+        assert {e.taxid for e in out} == {20}
+
+    def test_keeps_real_small_genome_above_10mb(self) -> None:
+        # ~34 MB Phyllodesmium-style small-but-real nuclear assembly
+        # must NOT be filtered out by the mtDNA guard.
+        records = [
+            _record("GCA_1", taxid=10, organism_name="Phyllodesmium x",
+                    assembly_level="Scaffold", total_length=34_020_019),
+        ]
+        out = ext.select_for_clade(records, self._policy(), set())
+        assert {e.taxid for e in out} == {10}
+
+
+class TestAlwaysExclude:
+    """Berghia stephanieae (taxid 1287507) is sourced from a separate
+    `genomes/` path, not from references/nath_et_al or the species_tree
+    manifests, so the standard dedup misses her. The orchestrator must
+    always exclude her.
+    """
+
+    def test_berghia_taxid_excluded_even_when_not_in_exclude_set(self) -> None:
+        def fake_query(clade: str) -> list[dict]:
+            return [
+                _record("GCF_BERGHIA", taxid=1287507,
+                        organism_name="Berghia stephanieae",
+                        assembly_level="Chromosome"),
+                _record("GCA_OTHER", taxid=9999,
+                        organism_name="Other species",
+                        assembly_level="Chromosome"),
+            ]
+        policies = [ext.ClaadePolicy("Heterobranchia", "heterobranchia",
+                                      "", False, None)]
+        entries = ext.build_extension_inventory(
+            policies, exclude_taxids=set(), query_fn=fake_query,
+        )
+        taxids = {e.taxid for e in entries}
+        assert 1287507 not in taxids
+        assert 9999 in taxids
+
+    def test_berghia_in_always_exclude_constant(self) -> None:
+        assert 1287507 in ext.ALWAYS_EXCLUDE_TAXIDS
+
 
 # ----------------------------------------------------------------------
 # build_extension_inventory (orchestrator)

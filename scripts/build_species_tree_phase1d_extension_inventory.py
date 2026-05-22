@@ -39,6 +39,22 @@ from build_species_tree_phase1a_inventory import (
 )
 
 
+# Smallest plausible nuclear metazoan assembly. NCBI marks complete
+# mitochondrial-only deposits as `assembly_level: "Complete Genome"`
+# (~15-20 kb), which slip through any assembly_level filter and would
+# fail BUSCO. 10 MB is a comfortable buffer above mtDNA size that still
+# admits real-but-fragmented small assemblies (~30-50 MB Phyllodesmium
+# nudibranch genomes are valid Berghia relatives).
+_MIN_NUCLEAR_GENOME_BP = 10_000_000
+
+# Taxids that must NEVER be selected by Phase 1d even when absent from
+# the dedup manifests. Berghia stephanieae is sourced from a separate
+# `genomes/` path (not from references/nath_et_al or the species_tree
+# manifests), so without this guard she'd reappear in the extension
+# inventory and confuse downstream tooling.
+ALWAYS_EXCLUDE_TAXIDS: frozenset[int] = frozenset({1287507})  # Berghia stephanieae
+
+
 # ----------------------------------------------------------------------
 # Existing-taxid dedup source
 # ----------------------------------------------------------------------
@@ -253,6 +269,9 @@ def select_for_clade(
         choice = apply_assembly_level_filter(choice, policy.min_assembly_level)
         if choice is None:
             continue
+        if choice.total_length_bp < _MIN_NUCLEAR_GENOME_BP:
+            # Discard mitochondrial-only "Complete Genome" deposits
+            continue
         entry = ExtensionEntry(
             taxid=taxid,
             binomial=extract_binomial(group_records),
@@ -283,7 +302,7 @@ def build_extension_inventory(
     `select_for_clade`. A taxid picked up under an earlier policy is
     excluded from subsequent policies — first-policy-wins on labelling.
     """
-    seen: set[int] = set(exclude_taxids)
+    seen: set[int] = set(exclude_taxids) | set(ALWAYS_EXCLUDE_TAXIDS)
     all_entries: list[ExtensionEntry] = []
     for i, policy in enumerate(policies, start=1):
         try:
@@ -378,13 +397,16 @@ POLICIES: list[ClaadePolicy] = [
     ClaadePolicy("Vetigastropoda",     "other_mollusca",  "Chromosome",  False, None),
     ClaadePolicy("Neritimorpha",       "other_mollusca",  "Chromosome",  False, None),
     ClaadePolicy("Patellogastropoda",  "other_mollusca",  "Chromosome",  False, None),
-    # ----- Outgroup phyla, chromosome-only with per-phylum cap -----
-    ClaadePolicy("Annelida",           "outgroup_annelida",         "Chromosome", False, 3),
-    ClaadePolicy("Platyhelminthes",    "outgroup_platyhelminthes",  "Chromosome", False, 3),
-    ClaadePolicy("Nemertea",           "outgroup_nemertea",         "Chromosome", False, 3),
-    ClaadePolicy("Brachiopoda",        "outgroup_brachiopoda",      "Chromosome", False, 3),
-    ClaadePolicy("Phoronida",          "outgroup_phoronida",        "Chromosome", False, 3),
-    ClaadePolicy("Bryozoa",            "outgroup_bryozoa",          "Chromosome", False, 3),
+    # ----- Outgroup phyla, chromosome-only with per-phylum cap=2 -----
+    # Phoronida has no chromosome-level assemblies at the time of
+    # writing, so it's relaxed to Scaffold-or-better to keep at least
+    # one representative of this rare phylum (sister to Brachiopoda).
+    ClaadePolicy("Annelida",           "outgroup_annelida",         "Chromosome", False, 2),
+    ClaadePolicy("Platyhelminthes",    "outgroup_platyhelminthes",  "Chromosome", False, 2),
+    ClaadePolicy("Nemertea",           "outgroup_nemertea",         "Chromosome", False, 2),
+    ClaadePolicy("Brachiopoda",        "outgroup_brachiopoda",      "Chromosome", False, 2),
+    ClaadePolicy("Phoronida",          "outgroup_phoronida",        "Scaffold",   False, 2),
+    ClaadePolicy("Bryozoa",            "outgroup_bryozoa",          "Chromosome", False, 2),
 ]
 
 

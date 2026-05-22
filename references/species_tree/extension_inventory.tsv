@@ -64,7 +64,6 @@ taxid	binomial	policy_class	clade_name	source	accession	assembly_level	annotatio
 1200667	Doris verrucosa	heterobranchia	Heterobranchia	GenBank	GCA_977009135.2	Chromosome		0		5756812	1223396792
 1230023	Cattania trizona	heterobranchia	Heterobranchia	GenBank	GCA_982297885.1	Scaffold		0		112113	2627864951
 1265871	Doris montereyensis	heterobranchia	Heterobranchia	GenBank	GCA_037039925.1	Scaffold		0		237151	520284697
-1287507	Berghia stephanieae	heterobranchia	Heterobranchia	RefSeq	GCF_034508935.2	Chromosome	Full annotation	21225		604219	1120414447
 1288050	Bulbaeolidia alba	heterobranchia	Heterobranchia	GenBank	GCA_056523445.1	Scaffold		0		681	102921924
 1298703	Plocamopherus imperialis	heterobranchia	Heterobranchia	GenBank	GCA_039654505.1	Scaffold		0		2665	764770046
 1298704	Plocamopherus tilesii	heterobranchia	Heterobranchia	GenBank	GCA_037974505.1	Scaffold		0		2080	801631259
@@ -197,7 +196,6 @@ taxid	binomial	policy_class	clade_name	source	accession	assembly_level	annotatio
 335776	Bolma rugosa	other_mollusca	Vetigastropoda	GenBank	GCA_964656265.1	Chromosome		0		18070829	3034723167
 351200	Scurria scurra	other_mollusca	Patellogastropoda	GenBank	GCA_044232375.1	Chromosome		0		581035	393493031
 387458	Aliger gallus	other_mollusca	Caenogastropoda	GenBank	GCA_978021195.1	Chromosome		0		4086803	1877643533
-399303	Abra alba	other_mollusca	Bivalvia	GenBank	GCA_965119695.1	Complete Genome		0		16397	16397
 406540	Lucinella divaricata	other_mollusca	Bivalvia	GenBank	GCA_964194035.1	Chromosome		0		3117319	1914457123
 410350	Clinocardium nuttallii	other_mollusca	Bivalvia	GenBank	GCA_977929165.1	Chromosome		0		2480468	1359207508
 427924	Dreissena rostriformis bugensis	other_mollusca	Bivalvia	GenBank	GCA_055670145.1	Chromosome		0		1391067	1613145916
@@ -243,7 +241,6 @@ taxid	binomial	policy_class	clade_name	source	accession	assembly_level	annotatio
 1527468	Magallana gigas x Magallana angulata	other_mollusca	Bivalvia	GenBank	GCA_051201775.1	Chromosome		0		2556815	1230392071
 1676568	Parvicardium scabrum	other_mollusca	Bivalvia	GenBank	GCA_977066215.1	Chromosome		0		2870191	972009762
 1899378	Clathrolucina costata	other_mollusca	Bivalvia	GenBank	GCA_965112175.1	Chromosome		0		1177367	1875844969
-1903275	Macoma balthica	other_mollusca	Bivalvia	GenBank	GCA_965119735.1	Complete Genome		0		17788	17788
 1920007	Donax variegatus	other_mollusca	Bivalvia	GenBank	GCA_964468855.2	Chromosome		0		39597000	1635777011
 1920014	Mysia undata	other_mollusca	Bivalvia	GenBank	GCA_964106805.1	Chromosome		0		1923934	1613701415
 1954227	Arcuatula senhousia	other_mollusca	Bivalvia	GenBank	GCA_963971305.1	Chromosome		0		2134782	1036819019
@@ -284,19 +281,15 @@ taxid	binomial	policy_class	clade_name	source	accession	assembly_level	annotatio
 3199284	Lotoria lotoria	other_mollusca	Caenogastropoda	GenBank	GCA_977112875.1	Chromosome		0		1553312	2996845438
 3237505	Sinosolenaia oleivora	other_mollusca	Bivalvia	GenBank	GCA_039955035.1	Chromosome		0		18762744	2052292795
 3410903	Meretrix sp. MF1	other_mollusca	Bivalvia	GenBank	GCA_049244355.1	Chromosome		0		46874007	883279379
-36121	Nephtys hombergii	outgroup_annelida	Annelida	GenBank	GCA_965118265.1	Complete Genome		0		16496	16496
-41793	Lanice conchilega	outgroup_annelida	Annelida	GenBank	GCA_965119625.1	Complete Genome		0		15771	15771
-397560	Nephtys longosetosa	outgroup_annelida	Annelida	GenBank	GCA_965118275.1	Complete Genome		0		17223	17223
+6344	Arenicola marina	outgroup_annelida	Annelida	GenBank	GCA_964019135.1	Chromosome		0		360722	869392476
+6432	Urechis unicinctus	outgroup_annelida	Annelida	GenBank	GCA_034190875.2	Chromosome		0		546570	1193833463
 3273461	Discradisca antillarum	outgroup_brachiopoda	Brachiopoda	GenBank	GCA_057556925.1	Chromosome		0		22084241	298231666
 192920	Bugulina stolonifera	outgroup_bryozoa	Bryozoa	GenBank	GCA_935421135.1	Chromosome		0		12561000	234968257
 544679	Schizoporella errata	outgroup_bryozoa	Bryozoa	GenBank	GCA_980783175.1	Chromosome		0		3436012	332651546
-2589381	Schizoporella japonica	outgroup_bryozoa	Bryozoa	GenBank	GCA_965278275.1	Chromosome		0		2316862	255532186
 307678	Tetrastemma melanocephalum	outgroup_nemertea	Nemertea	GenBank	GCA_977011905.1	Chromosome		0		1554285	521620361
 672921	Tubulanus polymorphus	outgroup_nemertea	Nemertea	RefSeq	GCF_964204645.1	Chromosome	Full annotation	15035		9529141	267806677
-941274	Leucocephalonemertes aurantiaca	outgroup_nemertea	Nemertea	GenBank	GCA_977061895.1	Chromosome		0		2047063	1012636679
 6189	Schistosoma spindalis	outgroup_platyhelminthes	Platyhelminthes	GenBank	GCA_946903255.1	Chromosome		9330		3920158	390075707
 38744	Schistosoma mekongi	outgroup_platyhelminthes	Platyhelminthes	GenBank	GCA_034768735.1	Chromosome		9094		1168079	404245338
-50054	Schmidtea polychroa	outgroup_platyhelminthes	Platyhelminthes	GenBank	GCA_044892525.1	Chromosome		0		8459515	781270316
 6655	Cryptochiton stelleri	rare_basal	Polyplacophora	GenBank	GCA_031471745.1	Scaffold		0		3056	783734439
 34587	Katharina tunicata	rare_basal	Polyplacophora	GenBank	GCA_032466195.1	Scaffold		0		5405	684265396
 52918	Antalis vulgaris	rare_basal	Scaphopoda	GenBank	GCA_977070855.1	Chromosome		0		673000	4073218234
