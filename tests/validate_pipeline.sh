@@ -89,6 +89,12 @@ export MINIMAP2="$MOCK_DIR/minimap2"
 export SAMTOOLS="$MOCK_DIR/samtools"
 export MCSCANX="$MOCK_DIR/MCScanX"
 export ALPHAFOLD="$MOCK_DIR/run_alphafold.sh"
+export AF3="$MOCK_DIR/af3"
+export STRUCT_RENDERER="$MOCK_DIR/af3_render"
+# Stage 08 (AF3) aborts unless model weights + DB dir exist; point them at a
+# mock weights dir (fake af3.bin created by the harness) and any existing dir.
+export ALPHAFOLD3_MODEL_DIR="$TEST_DIR/af3_models"
+export ALPHAFOLD3_DB_DIR="$TEST_DIR"
 export FOLDTREE="$MOCK_DIR/foldtree"
 export TMALIGN="$MOCK_DIR/TMalign"
 export SEQTK="$MOCK_DIR/seqtk"
@@ -228,6 +234,10 @@ export MAX_POCKET_VOLUME=1000
 export EXPANSION_WEIGHT=1.5
 export PREFERRED_EXPANSION_LEVELS="Aeolid-specific"
 TESTCONFIG
+
+# Stage 08 (AF3) checks for a model-weights file; provide a fake one so the
+# mock run passes its guard. Path mirrors ALPHAFOLD3_MODEL_DIR in the test config.
+mkdir -p "$TEST_DIR/af3_models" && : > "$TEST_DIR/af3_models/af3.bin"
 
 # --- Track results ---
 PASS=0

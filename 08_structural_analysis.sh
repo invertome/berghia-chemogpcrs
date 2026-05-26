@@ -70,33 +70,60 @@ log "Total candidates for structural prediction: ${final_count}"
 # --- Extract sequences for AlphaFold ---
 run_command "seqtk_top" --stdout="${RESULTS_DIR}/structural_analysis/top_seqs.fa" ${SEQTK} subseq "${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa" "${RESULTS_DIR}/structural_analysis/top_ids.txt"
 
-# --- Predict structures with AlphaFold (only if not already done) ---
-log "Running AlphaFold predictions..."
+# --- Predict structures with AlphaFold 3 (only if not already done) ---
+# AF3 emits mmCIF (*_model.cif). foldseek (and therefore FoldTree) ingests
+# mmCIF natively, so NO CIF->PDB conversion is performed; the CIF is fed
+# straight into the structural-phylogeny step alongside reference structures.
+log "Running AlphaFold 3 predictions..."
+
+# AF3 needs the Google-gated model weights AND the sequence/structure
+# databases. Abort loudly if either is missing rather than silently
+# producing no structures.
+if [ -z "${ALPHAFOLD3_MODEL_DIR}" ] || [ ! -e "${ALPHAFOLD3_MODEL_DIR}/af3.bin" ]; then
+    log --level=ERROR "ALPHAFOLD3_MODEL_DIR='${ALPHAFOLD3_MODEL_DIR}' has no af3.bin — cannot run AlphaFold 3. Set it in config.sh (see scripts/unity/download_af3_weights.sh)."
+    exit 1
+fi
+if [ ! -d "${ALPHAFOLD3_DB_DIR}" ]; then
+    log --level=ERROR "ALPHAFOLD3_DB_DIR='${ALPHAFOLD3_DB_DIR}' not found — cannot run AlphaFold 3."
+    exit 1
+fi
+
+# AF3 ships as an apptainer module on the cluster (provides the `af3` helper
+# + run_alphafold.py; GPU via --nv). Keep the image cache off the home quota.
+module load alphafold3/latest 2>/dev/null || log --level=WARN "could not 'module load alphafold3/latest'; assuming 'af3' is already on PATH"
+export APPTAINER_CACHEDIR="${APPTAINER_CACHEDIR:-${RESULTS_DIR}/.apptainer_cache}"
+mkdir -p "${APPTAINER_CACHEDIR}"
+
 while read -r candidate_id; do
-    # Check if structure already exists
-    if [ -f "${RESULTS_DIR}/structural_analysis/alphafold/${candidate_id}/ranked_0.pdb" ]; then
+    cand_dir="${RESULTS_DIR}/structural_analysis/alphafold/${candidate_id}"
+
+    # Skip if a model CIF already exists for this candidate
+    if find "${cand_dir}" -name '*_model.cif' 2>/dev/null | grep -q .; then
         log "  Skipping ${candidate_id} (structure exists)"
         continue
     fi
+    mkdir -p "${cand_dir}"
 
-    # Extract individual sequence
+    # Extract the single candidate sequence
     grep -A1 "^>${candidate_id}$" "${RESULTS_DIR}/structural_analysis/top_seqs.fa" > \
-        "${RESULTS_DIR}/structural_analysis/alphafold/${candidate_id}_input.fasta" 2>/dev/null || continue
+        "${cand_dir}/${candidate_id}_input.fasta" 2>/dev/null || continue
+    [ -s "${cand_dir}/${candidate_id}_input.fasta" ] || continue
 
-    # Run AlphaFold on this candidate if sequence was found
-    if [ -s "${RESULTS_DIR}/structural_analysis/alphafold/${candidate_id}_input.fasta" ]; then
-        log "  Running AlphaFold for ${candidate_id}..."
-        ${ALPHAFOLD} \
-            --fasta_paths="${RESULTS_DIR}/structural_analysis/alphafold/${candidate_id}_input.fasta" \
-            --output_dir="${RESULTS_DIR}/structural_analysis/alphafold/${candidate_id}" \
-            --max_template_date=2023-01-01 \
-            --use_gpu=${GPU_ENABLED} \
-            --model_preset=monomer || log "  Warning: AlphaFold failed for ${candidate_id}"
-    fi
+    log "  Running AlphaFold 3 for ${candidate_id}..."
+    # 1) FASTA -> AF3 input JSON (via the cluster `af3` helper)
+    ${AF3} convert --fasta "${cand_dir}/${candidate_id}_input.fasta" \
+                --output_dir "${cand_dir}/json" \
+        || { log --level=WARN "  af3 convert failed for ${candidate_id}"; continue; }
+    af3_json=$(find "${cand_dir}/json" -maxdepth 1 -name '*.json' 2>/dev/null | head -1)
+    [ -n "${af3_json}" ] || { log --level=WARN "  no AF3 JSON produced for ${candidate_id}"; continue; }
+
+    # 2) Structure inference (data pipeline + model; GPU via the module's --nv)
+    ${AF3} run --json_path "${af3_json}" \
+            --output_dir "${cand_dir}" \
+            --model_dir "${ALPHAFOLD3_MODEL_DIR}" \
+            --db_dir "${ALPHAFOLD3_DB_DIR}" \
+        || log --level=WARN "  AlphaFold 3 failed for ${candidate_id}"
 done < "${RESULTS_DIR}/structural_analysis/top_ids.txt"
-
-# Alternative: batch run (use if individual runs are too slow)
-# run_command "alphafold" ${ALPHAFOLD} --fasta_paths="${RESULTS_DIR}/structural_analysis/top_seqs.fa" --output_dir="${RESULTS_DIR}/structural_analysis/alphafold" --max_template_date=2023-01-01 --use_gpu=${GPU_ENABLED} --model_preset=monomer
 
 # --- Fetch reference structures and metadata ---
 run_command "fetch_references" python3 "${SCRIPTS_DIR}/fetch_ligands.py" \
@@ -105,29 +132,61 @@ run_command "fetch_references" python3 "${SCRIPTS_DIR}/fetch_ligands.py" \
     "${GPCRDB_SEARCH_TERMS}" \
     "${GPCRDB_SPECIES}"
 
-# --- Combine predicted and reference PDBs for structural phylogeny ---
-# Check for AlphaFold PDBs
-alphafold_pdb_count=$(find "${RESULTS_DIR}/structural_analysis/alphafold/" -name "*.pdb" 2>/dev/null | wc -l)
-if [ "$alphafold_pdb_count" -gt 0 ]; then
-    cp "${RESULTS_DIR}/structural_analysis/alphafold/"*.pdb "${RESULTS_DIR}/structural_analysis/all_pdb/"
-    log "Copied ${alphafold_pdb_count} AlphaFold PDB files"
+# --- Combine predicted (mmCIF) and reference structures for phylogeny ---
+# foldseek/FoldTree read mmCIF and PDB from the same directory, so AF3 CIFs
+# and GPCRdb reference structures are pooled without any conversion.
+# AlphaFold 3 predictions (mmCIF)
+alphafold_struct_count=$(find "${RESULTS_DIR}/structural_analysis/alphafold/" -name "*_model.cif" 2>/dev/null | wc -l)
+if [ "$alphafold_struct_count" -gt 0 ]; then
+    find "${RESULTS_DIR}/structural_analysis/alphafold/" -name "*_model.cif" -exec cp {} "${RESULTS_DIR}/structural_analysis/all_pdb/" \;
+    log "Copied ${alphafold_struct_count} AlphaFold 3 structures (mmCIF)"
 else
-    log --level=WARN "No AlphaFold PDBs found - structural phylogeny may be limited"
+    log --level=WARN "No AlphaFold 3 structures found - structural phylogeny may be limited"
 fi
 
-# Check for reference PDBs
-ref_pdb_count=$(find "${RESULTS_DIR}/structural_analysis/references/" -name "*.pdb" 2>/dev/null | wc -l)
+# Reference structures (PDB and/or mmCIF)
+ref_pdb_count=$(find "${RESULTS_DIR}/structural_analysis/references/" \( -name "*.pdb" -o -name "*.cif" \) 2>/dev/null | wc -l)
 if [ "$ref_pdb_count" -gt 0 ]; then
-    cp "${RESULTS_DIR}/structural_analysis/references/"*.pdb "${RESULTS_DIR}/structural_analysis/all_pdb/"
-    log "Copied ${ref_pdb_count} reference PDB files"
+    find "${RESULTS_DIR}/structural_analysis/references/" \( -name "*.pdb" -o -name "*.cif" \) -exec cp {} "${RESULTS_DIR}/structural_analysis/all_pdb/" \;
+    log "Copied ${ref_pdb_count} reference structures"
 else
-    log --level=WARN "No reference PDBs found - structural comparison may be limited"
+    log --level=WARN "No reference structures found - structural comparison may be limited"
 fi
 
 # Verify we have enough structures for phylogeny
-total_pdb_count=$(find "${RESULTS_DIR}/structural_analysis/all_pdb/" -name "*.pdb" 2>/dev/null | wc -l)
-if [ "$total_pdb_count" -lt 3 ]; then
-    log --level=WARN "Only ${total_pdb_count} PDB files available - need at least 3 for meaningful structural phylogeny"
+total_struct_count=$(find "${RESULTS_DIR}/structural_analysis/all_pdb/" \( -name "*.pdb" -o -name "*.cif" \) 2>/dev/null | wc -l)
+if [ "$total_struct_count" -lt 3 ]; then
+    log --level=WARN "Only ${total_struct_count} structures available - need at least 3 for meaningful structural phylogeny"
+fi
+
+# --- Render publication figures of the predicted structures ---
+# PyMOL (headless OSMesa software render via the `pymol` skill) draws each AF3
+# prediction as a cartoon colored by pLDDT confidence (mmCIF B-factor), then a
+# montage grid is assembled for slides/manuscripts. STRUCT_RENDERER defaults to
+# `uv run scripts/render_structure_figure.py` (uv pulls pymol-open-source-whl).
+fig_dir="${RESULTS_DIR}/structural_analysis/figures"
+mkdir -p "${fig_dir}"
+export PATH="${HOME}/.local/bin:${PATH}"          # uv default install location
+export UV_CACHE_DIR="${UV_CACHE_DIR:-${RESULTS_DIR}/.uv_cache}"
+rendered_pngs=()
+while IFS= read -r cif; do
+    [ -n "$cif" ] || continue
+    cand=$(basename "$(dirname "$(dirname "$cif")")")   # alphafold/<cand>/<name>/<name>_model.cif
+    png="${fig_dir}/${cand}.png"
+    if ${STRUCT_RENDERER} "$cif" "$png" --session "${fig_dir}/${cand}.pse" --color-mode plddt; then
+        [ -s "$png" ] && rendered_pngs+=("$png")
+    else
+        log --level=WARN "  structure figure render failed for ${cand}"
+    fi
+done < <(find "${RESULTS_DIR}/structural_analysis/alphafold/" -name "*_model.cif" 2>/dev/null)
+
+if [ "${#rendered_pngs[@]}" -gt 0 ]; then
+    python3 "${SCRIPTS_DIR}/montage_structure_figures.py" \
+        --out "${fig_dir}/all_structures_montage.png" "${rendered_pngs[@]}" \
+        || log --level=WARN "  structure-figure montage assembly failed"
+    log "Rendered ${#rendered_pngs[@]} structure figures (color-by-pLDDT) -> ${fig_dir}"
+else
+    log --level=WARN "No structure figures rendered (no AF3 predictions or renderer unavailable)"
 fi
 
 # --- Build structural phylogeny with FoldTree ---

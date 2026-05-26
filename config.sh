@@ -88,7 +88,9 @@ export ALPHAFOLD="${SCRIPTS_DIR}/run_alphafold.sh"
 #   - APPTAINER_CACHEDIR lives off /home (Unity admins explicitly request this)
 #     to avoid filling small home quotas.
 export ALPHAFOLD3_DB_DIR="${ALPHAFOLD3_DB_DIR:-/datasets/bio/alphafold3}"
-export ALPHAFOLD3_MODEL_DIR="${ALPHAFOLD3_MODEL_DIR:-}"
+export ALPHAFOLD3_MODEL_DIR="${ALPHAFOLD3_MODEL_DIR:-/scratch3/workspace/${USER}-jorge/alphafold3_models}"
+export AF3="${AF3:-af3}"  # AF3 helper CLI (Unity module: alphafold3/latest)
+export STRUCT_RENDERER="${STRUCT_RENDERER:-uv run ${SCRIPTS_DIR}/render_structure_figure.py}"  # PyMOL headless render (pymol skill)
 export APPTAINER_CACHEDIR="${APPTAINER_CACHEDIR:-${BASE_DIR}/.apptainer/cache}"
 export FOLDTREE="foldtree"
 export TMALIGN="TMalign"

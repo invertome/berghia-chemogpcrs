@@ -433,6 +433,69 @@ exit 0
 STUB
 chmod +x "$MOCK_DIR/run_alphafold.sh"
 
+# --- AlphaFold 3 (af3 helper: `convert` writes JSON, `run` writes mmCIF) ---
+cat > "$MOCK_DIR/af3" <<'STUB'
+#!/bin/bash
+echo "[MOCK] af3 $*" >&2
+sub="$1"; shift || true
+outdir=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --output_dir) outdir="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+[ -n "$outdir" ] || exit 0
+mkdir -p "$outdir"
+if [ "$sub" = "convert" ]; then
+    echo '{"name":"mock","sequences":[{"protein":{"id":"A","sequence":"MAAA"}}],"dialect":"alphafold3","version":1}' > "$outdir/mock.json"
+elif [ "$sub" = "run" ]; then
+    mkdir -p "$outdir/mock"
+    cat > "$outdir/mock/mock_model.cif" <<'CIF'
+data_mock
+#
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_seq_id
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.occupancy
+_atom_site.B_iso_or_equiv
+_atom_site.auth_asym_id
+_atom_site.auth_seq_id
+_atom_site.pdbx_PDB_model_num
+ATOM 1 C CA ALA A 1 0.000 0.000 0.000 1.00 90.00 A 1 1
+#
+CIF
+fi
+exit 0
+STUB
+chmod +x "$MOCK_DIR/af3"
+
+# --- Structure figure renderer (PyMOL stand-in: writes a tiny valid PNG) ---
+cat > "$MOCK_DIR/af3_render" <<'STUB'
+#!/bin/bash
+echo "[MOCK] af3_render $*" >&2
+structure=""; png=""; pos=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --session|--color-mode|--width|--height) shift 2 ;;
+        -*) shift ;;
+        *) if [ $pos -eq 0 ]; then structure="$1"; elif [ $pos -eq 1 ]; then png="$1"; fi; pos=$((pos+1)); shift ;;
+    esac
+done
+[ -n "$png" ] || exit 0
+python3 -c "from PIL import Image; Image.new('RGB',(64,64),(80,160,240)).save('$png')" 2>/dev/null || : > "$png"
+exit 0
+STUB
+chmod +x "$MOCK_DIR/af3_render"
+
 # --- FoldTree ---
 cat > "$MOCK_DIR/foldtree" <<'STUB'
 #!/bin/bash
