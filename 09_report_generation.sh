@@ -467,11 +467,13 @@ import csv, re, sys
 # need a backslash; \ ^ ~ need their package-supplied math-mode forms. Without
 # this, an ID containing any of these (NCBI provisional names occasionally
 # include "&"; gene_name fields routinely contain "_") aborts pdflatex.
-_LATEX_SPECIALS = re.compile(r'([&%$#_{}])')
 def tex_esc(s):
     s = "" if s is None else str(s)
-    s = _LATEX_SPECIALS.sub(r'\\\1', s)
-    s = s.replace('\\', r'\textbackslash{}').replace('^', r'\^{}').replace('~', r'\~{}')
+    # Escape a literal backslash FIRST so the replacements below don't
+    # double-escape the backslashes they insert.
+    s = s.replace('\\', r'\textbackslash{}')
+    s = re.compile(r'([&%$#_{}])').sub(r'\\\1', s)
+    s = s.replace('^', r'\^{}').replace('~', r'\~{}')
     return s
 
 def yn(v):
@@ -524,11 +526,13 @@ EOF
     python3 - "$POSCTRL_TSV" >> "${RESULTS_DIR}/report/report.tex" <<'PY'
 import csv, re, sys
 
-_LATEX_SPECIALS = re.compile(r'([&%$#_{}])')
 def tex_esc(s):
     s = "" if s is None else str(s)
-    s = _LATEX_SPECIALS.sub(r'\\\1', s)
-    s = s.replace('\\', r'\textbackslash{}').replace('^', r'\^{}').replace('~', r'\~{}')
+    # Escape a literal backslash FIRST so the replacements below don't
+    # double-escape the backslashes they insert.
+    s = s.replace('\\', r'\textbackslash{}')
+    s = re.compile(r'([&%$#_{}])').sub(r'\\\1', s)
+    s = s.replace('^', r'\^{}').replace('~', r'\~{}')
     return s
 
 def truthy(v):
@@ -714,7 +718,7 @@ LATEX_FOOTER
 
 # Compile LaTeX (run twice for references and TOC)
 cd "${RESULTS_DIR}/report" || exit 1
-run_command "latex_compile_1" ${PDFLATEX} -interaction=nonstopmode report.tex || log "Warning: First LaTeX pass had issues"
+run_command "latex_compile_1" --allow-fail ${PDFLATEX} -interaction=nonstopmode report.tex || log "Warning: First LaTeX pass had issues (expected for undefined refs)"
 run_command "latex_compile_2" ${PDFLATEX} -interaction=nonstopmode report.tex || { log "Error: LaTeX compilation failed"; exit 1; }
 
 # Move PDF
