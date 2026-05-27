@@ -1896,6 +1896,12 @@ for cand_id in candidates['id']:
         'has_tandem_cluster_data': has_tandem,
         # Bead -325: CDS provenance
         'cds_source': cds_source,
+        # Bead -6hl: orthogroup name — required so add_og_coverage_columns.py
+        # can join per-OG reference-CDS coverage onto the ranked CSV.  Without
+        # this key the downstream script hits the missing-column branch and
+        # silently sets og_n_ref_cds=0, og_n_total=0, og_dnds_reliability='low'
+        # for every candidate regardless of actual OG coverage.
+        'orthogroup': cand_og or '',
         # Bead -8st: dN/dS-axis reliability weight derived from how many
         # of this OG's members have a CDS in the reference set (linear
         # ramp to full credit at DNDS_RELIABILITY_FULL refs). Applied as
@@ -2042,7 +2048,7 @@ df_sorted = df.sort_values('rank_score', ascending=False)
 
 # Select columns for output (updated with new score columns)
 output_cols = [
-    'id', 'rank_score', 'confidence_tier', 'evidence_completeness',
+    'id', 'orthogroup', 'rank_score', 'confidence_tier', 'evidence_completeness',
     'phylo_score', 'purifying_score', 'positive_score', 'selection_significant',
     # Bead -urk: BUSTED/MEME diagnostic columns
     'busted_s_p', 'busted_s_significant', 'busted_mh_p', 'busted_mh_significant',
@@ -2257,7 +2263,7 @@ if RUN_CROSSVAL and len(ref_ids) >= CROSSVAL_FOLDS:
 
 # --- Update output columns if sensitivity was run ---
 output_cols = [
-    'id', 'rank_score', 'confidence_tier', 'evidence_completeness',
+    'id', 'orthogroup', 'rank_score', 'confidence_tier', 'evidence_completeness',
     'phylo_score', 'purifying_score', 'positive_score', 'selection_significant',
     # Bead -urk: BUSTED/MEME diagnostic columns
     'busted_s_p', 'busted_s_significant', 'busted_mh_p', 'busted_mh_significant',
