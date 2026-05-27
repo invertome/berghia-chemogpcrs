@@ -9,7 +9,13 @@
 #SBATCH --output=${LOGS_DIR}/04_phylogenetic_analysis_%A_%a.out
 #SBATCH --error=${LOGS_DIR}/04_phylogenetic_analysis_%A_%a.err
 #SBATCH --time=${DEFAULT_TIME}
-#SBATCH $(scale_resources)
+# Bead hto: SLURM does not expand command/variable substitution in #SBATCH
+# directives, so '$(scale_resources)' was silently ignored and a direct
+# `sbatch 04_...sh` got cluster-default resources (≈1 CPU) for a large IQ-TREE
+# job. Static defaults below (match config CPUS=16 / DEFAULT_MEM=64G); the
+# production wrapper sbatch_run_04.sh sets higher values and takes precedence.
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
 #SBATCH --array=0-999%50  # Adjusted for orthogroup processing
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=${SLURM_EMAIL}
