@@ -462,6 +462,17 @@ if [ "$berghia_count" -gt 0 ] && [ "$seq_count" -gt 2 ]; then
                 $DEPTH_CALIB_ARG 2>/dev/null | head -1)
 
             if [ -n "$deep_nodes" ]; then
+                # Bead 4z1: ASR requires a multiple-sequence ALIGNMENT, but
+                # nuc_align is the UNALIGNED recovered CDS. Prefer the codon
+                # alignment built earlier this task (same taxa as the tree),
+                # falling back to nuc_align only if it is missing/invalid.
+                asr_codon="${RESULTS_DIR}/selective_pressure/${base}_codon.phy"
+                if [ -f "$asr_codon" ] && validate_codon_alignment "$asr_codon" 2>/dev/null; then
+                    asr_input="$asr_codon"
+                else
+                    asr_input="$nuc_align"
+                    log --level=WARN "ASR for ${base}: codon alignment unavailable; using unaligned nucleotides (ASR may be unreliable)"
+                fi
                 # Bead -j44: switch from FastML to IQ-TREE --ancestral (model-
                 # consistent with the inference tree, scales to thousands of
                 # taxa, avoids re-running ML under a different model). FastML
@@ -474,7 +485,7 @@ if [ "$berghia_count" -gt 0 ] && [ "$seq_count" -gt 2 ]; then
                     asr_prefix="${RESULTS_DIR}/asr/${base}_asr"
                     mkdir -p "${RESULTS_DIR}/asr"
                     run_command "${base}_asr_iqtree" ${IQTREE} \
-                        -s "$nuc_align" -te "$tree" \
+                        -s "$asr_input" -te "$tree" \
                         --ancestral -seed "${IQTREE_SEED}" -T "${CPUS}" \
                         --prefix "$asr_prefix" 2>/dev/null \
                         || log "Warning: IQ-TREE ASR failed for ${base}"
@@ -490,7 +501,7 @@ if [ "$berghia_count" -gt 0 ] && [ "$seq_count" -gt 2 ]; then
                     fi
                 else
                     for node in $deep_nodes; do
-                        run_command "${base}_${node}_asr" ${FASTML} --seq "$nuc_align" --tree "$tree" \
+                        run_command "${base}_${node}_asr" ${FASTML} --seq "$asr_input" --tree "$tree" \
                             --out_seq "${RESULTS_DIR}/asr/${base}_${node}_asr.fa" \
                             --out_tree "${RESULTS_DIR}/asr/${base}_${node}_asr.tree" \
                             --node "$node" -t "${CPUS}" --verbose 2>/dev/null \
