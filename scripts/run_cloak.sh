@@ -11,7 +11,7 @@
 # pip deps). It reads a directory of FASTA alignments and writes
 # `<directory_basename>_result.fasta` to the current working directory.
 # The first FASTA in alphabetical order serves as the column-structure
-# reference (so name the canonical alignment `0_canonical.fa` to ensure
+# reference (so name the canonical alignment `00_canonical.fa` to ensure
 # the output is in canonical column order).
 #
 # Usage:
@@ -19,7 +19,7 @@
 #
 # The ensemble directory must contain at least 2 FASTA files. The
 # canonical alignment must be named so it sorts FIRST (e.g. canonical.fa
-# vs variant_*.fa, OR 0_canonical.fa).
+# vs variant_*.fa, OR 00_canonical.fa).
 
 set -eo pipefail
 
@@ -80,8 +80,12 @@ mkdir -p "$STAGED_DIR"
 
 # Force the canonical alignment to sort first (so CLOAK's output column
 # structure follows the canonical alignment we'll use downstream).
+# Named 00_canonical.fa so it sorts before 01_..., 02_... variants
+# (ASCII: '0' < '1', and the two-digit prefix keeps the underscore from
+# pushing 0_canonical after 01_ variants — underscore is ASCII 95, digits
+# 49-57, so "0_" > "01" in ASCII ordering).
 if [[ -f "$ENSEMBLE_DIR/canonical.fa" ]]; then
-    cp "$ENSEMBLE_DIR/canonical.fa" "$STAGED_DIR/0_canonical.fa"
+    cp "$ENSEMBLE_DIR/canonical.fa" "$STAGED_DIR/00_canonical.fa"
 fi
 i=1
 for v in "$ENSEMBLE_DIR"/variant_*.fa; do
