@@ -359,7 +359,23 @@ case "$1" in
         [ -n "$outfile" ] && touch "$outfile"
         ;;
     index) touch "${2}.bai" 2>/dev/null || true ;;
-    view) cat ;;
+    view)
+        # Handle -o FILE (file output) or fall back to stdout passthrough
+        shift
+        outfile=""
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                -o) outfile="$2"; shift 2 ;;
+                *) shift ;;
+            esac
+        done
+        if [ -n "$outfile" ]; then
+            touch "$outfile"
+        else
+            cat
+        fi
+        ;;
+
     *) ;;
 esac
 exit 0

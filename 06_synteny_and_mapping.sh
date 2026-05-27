@@ -132,8 +132,10 @@ for genome in "${GENOME_DIR}"/*.fasta; do
             continue
         fi
         run_command "minimap2_${taxid_sample}" --stdout="${RESULTS_DIR}/mapping/${taxid_sample}.sam" ${MINIMAP2} -ax splice -uf -k14 "$genome" "$nuc_trans"
-        run_command "samtools_${taxid_sample}" ${SAMTOOLS} view -bS "${RESULTS_DIR}/mapping/${taxid_sample}.sam" | ${SAMTOOLS} sort -o "${RESULTS_DIR}/mapping/${taxid_sample}.bam"
+        run_command "samtools_view_${taxid_sample}" ${SAMTOOLS} view -bS "${RESULTS_DIR}/mapping/${taxid_sample}.sam" -o "${RESULTS_DIR}/mapping/${taxid_sample}_unsorted.bam"
+        run_command "samtools_sort_${taxid_sample}" ${SAMTOOLS} sort -o "${RESULTS_DIR}/mapping/${taxid_sample}.bam" "${RESULTS_DIR}/mapping/${taxid_sample}_unsorted.bam"
         run_command "samtools_index_${taxid_sample}" ${SAMTOOLS} index "${RESULTS_DIR}/mapping/${taxid_sample}.bam"
+        rm -f "${RESULTS_DIR}/mapping/${taxid_sample}_unsorted.bam"
     else
         log "Note: No nucleotide transcriptome for $taxid_sample, skipping mapping"
     fi
