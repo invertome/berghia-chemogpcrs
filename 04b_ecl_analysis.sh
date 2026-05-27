@@ -63,23 +63,13 @@ DEEPTMHMM_DIR="${RESULTS_DIR}/chemogpcrs/deeptmhmm_berghia"
 TOPO_FILE="${DEEPTMHMM_DIR}/predicted_topologies.3line"
 
 if [ ! -f "$TOPO_FILE" ]; then
-    log "No 3-line topology file found at $TOPO_FILE"
-    log "Running DeepTMHMM wrapper to generate topology predictions..."
-
-    BERGHIA_FASTA="${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa"
-    if [ ! -s "$BERGHIA_FASTA" ]; then
-        log "Warning: Berghia FASTA not found: $BERGHIA_FASTA"
-        log "Skipping ECL analysis — need candidate sequences for TM prediction."
-        exit 0
-    fi
-
-    run_command "deeptmhmm_topology" \
-        bash "${SCRIPTS_DIR}/run_deeptmhmm.sh" -f "$BERGHIA_FASTA" -o "$DEEPTMHMM_DIR"
-
-    if [ ! -f "$TOPO_FILE" ]; then
-        log "Error: DeepTMHMM failed to produce topology predictions"
-        exit 1
-    fi
+    log --level=ERROR "Required topology file not found: $TOPO_FILE"
+    log --level=ERROR "Stage 02 (02_chemogpcrs_identification.sh) must be run first to produce"
+    log --level=ERROR "DeepTMHMM per-residue topology predictions. 04b's SBATCH allocation"
+    log --level=ERROR "(2h / 8G / 1 CPU) is sized for ECL analysis only — running DeepTMHMM"
+    log --level=ERROR "(ProtT5 transformer) inline here would exceed the wallclock limit and"
+    log --level=ERROR "produce nothing. Re-run stage 02 to generate: $TOPO_FILE"
+    exit 1
 fi
 
 TOPO_COUNT=$(grep -c '^>' "$TOPO_FILE" 2>/dev/null || echo 0)
