@@ -106,3 +106,27 @@ def test_filter_creates_parent_directory(tmp_path: Path) -> None:
     out = tmp_path / "deep" / "nested" / "out.fa"
     dnagr.filter_alignment(str(inp), str(out), 0.95)
     assert out.exists()
+
+
+# ---- same-file (in-place) safety -----------------------------------------
+
+def test_filter_inplace_same_path_keeps_clean_rows(tmp_path: Path) -> None:
+    """Stage 04 calls drop_near_all_gap_rows with --input and --output
+    pointing at the SAME path.  Opening output in 'w' mode truncates the
+    file before fin reads it, producing an empty result.  The fix must read
+    all input first, then write, so normal sequences survive."""
+    target = tmp_path / "alignment.fa"
+    # Two normal sequences + one near-all-gap row
+    target.write_text(
+        ">seq_good_1\nACDEFGHIKL\n"
+        ">seq_gappy\n" + "-" * 19 + "A\n"
+        ">seq_good_2\nMNPQRSTVWY\n"
+    )
+    n_kept, n_dropped = dnagr.filter_alignment(str(target), str(target), 0.95)
+    assert n_kept == 2, "both clean sequences must survive an in-place run"
+    assert n_dropped == 1
+    text = target.read_text()
+    assert text != "", "output must NOT be empty after in-place filtering"
+    assert ">seq_good_1" in text
+    assert ">seq_good_2" in text
+    assert ">seq_gappy" not in text

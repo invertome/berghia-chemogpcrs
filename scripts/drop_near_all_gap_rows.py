@@ -24,7 +24,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -40,35 +42,66 @@ def filter_alignment(input_path: str, output_path: str,
                      gap_threshold: float = 0.95) -> tuple[int, int]:
     """Read FASTA at `input_path`, drop sequences with gap fraction
     ≥ `gap_threshold`, write the rest to `output_path`. Returns
-    (n_kept, n_dropped)."""
+    (n_kept, n_dropped).
+
+    Safe when input_path == output_path: all input is read and processed
+    first, then the result is written to a sibling temp file and atomically
+    renamed over the destination. This prevents the truncation-before-read
+    bug that occurs when both paths are the same file and the output is
+    opened in 'w' mode before reading begins.
+    """
     n_kept = 0
     n_dropped = 0
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    out_dir = Path(output_path).parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Collect filtered records into memory first so that input_path ==
+    # output_path is handled safely regardless of the OS buffering state.
+    records: list[tuple[str, str]] = []  # (header_line, sequence)
     cur_id: str | None = None
     cur_lines: list[str] = []
 
-    with open(input_path) as fin, open(output_path, "w") as fout:
-        def _flush() -> None:
-            nonlocal n_kept, n_dropped
-            if cur_id is None:
-                return
-            seq = "".join(cur_lines)
-            if gap_fraction(seq) < gap_threshold:
-                fout.write(cur_id + "\n")
-                fout.write(seq + "\n")
-                n_kept += 1
-            else:
-                n_dropped += 1
-
+    with open(input_path) as fin:
         for line in fin:
             line = line.rstrip("\n")
             if line.startswith(">"):
-                _flush()
+                if cur_id is not None:
+                    records.append((cur_id, "".join(cur_lines)))
                 cur_id = line
                 cur_lines = []
             else:
                 cur_lines.append(line)
-        _flush()
+        if cur_id is not None:
+            records.append((cur_id, "".join(cur_lines)))
+
+    # Decide which records to keep.
+    kept: list[tuple[str, str]] = []
+    for header, seq in records:
+        if gap_fraction(seq) < gap_threshold:
+            kept.append((header, seq))
+            n_kept += 1
+        else:
+            n_dropped += 1
+
+    # Write to a temp file in the same directory, then rename atomically.
+    # os.replace is atomic on POSIX when src and dst are on the same
+    # filesystem (guaranteed here because tmp lives in out_dir).
+    fd, tmp_path = tempfile.mkstemp(dir=str(out_dir),
+                                    prefix=".drop_gaps_tmp_",
+                                    suffix=".fa")
+    try:
+        with os.fdopen(fd, "w") as fout:
+            for header, seq in kept:
+                fout.write(header + "\n")
+                fout.write(seq + "\n")
+        os.replace(tmp_path, output_path)
+    except Exception:
+        # Clean up the temp file on any write/rename failure.
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
     return n_kept, n_dropped
 
