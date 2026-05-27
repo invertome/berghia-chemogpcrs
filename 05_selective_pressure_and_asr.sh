@@ -216,11 +216,49 @@ expected_count = ${expected_count}
 try:
     with open(codon_file, 'r') as f:
         first_line = f.readline().strip()
+
+        # Bead 771: MACSE (default RUN_MACSE=1) emits a FASTA codon alignment;
+        # pal2nal emits PAML. HyPhy reads FASTA natively, so accept either —
+        # the old PAML-only check failed on MACSE output and silently skipped
+        # the ENTIRE selection stack (GARD/BUSTED/aBSREL/MEME) for every OG.
+        if first_line.startswith('>'):
+            f.seek(0)
+            seqs = {}
+            name = None
+            buf = []
+            for line in f:
+                line = line.strip()
+                if line.startswith('>'):
+                    if name is not None:
+                        seqs[name] = ''.join(buf)
+                    name = line[1:].split()[0] if len(line) > 1 else ''
+                    buf = []
+                elif name is not None and line:
+                    buf.append(line.replace(' ', ''))
+            if name is not None:
+                seqs[name] = ''.join(buf)
+            if len(seqs) < 2:
+                print(f"FASTA codon alignment has <2 sequences ({len(seqs)})", file=sys.stderr)
+                sys.exit(1)
+            lengths = {len(s) for s in seqs.values()}
+            if len(lengths) != 1:
+                print(f"FASTA codon alignment not aligned (lengths {sorted(lengths)})", file=sys.stderr)
+                sys.exit(1)
+            nalign = lengths.pop()
+            if nalign == 0 or nalign % 3 != 0:
+                print(f"FASTA codon alignment length {nalign} not a positive multiple of 3", file=sys.stderr)
+                sys.exit(1)
+            if expected_count > 0 and len(seqs) != expected_count:
+                print(f"Sequence count mismatch: expected {expected_count}, got {len(seqs)}", file=sys.stderr)
+                sys.exit(1)
+            print(f"Codon alignment valid (FASTA): {len(seqs)} sequences, {nalign} bp ({nalign//3} codons)", file=sys.stderr)
+            sys.exit(0)
+
         parts = first_line.split()
 
         # PAML format: first line is "nseqs nalign"
         if len(parts) != 2:
-            print(f"Invalid PAML header: expected 'nseqs nalign', got '{first_line}'", file=sys.stderr)
+            print(f"Invalid PAML header: expected 'nseqs nalign' or FASTA, got '{first_line}'", file=sys.stderr)
             sys.exit(1)
 
         try:
@@ -291,6 +329,23 @@ PYTHON_SCRIPT
     return $?
 }
 
+# Bead 1z7: rebuild a cumulative CSV from all per-OG CSVs in <dir> matching
+# *<suffix>. Idempotent and safe under SLURM arrays — each task writes only its
+# own per-OG csv then re-runs this concat, so the last task yields the complete
+# cumulative. Header is taken from the first file only; per-task temp avoids
+# clobbering between concurrent tasks.
+concat_per_og_csv() {
+    local dir="$1" suffix="$2" cumulative="$3"
+    local tmp="${cumulative}.tmp.$$"
+    : > "$tmp"
+    local first=1 csv
+    for csv in "$dir"/*"$suffix"; do
+        [ -f "$csv" ] || continue
+        if [ "$first" = 1 ]; then cat "$csv" >> "$tmp"; first=0; else tail -n +2 "$csv" >> "$tmp"; fi
+    done
+    if [ -s "$tmp" ]; then mv "$tmp" "$cumulative"; else rm -f "$tmp"; fi
+}
+
 # --- Selective Pressure with aBSREL ---
 if [ "$taxa_count" -gt 1 ] && [ "$HYPHY_AVAILABLE" = true ]; then
     protein_align="${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa"
@@ -335,7 +390,12 @@ if [ "$taxa_count" -gt 1 ] && [ "$HYPHY_AVAILABLE" = true ]; then
 
                 # Parse aBSREL JSON (always — both backends produce it)
                 if [ -f "${RESULTS_DIR}/selective_pressure/${base}_absrel.json" ]; then
-                    python3 "${SCRIPTS_DIR}/parse_absrel.py" "${RESULTS_DIR}/selective_pressure/${base}_absrel.json" "${RESULTS_DIR}/selective_pressure/absrel_results.csv" || log "Warning: Failed to parse aBSREL for $base"
+                    # Bead 1z7: write a PER-OG csv (not the shared cumulative) so
+                    # parallel array tasks don't clobber each other (parse_absrel
+                    # default 'atomic' opens the target with mode 'w'); rebuild the
+                    # cumulative absrel_results.csv from all per-OG csvs afterward.
+                    python3 "${SCRIPTS_DIR}/parse_absrel.py" "${RESULTS_DIR}/selective_pressure/${base}_absrel.json" "${RESULTS_DIR}/selective_pressure/${base}_absrel.csv" || log "Warning: Failed to parse aBSREL for $base"
+                    concat_per_og_csv "${RESULTS_DIR}/selective_pressure" "_absrel.csv" "${RESULTS_DIR}/selective_pressure/absrel_results.csv"
                 fi
             else
                 log "Warning: pal2nal produced invalid codon alignment for ${base}, skipping selection analysis"
@@ -376,8 +436,11 @@ if [ "$berghia_count" -gt 0 ] && [ "$seq_count" -gt 2 ]; then
                 # Validate codon alignment before running aBSREL
                 if validate_codon_alignment "$codon_file"; then
                     run_command "${base}_absrel_lse" hyphy aBSREL --alignment "$codon_file" --tree "$tree" --output "${RESULTS_DIR}/selective_pressure/${base}_absrel_lse.json"
-                    [ -f "${RESULTS_DIR}/selective_pressure/${base}_absrel_lse.json" ] && \
-                        python3 "${SCRIPTS_DIR}/parse_absrel.py" "${RESULTS_DIR}/selective_pressure/${base}_absrel_lse.json" "${RESULTS_DIR}/selective_pressure/absrel_results_lse.csv"
+                    if [ -f "${RESULTS_DIR}/selective_pressure/${base}_absrel_lse.json" ]; then
+                        # Bead 1z7: per-OG csv + cumulative rebuild (see main path above).
+                        python3 "${SCRIPTS_DIR}/parse_absrel.py" "${RESULTS_DIR}/selective_pressure/${base}_absrel_lse.json" "${RESULTS_DIR}/selective_pressure/${base}_absrel_lse.csv"
+                        concat_per_og_csv "${RESULTS_DIR}/selective_pressure" "_absrel_lse.csv" "${RESULTS_DIR}/selective_pressure/absrel_results_lse.csv"
+                    fi
                 else
                     log "Warning: Invalid codon alignment for ${base} LSE analysis"
                 fi
