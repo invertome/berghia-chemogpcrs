@@ -208,12 +208,15 @@ export SLURM_QOS="${SLURM_QOS:-long}"
 # personal email in public git history.
 export SLURM_EMAIL="${SLURM_EMAIL:-your.email@example.com}"
 
-# Cluster-specific options (leave empty to omit from sbatch)
-export SLURM_PARTITION=""           # Partition/queue name, e.g., "cpu", "gpu", "highmem"
-export SLURM_ACCOUNT=""             # Account/allocation name, e.g., "katzlab", "pi_username"
-export SLURM_QOS=""                 # Quality of service, e.g., "normal", "long", "gpu"
-export SLURM_CONSTRAINT=""          # Node constraints, e.g., "skylake", "v100"
-export SLURM_RESERVATION=""         # Reservation name (if applicable)
+# Cluster-specific options. Default to empty (omitted from sbatch) in the
+# public repo, but PRESERVE any value already set by config.local.sh (sourced
+# above) or the environment — a bare `=""` clobbered those (audit -wkb). With
+# ${VAR:-} SLURM_QOS also keeps its 'long' default set a few lines above.
+export SLURM_PARTITION="${SLURM_PARTITION:-}"     # e.g. "cpu", "gpu", "highmem"
+export SLURM_ACCOUNT="${SLURM_ACCOUNT:-}"         # e.g. "katzlab", "pi_username"
+export SLURM_QOS="${SLURM_QOS:-}"                 # e.g. "normal", "long", "gpu"
+export SLURM_CONSTRAINT="${SLURM_CONSTRAINT:-}"   # e.g. "skylake", "v100"
+export SLURM_RESERVATION="${SLURM_RESERVATION:-}" # reservation name (if any)
 export SLURM_EXTRA_ARGS=""          # Any additional sbatch flags, e.g., "--exclusive --nodelist=node01"
 
 # Array job settings

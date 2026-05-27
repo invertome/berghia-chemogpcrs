@@ -73,16 +73,21 @@ log "Candidates: $N_CANDIDATES sequences in $CANDIDATE_FASTA"
 
 # --- 1a. HMM scan classifier on Berghia candidates ---
 HMM_OUT="${OUT_DIR}/candidate_hmm_assignments.tsv"
+# Audit (-wkb): PFAM_ARGS/LOO_ARGS feed BOTH the candidate HMM scan and the
+# Nath-ref scan below; compute them unconditionally so an idempotent resume
+# (06c_classify_hmm already done but 06c_classify_nath not) still passes
+# --pfam-fallback-dir / --loo-metrics instead of the weaker no-fallback scan.
+PFAM_ARGS=""
+if [ -d "$PFAM_DIR" ]; then
+    PFAM_ARGS="--pfam-fallback-dir $PFAM_DIR"
+fi
+LOO_ARGS=""
+if [ -f "$LOO_METRICS" ]; then
+    LOO_ARGS="--loo-metrics $LOO_METRICS"
+fi
+
 if ! is_step_completed "06c_classify_hmm"; then
     log "[06c] Running HMM-scan classifier on candidates..."
-    PFAM_ARGS=""
-    if [ -d "$PFAM_DIR" ]; then
-        PFAM_ARGS="--pfam-fallback-dir $PFAM_DIR"
-    fi
-    LOO_ARGS=""
-    if [ -f "$LOO_METRICS" ]; then
-        LOO_ARGS="--loo-metrics $LOO_METRICS"
-    fi
     # shellcheck disable=SC2086
     python3 "${SCRIPTS_DIR}/classify_via_hmm.py" \
         --candidate-fasta "$CANDIDATE_FASTA" \

@@ -486,7 +486,7 @@ if [ "$berghia_count" -gt 0 ] && [ "$seq_count" -gt 2 ]; then
                     mkdir -p "${RESULTS_DIR}/asr"
                     run_command "${base}_asr_iqtree" ${IQTREE} \
                         -s "$asr_input" -te "$tree" \
-                        --ancestral -seed "${IQTREE_SEED}" -T "${CPUS}" \
+                        --ancestral -seed "${IQTREE_SEED}" -T "${SLURM_CPUS_PER_TASK:-${CPUS}}" \
                         --prefix "$asr_prefix" 2>/dev/null \
                         || log "Warning: IQ-TREE ASR failed for ${base}"
                     # Extract per-deep-node ancestral sequences for downstream use.
@@ -504,7 +504,7 @@ if [ "$berghia_count" -gt 0 ] && [ "$seq_count" -gt 2 ]; then
                         run_command "${base}_${node}_asr" ${FASTML} --seq "$asr_input" --tree "$tree" \
                             --out_seq "${RESULTS_DIR}/asr/${base}_${node}_asr.fa" \
                             --out_tree "${RESULTS_DIR}/asr/${base}_${node}_asr.tree" \
-                            --node "$node" -t "${CPUS}" --verbose 2>/dev/null \
+                            --node "$node" -t "${SLURM_CPUS_PER_TASK:-${CPUS}}" --verbose 2>/dev/null \
                             || log "Warning: FastML failed for ${base} node ${node}"
                     done
                 fi
