@@ -118,6 +118,9 @@ def parse_hmmscan_tblout(
         4  E-value (sequence, full)
         5  score
         ...
+
+    Accession field: strips Pfam version suffix (e.g. "PF00001.27" -> "PF00001")
+    to ensure consistent lookup against _PFAM_TO_CLASS which uses bare accessions.
     """
     if not os.path.exists(path):
         return {}
@@ -130,7 +133,12 @@ def parse_hmmscan_tblout(
             if len(parts) < 6:
                 continue
             target = parts[0]
-            accession = parts[1]   # '-' when not present
+            accession_raw = parts[1]   # '-' when not present, may have version suffix
+            # Strip Pfam version suffix (e.g. "PF00001.27" -> "PF00001")
+            if accession_raw and accession_raw != "-":
+                accession = accession_raw.split(".")[0]
+            else:
+                accession = ""
             query = parts[2]
             try:
                 evalue = float(parts[4])
@@ -189,7 +197,6 @@ def call_class(
 
 def refine_subfamily(
     hits_06c: list[tuple[str, str, float]],
-    query_id: str,
     *,
     pfam_accession: str = "",
     evalue_threshold: float = 1e-5,
@@ -205,9 +212,7 @@ def refine_subfamily(
     ----------
     hits_06c:
         List of (target_name, accession, evalue) tuples for this query.
-    query_id:
-        Only hits whose query field matches query_id are used.
-        (The list may already be pre-filtered per-query by the caller.)
+        (The list is expected to be pre-filtered per-query by the caller.)
     pfam_accession:
         If set and in _PFAM_SUBFAMILY, that value wins unconditionally
         (before the 06c scan).
@@ -506,7 +511,6 @@ def classify_fasta(
         # Determine subfamily: Pfam intrinsic first, then 06c refinement
         evidence_family_hmm = refine_subfamily(
             f_hits,
-            seq_id,
             pfam_accession=evidence_pfam,
             evalue_threshold=evalue,
         )

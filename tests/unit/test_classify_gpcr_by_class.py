@@ -91,7 +91,7 @@ def test_PF10324_sets_class_A_and_insect_subfamily():
     assert evidence_pfam == "PF10324"
 
     # Subfamily from _PFAM_SUBFAMILY (no 06c hits)
-    subfam = cgc.refine_subfamily([], "seq1", pfam_accession="PF10324")
+    subfam = cgc.refine_subfamily([], pfam_accession="PF10324")
     assert subfam == "insect_OR_atypical"
 
 
@@ -140,7 +140,7 @@ def test_06c_refines_subfamily_not_class():
 
     # 06c refinement (target name without extension matches 'aminergic_dopamine')
     family_hits_06c = [("aminergic_dopamine", "seq1", 1e-80)]
-    subfam = cgc.refine_subfamily(family_hits_06c, "seq1")
+    subfam = cgc.refine_subfamily(family_hits_06c)
     assert subfam == "aminergic_dopamine"
     # class remains A — it's determined by Pfam, never by refine_subfamily
     assert cls == "A"
@@ -158,7 +158,7 @@ def test_06c_classBC_F_hmms_excluded_from_refinement():
         ("class-C", "seq1", 1e-60),
         ("class-F-frizzled", "seq1", 1e-50),
     ]
-    subfam = cgc.refine_subfamily(family_hits_06c, "seq1")
+    subfam = cgc.refine_subfamily(family_hits_06c)
     assert subfam == ""
 
 
@@ -168,7 +168,7 @@ def test_06c_keeps_non_class_hits():
         ("class-B-secretin", "seq1", 1e-80),  # excluded
         ("opsin", "seq1", 1e-60),              # included — best remaining
     ]
-    subfam = cgc.refine_subfamily(family_hits_06c, "seq1")
+    subfam = cgc.refine_subfamily(family_hits_06c)
     assert subfam == "opsin"
 
 
@@ -384,7 +384,7 @@ def test_refine_subfamily_respects_evalue_threshold():
     family_hits_06c = [
         ("aminergic", "seq1", 1e-3),  # above default 1e-5 → ignored
     ]
-    subfam = cgc.refine_subfamily(family_hits_06c, "seq1", evalue_threshold=1e-5)
+    subfam = cgc.refine_subfamily(family_hits_06c, evalue_threshold=1e-5)
     assert subfam == ""
 
 
@@ -393,5 +393,78 @@ def test_refine_subfamily_returns_best_hit_below_threshold():
         ("opsin", "seq1", 1e-80),
         ("lipid", "seq1", 1e-20),
     ]
-    subfam = cgc.refine_subfamily(family_hits_06c, "seq1", evalue_threshold=1e-5)
+    subfam = cgc.refine_subfamily(family_hits_06c, evalue_threshold=1e-5)
     assert subfam == "opsin"
+
+
+# ---------------------------------------------------------------------------
+# 18. NEW: Versioned Pfam accession handling (regression test for P2 bug fix)
+# ---------------------------------------------------------------------------
+
+def test_call_class_handles_versioned_pfam_accession():
+    """call_class must handle Pfam accessions with version suffix (e.g. PF00001.27).
+    The parser strips the suffix, so this test ensures that call_class receives
+    the bare accession and correctly identifies the class."""
+    # Simulate what the parser produces after stripping "PF00001.27" -> "PF00001"
+    hits = [("7tm_1", "PF00001", 1e-50)]
+    cls, evidence_pfam, top_evalue = cgc.call_class(hits, cgc._PFAM_TO_CLASS, 1e-5)
+    assert cls == "A", "Versioned Pfam should still resolve to class A"
+    assert evidence_pfam in ("7tm_1", "PF00001"), (
+        "evidence_pfam should be either target name or bare accession"
+    )
+    assert top_evalue == 1e-50
+
+
+def test_parse_tblout_strips_pfam_version_suffix(tmp_path):
+    """parse_hmmscan_tblout must strip Pfam version suffixes from accession column.
+    Real InterPro HMMs have versioned accessions like PF00001.27; we must strip
+    to .split('.')[0] so lookups against _PFAM_TO_CLASS (which uses bare keys) work."""
+    tblout_with_versioned = """\
+# hmmscan tblout
+#                         --- full sequence ---
+# target name  accession  query name  accession  E-value  score  bias
+# ------------ ---------  ----------- ---------  ------- ------ ----
+7tm_1          PF00001.27 seq1        -          1.2e-50  200.0  0.0
+"""
+    tbl = tmp_path / "versioned.tbl"
+    tbl.write_text(tblout_with_versioned)
+    hits = cgc.parse_hmmscan_tblout(str(tbl))
+
+    assert "seq1" in hits, "seq1 should be in the parsed results"
+    assert len(hits["seq1"]) >= 1, "seq1 should have at least one hit"
+    target, accession, evalue = hits["seq1"][0]
+    assert accession == "PF00001", (
+        f"Accession should be stripped to 'PF00001', got '{accession}'"
+    )
+    assert evalue == 1.2e-50
+
+
+def test_pf10324_atypical_with_versioned_accession(tmp_path):
+    """PF10324 (insect 7tm_6) with versioned accession should still trigger
+    the special subfamily annotation insect_OR_atypical."""
+    # Simulate parsing a tblout with versioned PF10324
+    tblout_pf10324 = """\
+# hmmscan tblout
+#                         --- full sequence ---
+# target name  accession  query name  accession  E-value  score  bias
+# ------------ ---------  ----------- ---------  ------- ------ ----
+7tm_6          PF10324.13 seq_insect  -          1.5e-60  250.0  0.0
+"""
+    tbl = tmp_path / "pf10324_versioned.tbl"
+    tbl.write_text(tblout_pf10324)
+    hits = cgc.parse_hmmscan_tblout(str(tbl))
+
+    assert "seq_insect" in hits
+    target, accession, evalue = hits["seq_insect"][0]
+    assert accession == "PF10324", "Version suffix should be stripped"
+
+    # Now call_class and refine_subfamily with the stripped accession
+    cls, evidence_pfam, _ = cgc.call_class(hits["seq_insect"], cgc._PFAM_TO_CLASS, 1e-5)
+    assert cls == "A"
+    assert evidence_pfam == "PF10324"
+
+    # refine_subfamily should return the intrinsic _PFAM_SUBFAMILY annotation
+    subfam = cgc.refine_subfamily([], pfam_accession="PF10324")
+    assert subfam == "insect_OR_atypical", (
+        "PF10324 should map to insect_OR_atypical in _PFAM_SUBFAMILY"
+    )
