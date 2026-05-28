@@ -123,7 +123,7 @@ if [[ -n "${ARG_MANIFEST}" ]]; then
          NR == n+1 { print $col["taxid"] "\t" $col["binomial"] "\t" $col["proteome_path"]; exit }
         ' "${ARG_MANIFEST}")
     if [[ -z "${TASK_ROW}" ]]; then
-        echo "[scan] ERROR: no row ${SLURM_ARRAY_TASK_ID} in manifest (0-based after header)" >&2
+        echo "[scan] ERROR: no row ${SLURM_ARRAY_TASK_ID} in manifest (1-indexed: row 1 = task 1)" >&2
         exit 1
     fi
     ARG_TAXID=$(echo "${TASK_ROW}"    | cut -f1)

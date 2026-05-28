@@ -22,7 +22,7 @@ import argparse
 import csv
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -40,7 +40,7 @@ _MULTI_UNDERSCORE = re.compile(r"_+")
 # Public types
 # ---------------------------------------------------------------------------
 
-@dataclass
+@dataclass(frozen=True)
 class PredictionRow:
     """One row from the TMbed prediction file (columns 3 + 5 carry the signal)."""
     tm_count: int
