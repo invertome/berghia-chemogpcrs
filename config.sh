@@ -300,6 +300,16 @@ export FASTTREE_SEED="${FASTTREE_SEED:-12345}"
 export IQTREE_TBE="${IQTREE_TBE:-1}"           # 1 to request TBE; 0 to skip
 export IQTREE_BOOTSTRAP=1000
 export ORTHOFINDER_INFLATION=1.5
+
+# --- Genome-wide OrthoFinder (CAFE expansion to all ~557 species) ---
+# SEPARATE from the chemoreceptor-focused stage-03 OG run (which clusters
+# candidate chemoreceptor proteins + Nath references for stage-04 gene
+# trees). The genome-wide run feeds 03c CAFE5 over the full species-tree
+# leaf set. Implements decision_orthology_cafe_all557 (locked 2026-05-27).
+export GENOME_WIDE_ORTHOFINDER_DIR="${RESULTS_DIR}/orthogroups_genome_wide"
+export GENOME_WIDE_INFLATION=1.5
+export GENOME_WIDE_ORTHOFINDER_THREADS="${CPUS:-32}"
+
 export FOLDTREE_METHOD="upgma"
 export USE_MRBAYES=false
 export NUM_STRUCTURAL_CANDIDATES=10
