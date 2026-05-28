@@ -29,7 +29,7 @@ import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Optional
 
 # ---------------------------------------------------------------------------
 # Sanitization — MUST match build_braker4_samples_csv.sanitize_sample_name
@@ -260,6 +260,16 @@ def load_sources(args) -> tuple[list[ProteomeSource], list[ConsolidationStatus]]
                     message=f"already seen in phase {seen_taxids[s.taxid]}",
                 ))
 
+    # Add Berghia first (canonical source) so it wins any duplicate-taxid conflicts
+    if getattr(args, "berghia_proteome", None):
+        berghia_path = Path(args.berghia_proteome)
+        _add([ProteomeSource(
+            taxid=BERGHIA_TAXID,
+            binomial="Berghia stephanieae",
+            fasta_path=berghia_path,
+            phase="berghia",
+        )])
+
     if getattr(args, "phase1a_manifest", None):
         _add(_read_manifest(
             Path(args.phase1a_manifest), "1a", base_dir, braker4_output_dir,
@@ -279,15 +289,6 @@ def load_sources(args) -> tuple[list[ProteomeSource], list[ConsolidationStatus]]
     if getattr(args, "phase1g_manifest", None):
         _add(_read_manifest(
             Path(args.phase1g_manifest), "1g", base_dir, braker4_output_dir,
-        ))
-
-    if getattr(args, "berghia_proteome", None):
-        berghia_path = Path(args.berghia_proteome)
-        sources.append(ProteomeSource(
-            taxid=BERGHIA_TAXID,
-            binomial="Berghia stephanieae",
-            fasta_path=berghia_path,
-            phase="berghia",
         ))
 
     return sources, duplicates

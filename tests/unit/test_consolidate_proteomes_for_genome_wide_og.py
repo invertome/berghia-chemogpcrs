@@ -443,3 +443,55 @@ class TestLoadSources:
         content = target.read_text()
         assert ">400_Fallback_species|prot1" in content
         assert "MSEQ" in content
+
+    def test_berghia_deduplicates_phase1a_row(self, tmp_path: Path) -> None:
+        """When Berghia taxid 1287507 appears in both --berghia-proteome and
+        Phase 1a manifest, the Berghia source (canonical RefSeq) is added first
+        via _add() and wins. The Phase 1a row is recorded as duplicate_taxid
+        with message 'already seen in phase berghia'."""
+        phase1a_m = tmp_path / "proteome_manifest.tsv"
+        proteome_dir = tmp_path / "cache" / "proteomes"
+        proteome_dir.mkdir(parents=True)
+        berghia_fa = tmp_path / "berghia.proteins.fa"
+        braker4_dir = tmp_path / "braker4_output"
+
+        # Create both Berghia sources
+        berghia_fa.write_text(">refseq_prot\nMREFSEQ\n")
+        (proteome_dir / "1287507_Berghia_stephanieae.faa").write_text(
+            ">phase1a_prot\nMPHASE1A\n"
+        )
+
+        # Phase 1a manifest includes Berghia
+        _write_tsv(phase1a_m, _PHASE1A_COLS, [
+            {
+                "taxid": "1287507",
+                "binomial": "Berghia stephanieae",
+                "accession": "GCF_034508935.2",
+            },
+        ])
+
+        import argparse
+        args = argparse.Namespace(
+            phase1a_manifest=phase1a_m,
+            phase1d_manifest=None,
+            phase1e_manifest=None,
+            phase1g_manifest=None,
+            berghia_proteome=berghia_fa,
+            base_dir=tmp_path,
+            braker4_output_dir=braker4_dir,
+        )
+        sources, duplicates = cons.load_sources(args)
+
+        # Exactly one source: the berghia-phase one (Berghia RefSeq is canonical)
+        assert len(sources) == 1
+        assert sources[0].taxid == 1287507
+        assert sources[0].phase == "berghia"
+        assert sources[0].fasta_path == berghia_fa
+
+        # Exactly one duplicate marked as duplicate_taxid: the Phase 1a row
+        assert len(duplicates) == 1
+        dup = duplicates[0]
+        assert dup.taxid == 1287507
+        assert dup.status == "duplicate_taxid"
+        assert dup.phase == "1a"
+        assert dup.message == "already seen in phase berghia"
