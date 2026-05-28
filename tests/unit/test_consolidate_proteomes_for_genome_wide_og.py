@@ -165,14 +165,8 @@ class TestIdempotentRerun:
 # ---------------------------------------------------------------------------
 
 class TestDuplicateTaxid:
-    """When an output file already exists for the same taxid (same leaf name)
-    but consolidate_one is called with a different ProteomeSource for the same
-    taxid, the existing-file idempotent check applies: returns ok (skip) if
-    the target already has ≥1 header and force=False.
-    When the exact same target path is produced (same taxid+binomial), the
-    duplicate is naturally caught by the idempotency check. When two DISTINCT
-    binomials hash to the same leaf (not expected in practice, but we exercise
-    it), we document the behaviour.
+    """load_sources tracks duplicate taxids and returns them as duplicate_taxid
+    status entries. First-seen taxid wins (early phases processed first).
     """
 
     def test_existing_target_without_force_returns_ok_skip(self, tmp_path: Path) -> None:
@@ -190,6 +184,56 @@ class TestDuplicateTaxid:
         # File content unchanged (not overwritten)
         assert "existing" in target.read_text()
 
+    def test_duplicate_taxid_emitted_by_load_sources(self, tmp_path: Path) -> None:
+        """When same taxid appears in multiple manifests, second copy is marked
+        as duplicate_taxid in the returned list of dropped duplicates."""
+        phase1a_m = tmp_path / "proteome_manifest.tsv"
+        phase1e_m = tmp_path / "genome_inventory_unannotated.tsv"
+        proteome_dir = tmp_path / "cache" / "proteomes"
+        proteome_dir.mkdir(parents=True)
+        braker4_dir = tmp_path / "braker4_output"
+
+        # Create proteome files
+        (proteome_dir / "100_Shared_taxid.faa").write_text(">p1\nM\n")
+        (braker4_dir / "100_Shared_taxid" / "results").mkdir(parents=True)
+        (braker4_dir / "100_Shared_taxid" / "results" / "braker.aa").write_text(">p2\nM\n")
+
+        # Phase 1a has taxid 100
+        _write_tsv(phase1a_m, _PHASE1A_COLS, [
+            {"taxid": "100", "binomial": "Shared taxid",
+             "accession": "GCF_000001.1"},
+        ])
+        # Phase 1e ALSO has taxid 100 (duplicate)
+        _write_tsv(phase1e_m, _PHASE1E_COLS, [
+            {"taxid": "100", "binomial": "Shared taxid",
+             "accession": "GCA_000002.1"},
+        ])
+
+        import argparse
+        args = argparse.Namespace(
+            phase1a_manifest=phase1a_m,
+            phase1d_manifest=None,
+            phase1e_manifest=phase1e_m,
+            phase1g_manifest=None,
+            berghia_proteome=None,
+            base_dir=tmp_path,
+            braker4_output_dir=braker4_dir,
+        )
+        sources, duplicates = cons.load_sources(args)
+
+        # Should have 1 source (phase 1a wins, first-seen)
+        assert len(sources) == 1
+        assert sources[0].taxid == 100
+        assert sources[0].phase == "1a"
+
+        # Should have 1 duplicate marked as duplicate_taxid
+        assert len(duplicates) == 1
+        dup = duplicates[0]
+        assert dup.taxid == 100
+        assert dup.status == "duplicate_taxid"
+        assert dup.phase == "1f"  # phase 1e uses "1f" label
+        assert "already seen in phase 1a" in dup.message
+
     def test_write_consolidation_report_includes_all_statuses(
         self, tmp_path: Path
     ) -> None:
@@ -202,6 +246,10 @@ class TestDuplicateTaxid:
                 taxid=2, binomial="C d", phase="1f", status="missing_proteome",
                 message="not found",
             ),
+            cons.ConsolidationStatus(
+                taxid=3, binomial="E f", phase="1f", status="duplicate_taxid",
+                message="already seen in phase 1a",
+            ),
         ]
         report_path = tmp_path / "report.tsv"
         cons.write_consolidation_report(statuses, report_path)
@@ -210,11 +258,13 @@ class TestDuplicateTaxid:
             reader = csv.DictReader(f, delimiter="\t")
             rows = list(reader)
 
-        assert len(rows) == 2
+        assert len(rows) == 3
         assert rows[0]["status"] == "ok"
         assert rows[0]["n_seqs"] == "5"
         assert rows[1]["status"] == "missing_proteome"
         assert rows[1]["taxid"] == "2"
+        assert rows[2]["status"] == "duplicate_taxid"
+        assert rows[2]["taxid"] == "3"
 
 
 # ---------------------------------------------------------------------------
@@ -268,8 +318,9 @@ class TestLoadSources:
             base_dir=tmp_path,
             braker4_output_dir=tmp_path / "braker4_output",
         )
-        sources = list(cons.load_sources(args))
+        sources, duplicates = cons.load_sources(args)
         assert len(sources) == 1
+        assert len(duplicates) == 0
         assert sources[0].taxid == 100
         assert sources[0].phase == "1a"
 
@@ -291,10 +342,11 @@ class TestLoadSources:
             base_dir=tmp_path,
             braker4_output_dir=tmp_path / "braker4_output",
         )
-        sources = list(cons.load_sources(args))
+        sources, duplicates = cons.load_sources(args)
         taxids = {s.taxid for s in sources}
         assert 200 not in taxids
         assert 201 in taxids
+        assert len(duplicates) == 0
 
     def test_berghia_proteome_arg_creates_source(self, tmp_path: Path) -> None:
         berghia_fa = tmp_path / "berghia.proteins.fa"
@@ -309,8 +361,9 @@ class TestLoadSources:
             base_dir=tmp_path,
             braker4_output_dir=tmp_path / "braker4_output",
         )
-        sources = list(cons.load_sources(args))
+        sources, duplicates = cons.load_sources(args)
         assert len(sources) == 1
+        assert len(duplicates) == 0
         assert sources[0].phase == "berghia"
         assert sources[0].taxid == 1287507
 
@@ -335,7 +388,58 @@ class TestLoadSources:
             base_dir=tmp_path,
             braker4_output_dir=tmp_path / "braker4_output",
         )
-        sources = list(cons.load_sources(args))
+        sources, duplicates = cons.load_sources(args)
         assert len(sources) == 1
         assert sources[0].taxid == 300
         assert sources[0].phase == "1f"
+        assert len(duplicates) == 0
+
+    def test_phase1f_braker_aa_fallback_path_used(self, tmp_path: Path) -> None:
+        """When canonical proteome_braker4 cache doesn't exist, _locate_proteome
+        returns the raw braker.aa fallback path. consolidate_one successfully
+        processes the fallback."""
+        m = tmp_path / "genome_inventory_unannotated.tsv"
+        braker4_output = tmp_path / "braker4_output"
+
+        # Do NOT create the canonical cache path
+        # Instead, create the raw BRAKER4 output structure
+        leaf = "400_Fallback_species"
+        raw_braker_dir = braker4_output / leaf / "results"
+        raw_braker_dir.mkdir(parents=True)
+        (raw_braker_dir / "braker.aa").write_text(">prot1\nMSEQ\n>prot2\nMOTH\n")
+
+        _write_tsv(m, _PHASE1E_COLS, [
+            {"taxid": "400", "binomial": "Fallback species",
+             "accession": "GCA_000003.1"},
+        ])
+
+        import argparse
+        args = argparse.Namespace(
+            phase1a_manifest=None,
+            phase1d_manifest=None,
+            phase1e_manifest=m,
+            phase1g_manifest=None,
+            berghia_proteome=None,
+            base_dir=tmp_path,
+            braker4_output_dir=braker4_output,
+        )
+        sources, duplicates = cons.load_sources(args)
+
+        assert len(sources) == 1
+        assert len(duplicates) == 0
+
+        # Verify that the source's fasta_path points to the raw braker.aa
+        assert sources[0].fasta_path.name == "braker.aa"
+        assert "400_Fallback_species" in str(sources[0].fasta_path)
+
+        # Now consolidate and verify it worked
+        out_dir = tmp_path / "orthofinder_input"
+        status = cons.consolidate_one(sources[0], out_dir=out_dir)
+
+        assert status.status == "ok"
+        assert status.n_seqs == 2
+        target = out_dir / f"{leaf}.fa"
+        assert target.exists()
+        content = target.read_text()
+        assert ">400_Fallback_species|prot1" in content
+        assert "MSEQ" in content

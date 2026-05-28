@@ -223,8 +223,12 @@ def _locate_proteome(
     return base_dir / fname
 
 
-def load_sources(args) -> Iterable[ProteomeSource]:
+def load_sources(args) -> tuple[list[ProteomeSource], list[ConsolidationStatus]]:
     """Read all manifests + locate proteome paths per phase.
+
+    Returns (sources_to_process, dropped_duplicates) where:
+      - sources_to_process: list of ProteomeSource for unique taxids (first-seen wins)
+      - dropped_duplicates: list of ConsolidationStatus with status='duplicate_taxid'
 
     Args has attributes:
         phase1a_manifest  (Path or None)
@@ -237,14 +241,24 @@ def load_sources(args) -> Iterable[ProteomeSource]:
     """
     base_dir = Path(args.base_dir)
     braker4_output_dir = Path(args.braker4_output_dir)
-    seen_taxids: set[int] = set()
+    seen_taxids: dict[int, str] = {}  # taxid -> phase of first-seen
     sources: list[ProteomeSource] = []
+    duplicates: list[ConsolidationStatus] = []
 
     def _add(srcs: list[ProteomeSource]) -> None:
         for s in srcs:
             if s.taxid not in seen_taxids:
-                seen_taxids.add(s.taxid)
+                seen_taxids[s.taxid] = s.phase
                 sources.append(s)
+            else:
+                # Record as duplicate_taxid status
+                duplicates.append(ConsolidationStatus(
+                    taxid=s.taxid,
+                    binomial=s.binomial,
+                    phase=s.phase,
+                    status="duplicate_taxid",
+                    message=f"already seen in phase {seen_taxids[s.taxid]}",
+                ))
 
     if getattr(args, "phase1a_manifest", None):
         _add(_read_manifest(
@@ -276,7 +290,7 @@ def load_sources(args) -> Iterable[ProteomeSource]:
             phase="berghia",
         ))
 
-    return sources
+    return sources, duplicates
 
 
 # ---------------------------------------------------------------------------
@@ -362,8 +376,8 @@ def main(argv: list[str] | None = None) -> int:
     out_dir = args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    sources = list(load_sources(args))
-    if not sources:
+    sources, duplicates = load_sources(args)
+    if not sources and not duplicates:
         print("[consolidate] WARNING: no proteome sources found — check manifests/args.",
               file=sys.stderr)
 
@@ -371,6 +385,9 @@ def main(argv: list[str] | None = None) -> int:
     for src in sources:
         status = consolidate_one(src, out_dir=out_dir, force=args.force)
         statuses.append(status)
+
+    # Append any duplicate_taxid statuses
+    statuses.extend(duplicates)
 
     report_path = out_dir.parent / "consolidation_report.tsv"
     write_consolidation_report(statuses, report_path)
