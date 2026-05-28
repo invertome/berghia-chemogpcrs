@@ -1,0 +1,397 @@
+"""Tests for scripts/classify_gpcr_by_class.py.
+
+P1 of the per-class refactor — sequence-level GPCR class classifier.
+Tests cover pure-logic functions only (no real hmmscan / network calls).
+Subprocess calls are either monkeypatched or exercised via synthetic
+tblout text fed to the parser directly.
+"""
+from __future__ import annotations
+
+import csv
+import io
+import sys
+from pathlib import Path
+from unittest.mock import MagicMock, call, patch
+
+import pytest
+
+# Ensure scripts/ is importable
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "scripts"))
+
+import classify_gpcr_by_class as cgc
+
+
+# ---------------------------------------------------------------------------
+# 1. Class A from PF00001
+# ---------------------------------------------------------------------------
+
+def test_call_class_A_from_PF00001():
+    """Best Pfam hit PF00001 -> class A."""
+    hits = [("PF00001", "seq1", 1e-50)]
+    cls, evidence_pfam, top_evalue = cgc.call_class(hits, cgc._PFAM_TO_CLASS, 1e-5)
+    assert cls == "A"
+    assert evidence_pfam == "PF00001"
+    assert top_evalue == 1e-50
+
+
+# ---------------------------------------------------------------------------
+# 2. Class B from PF00002
+# ---------------------------------------------------------------------------
+
+def test_call_class_B_from_PF00002():
+    hits = [("PF00002", "seq1", 1e-40)]
+    cls, evidence_pfam, top_evalue = cgc.call_class(hits, cgc._PFAM_TO_CLASS, 1e-5)
+    assert cls == "B"
+    assert evidence_pfam == "PF00002"
+
+
+# ---------------------------------------------------------------------------
+# 3. Class C from PF00003
+# ---------------------------------------------------------------------------
+
+def test_call_class_C_from_PF00003():
+    hits = [("PF00003", "seq1", 1e-35)]
+    cls, evidence_pfam, top_evalue = cgc.call_class(hits, cgc._PFAM_TO_CLASS, 1e-5)
+    assert cls == "C"
+    assert evidence_pfam == "PF00003"
+
+
+# ---------------------------------------------------------------------------
+# 4. Class F from PF01534
+# ---------------------------------------------------------------------------
+
+def test_call_class_F_from_PF01534():
+    hits = [("PF01534", "seq1", 5e-20)]
+    cls, evidence_pfam, top_evalue = cgc.call_class(hits, cgc._PFAM_TO_CLASS, 1e-5)
+    assert cls == "F"
+    assert evidence_pfam == "PF01534"
+
+
+# ---------------------------------------------------------------------------
+# 5. Class A from PF02949 (7tm_4, vertebrate ORs — newly bootstrapped)
+# ---------------------------------------------------------------------------
+
+def test_call_class_A_from_PF02949():
+    hits = [("PF02949", "seq1", 3e-30)]
+    cls, evidence_pfam, top_evalue = cgc.call_class(hits, cgc._PFAM_TO_CLASS, 1e-5)
+    assert cls == "A"
+    assert evidence_pfam == "PF02949"
+
+
+# ---------------------------------------------------------------------------
+# 6. PF10324 -> class=A AND evidence_family_hmm=insect_OR_atypical
+# ---------------------------------------------------------------------------
+
+def test_PF10324_sets_class_A_and_insect_subfamily():
+    """PF10324 (insect 7tm_6) maps to class A, and the _PFAM_SUBFAMILY
+    lookup sets evidence_family_hmm even when no 06c hit exists."""
+    hits = [("PF10324", "seq1", 1e-60)]
+    cls, evidence_pfam, top_evalue = cgc.call_class(hits, cgc._PFAM_TO_CLASS, 1e-5)
+    assert cls == "A"
+    assert evidence_pfam == "PF10324"
+
+    # Subfamily from _PFAM_SUBFAMILY (no 06c hits)
+    subfam = cgc.refine_subfamily([], "seq1", pfam_accession="PF10324")
+    assert subfam == "insect_OR_atypical"
+
+
+# ---------------------------------------------------------------------------
+# 7. Multi-hit: best E-value wins
+# ---------------------------------------------------------------------------
+
+def test_call_class_best_evalue_wins():
+    """Multiple hits: lowest E-value determines the class call."""
+    hits = [("PF00001", "seq1", 1e-50), ("PF00002", "seq1", 1e-10)]
+    cls, evidence_pfam, top_evalue = cgc.call_class(hits, cgc._PFAM_TO_CLASS, 1e-5)
+    assert cls == "A"
+    assert evidence_pfam == "PF00001"
+    assert top_evalue == 1e-50
+
+
+# ---------------------------------------------------------------------------
+# 8. No hit at E<threshold -> unclassified
+# ---------------------------------------------------------------------------
+
+def test_call_class_unclassified_when_no_passing_hit():
+    hits = [("PF00001", "seq1", 1e-3)]  # above 1e-5 threshold
+    cls, evidence_pfam, top_evalue = cgc.call_class(hits, cgc._PFAM_TO_CLASS, 1e-5)
+    assert cls == "unclassified"
+    assert evidence_pfam == ""
+    assert top_evalue == ""
+
+
+def test_call_class_unclassified_when_empty_hits():
+    cls, evidence_pfam, top_evalue = cgc.call_class([], cgc._PFAM_TO_CLASS, 1e-5)
+    assert cls == "unclassified"
+    assert evidence_pfam == ""
+    assert top_evalue == ""
+
+
+# ---------------------------------------------------------------------------
+# 9. 06c family refines subfamily but doesn't change class
+# ---------------------------------------------------------------------------
+
+def test_06c_refines_subfamily_not_class():
+    """Pfam sets class=A; 06c hit aminergic_dopamine sets evidence_family_hmm.
+    Class must remain A."""
+    pfam_hits = [("PF00001", "seq1", 1e-50)]
+    cls, evidence_pfam, _ = cgc.call_class(pfam_hits, cgc._PFAM_TO_CLASS, 1e-5)
+    assert cls == "A"
+
+    # 06c refinement (target name without extension matches 'aminergic_dopamine')
+    family_hits_06c = [("aminergic_dopamine", "seq1", 1e-80)]
+    subfam = cgc.refine_subfamily(family_hits_06c, "seq1")
+    assert subfam == "aminergic_dopamine"
+    # class remains A — it's determined by Pfam, never by refine_subfamily
+    assert cls == "A"
+
+
+# ---------------------------------------------------------------------------
+# 10. 06c class-B/C/F HMMs excluded from refinement
+# ---------------------------------------------------------------------------
+
+def test_06c_classBC_F_hmms_excluded_from_refinement():
+    """class-B-secretin, class-C, class-F-frizzled hits must NOT appear in
+    evidence_family_hmm — they're excluded from the 06c refinement scan."""
+    family_hits_06c = [
+        ("class-B-secretin", "seq1", 1e-80),
+        ("class-C", "seq1", 1e-60),
+        ("class-F-frizzled", "seq1", 1e-50),
+    ]
+    subfam = cgc.refine_subfamily(family_hits_06c, "seq1")
+    assert subfam == ""
+
+
+def test_06c_keeps_non_class_hits():
+    """Non-class-level 06c hits (aminergic, opsin, etc.) ARE returned."""
+    family_hits_06c = [
+        ("class-B-secretin", "seq1", 1e-80),  # excluded
+        ("opsin", "seq1", 1e-60),              # included — best remaining
+    ]
+    subfam = cgc.refine_subfamily(family_hits_06c, "seq1")
+    assert subfam == "opsin"
+
+
+# ---------------------------------------------------------------------------
+# 11. TIAMMAT preference: if tiammat_*.hmm found, prefer over pfam_fallback
+# ---------------------------------------------------------------------------
+
+def test_tiammat_preference(tmp_path):
+    """select_hmm_library returns TIAMMAT paths when they exist."""
+    pfam_dir = tmp_path / "pfam_fallback"
+    pfam_dir.mkdir()
+    (pfam_dir / "PF00001.hmm").write_text("NAME PF00001\n")
+
+    tiammat_dir = tmp_path
+    (tiammat_dir / "tiammat_PF00001.hmm").write_text("NAME tiammat_PF00001\n")
+
+    result = cgc.select_hmm_library(
+        pfam_dir=str(pfam_dir),
+        family_hmm_dir=str(tiammat_dir),
+        tiammat_glob="tiammat_*.hmm",
+    )
+    # Should prefer the tiammat file when it matches a required Pfam accession
+    assert result["mode"] == "tiammat"
+    assert any("tiammat_PF00001" in str(p) for p in result["paths"])
+
+
+def test_tiammat_fallback_when_absent(tmp_path):
+    """select_hmm_library falls back to pfam_fallback when no TIAMMAT HMMs."""
+    pfam_dir = tmp_path / "pfam_fallback"
+    pfam_dir.mkdir()
+    (pfam_dir / "PF00001.hmm").write_text("NAME PF00001\n")
+
+    result = cgc.select_hmm_library(
+        pfam_dir=str(pfam_dir),
+        family_hmm_dir=str(tmp_path),
+        tiammat_glob="tiammat_*.hmm",
+    )
+    assert result["mode"] == "pfam_fallback"
+
+
+# ---------------------------------------------------------------------------
+# 12. Bootstrap download attempted for missing Pfam (monkeypatched)
+# ---------------------------------------------------------------------------
+
+def test_bootstrap_downloads_missing_pfams(tmp_path):
+    """bootstrap_pfams() calls the download function for each missing Pfam
+    and skips ones already on disk. Idempotent."""
+    pfam_dir = tmp_path / "pfam_fallback"
+    pfam_dir.mkdir()
+    # Pre-seed PF00001 so it should be skipped
+    (pfam_dir / "PF00001.hmm").write_text("NAME PF00001\n")
+
+    required = ["PF00001", "PF00002"]  # PF00002 is missing
+
+    downloaded = []
+
+    def fake_download(accession, out_path):
+        downloaded.append(accession)
+        Path(out_path).write_text(f"NAME {accession}\n")
+
+    cgc.bootstrap_pfams(
+        pfam_dir=str(pfam_dir),
+        required_pfams=required,
+        _download_fn=fake_download,
+    )
+
+    # Only PF00002 should have been downloaded (PF00001 already present)
+    assert downloaded == ["PF00002"]
+
+    # Idempotency: running again downloads nothing
+    downloaded.clear()
+    cgc.bootstrap_pfams(
+        pfam_dir=str(pfam_dir),
+        required_pfams=required,
+        _download_fn=fake_download,
+    )
+    assert downloaded == []
+
+
+# ---------------------------------------------------------------------------
+# 13. Output TSV column order
+# ---------------------------------------------------------------------------
+
+def test_output_tsv_columns(tmp_path):
+    """write_classification_tsv produces the exact required column header
+    and at least one data row."""
+    rows = [
+        {
+            "seq_id": "seq1",
+            "class": "A",
+            "evidence_pfam": "PF00001",
+            "evidence_family_hmm": "aminergic_dopamine",
+            "top_evalue": "1.2e-50",
+        }
+    ]
+    out_path = tmp_path / "out.tsv"
+    cgc.write_classification_tsv(rows, str(out_path))
+
+    with open(out_path) as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        # Check exact column names in exact order
+        assert reader.fieldnames == [
+            "seq_id", "class", "evidence_pfam", "evidence_family_hmm", "top_evalue"
+        ]
+        data_rows = list(reader)
+    assert len(data_rows) == 1
+    assert data_rows[0]["seq_id"] == "seq1"
+    assert data_rows[0]["class"] == "A"
+    assert data_rows[0]["evidence_pfam"] == "PF00001"
+    assert data_rows[0]["evidence_family_hmm"] == "aminergic_dopamine"
+    assert data_rows[0]["top_evalue"] == "1.2e-50"
+
+
+# ---------------------------------------------------------------------------
+# 14. CLI argparse
+# ---------------------------------------------------------------------------
+
+def test_cli_argparse(tmp_path):
+    """build_arg_parser() returns a parser that correctly handles all flags."""
+    parser = cgc.build_arg_parser()
+
+    # Minimal required args
+    args = parser.parse_args([
+        "--input", "test.fa",
+        "--out", "out.tsv",
+    ])
+    assert args.input == "test.fa"
+    assert args.out == "out.tsv"
+    assert args.evalue == 1e-5           # default
+    assert args.bootstrap_pfam is True   # default ON
+    assert args.force is False           # default OFF
+
+    # Full args
+    args2 = parser.parse_args([
+        "--input", "in.fa",
+        "--out", "out.tsv",
+        "--pfam-dir", "/pfams",
+        "--family-hmm-dir", "/hmms",
+        "--tiammat-glob", "tiammat_*.hmm",
+        "--evalue", "1e-10",
+        "--threads", "8",
+        "--no-bootstrap",
+        "--force",
+    ])
+    assert args2.pfam_dir == "/pfams"
+    assert args2.family_hmm_dir == "/hmms"
+    assert args2.tiammat_glob == "tiammat_*.hmm"
+    assert args2.evalue == 1e-10
+    assert args2.threads == 8
+    assert args2.bootstrap_pfam is False
+    assert args2.force is True
+
+
+# ---------------------------------------------------------------------------
+# 15. parse_hmmscan_tblout (reuse the same format as classify_via_hmm)
+# ---------------------------------------------------------------------------
+
+TBLOUT_SAMPLE = """\
+# hmmscan tblout
+#                         --- full sequence ---
+# target name  accession  query name  accession  E-value  score  bias
+# ------------ ---------  ----------- ---------  ------- ------ ----
+PF00001        -          seq1        -          1.2e-50  200.0  0.0
+PF00002        -          seq1        -          5.0e-10  80.0   0.0
+PF00003        -          seq2        -          3.0e-80  350.0  0.0
+# [ok]
+"""
+
+
+def test_parse_tblout_groups_and_sorts(tmp_path):
+    tbl = tmp_path / "scan.tbl"
+    tbl.write_text(TBLOUT_SAMPLE)
+    hits = cgc.parse_hmmscan_tblout(str(tbl))
+    assert set(hits.keys()) == {"seq1", "seq2"}
+    # seq1 hits sorted best E-value first
+    assert hits["seq1"][0][0] == "PF00001"
+    assert hits["seq1"][0][2] == 1.2e-50
+    assert hits["seq1"][1][0] == "PF00002"
+    # seq2 single hit
+    assert hits["seq2"][0][0] == "PF00003"
+
+
+# ---------------------------------------------------------------------------
+# 16. _PFAM_TO_CLASS completeness — all 17 Pfams present
+# ---------------------------------------------------------------------------
+
+def test_pfam_to_class_has_all_17_entries():
+    required = {
+        "PF00001", "PF00002", "PF00003", "PF01534",
+        "PF02949", "PF05296", "PF10324", "PF08395",
+        "PF03402", "PF12022", "PF11399", "PF13853",
+        "PF10326", "PF13863", "PF13886", "PF13887",
+        "PF13889",
+    }
+    assert required == set(cgc._PFAM_TO_CLASS.keys()), (
+        f"Missing: {required - set(cgc._PFAM_TO_CLASS.keys())}\n"
+        f"Extra:   {set(cgc._PFAM_TO_CLASS.keys()) - required}"
+    )
+
+
+def test_pfam_to_class_all_valid_class_values():
+    valid_classes = {"A", "B", "C", "F"}
+    for pfam, cls in cgc._PFAM_TO_CLASS.items():
+        assert cls in valid_classes, f"{pfam} has invalid class {cls!r}"
+
+
+# ---------------------------------------------------------------------------
+# 17. refine_subfamily respects evalue threshold
+# ---------------------------------------------------------------------------
+
+def test_refine_subfamily_respects_evalue_threshold():
+    """Hits above threshold are ignored during 06c refinement."""
+    family_hits_06c = [
+        ("aminergic", "seq1", 1e-3),  # above default 1e-5 → ignored
+    ]
+    subfam = cgc.refine_subfamily(family_hits_06c, "seq1", evalue_threshold=1e-5)
+    assert subfam == ""
+
+
+def test_refine_subfamily_returns_best_hit_below_threshold():
+    family_hits_06c = [
+        ("opsin", "seq1", 1e-80),
+        ("lipid", "seq1", 1e-20),
+    ]
+    subfam = cgc.refine_subfamily(family_hits_06c, "seq1", evalue_threshold=1e-5)
+    assert subfam == "opsin"
