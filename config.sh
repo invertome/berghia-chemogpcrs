@@ -307,8 +307,8 @@ export ORTHOFINDER_INFLATION=1.5
 # trees). The genome-wide run feeds 03c CAFE5 over the full species-tree
 # leaf set. Implements decision_orthology_cafe_all557 (locked 2026-05-27).
 export GENOME_WIDE_ORTHOFINDER_DIR="${RESULTS_DIR}/orthogroups_genome_wide"
-export GENOME_WIDE_INFLATION=1.5
-export GENOME_WIDE_ORTHOFINDER_THREADS="${CPUS:-32}"
+export GENOME_WIDE_INFLATION="${GENOME_WIDE_INFLATION:-1.5}"
+export GENOME_WIDE_ORTHOFINDER_THREADS="${GENOME_WIDE_ORTHOFINDER_THREADS:-${CPUS}}"
 
 export FOLDTREE_METHOD="upgma"
 export USE_MRBAYES=false
