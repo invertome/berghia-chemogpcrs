@@ -144,6 +144,8 @@ def emit_scan_record(
     hmm_positive_set: set[str],
     passed_ids: set[str],
     out_tsv: Path,
+    min_tm: int = 6,
+    min_confidence: float = 0.5,
 ) -> None:
     """Write the 6-column scan record TSV — one row per sequence in predictions.
 
@@ -158,7 +160,9 @@ def emit_scan_record(
         for seq_id, row in sorted(predictions.items()):
             gpcr_positive = 1 if seq_id in hmm_positive_set else 0
             passed_gate = 1 if seq_id in passed_ids else 0
-            notes = _build_notes(seq_id, row, hmm_positive_set, passed_ids)
+            notes = _build_notes(
+                seq_id, row, hmm_positive_set, passed_ids, min_tm, min_confidence
+            )
             writer.writerow([
                 seq_id,
                 gpcr_positive,
@@ -174,16 +178,25 @@ def _build_notes(
     row: PredictionRow,
     hmm_positive_set: set[str],
     passed_ids: set[str],
+    min_tm: int = 6,
+    min_confidence: float = 0.5,
 ) -> str:
-    """Human-readable reason why a sequence was rejected (empty if passed)."""
+    """Human-readable reason why a sequence was rejected (empty if passed).
+
+    Checks filters in order (AND logic):
+      1. HMM positivity
+      2. TM count against min_tm threshold
+      3. TM confidence against min_confidence threshold
+    """
     if seq_id in passed_ids:
         return ""
-    reasons: list[str] = []
     if seq_id not in hmm_positive_set:
-        reasons.append("hmm_negative")
-    if row.tm_count < 6:  # Using 6 as a sensible default note; actual threshold from apply_filter
-        reasons.append(f"tm_count={row.tm_count}")
-    return ",".join(reasons)
+        return "hmm_negative"
+    if row.tm_count < min_tm:
+        return f"tm_count={row.tm_count}_below_min={min_tm}"
+    if row.tm_confidence < min_confidence:
+        return f"tm_confidence={row.tm_confidence:.2f}_below_min={min_confidence:.2f}"
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -359,6 +372,8 @@ def main(argv: list[str] | None = None) -> int:
         hmm_positive_set=hmm_positive_set,
         passed_ids=passed_ids,
         out_tsv=args.out_tsv,
+        min_tm=args.min_tm,
+        min_confidence=args.min_confidence,
     )
 
     # Emit candidate FASTA

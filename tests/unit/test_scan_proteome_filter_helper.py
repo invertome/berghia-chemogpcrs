@@ -227,6 +227,60 @@ class TestEmitScanRecord:
 
 
 # ---------------------------------------------------------------------------
+# 4b. _build_notes — diagnostic notes function
+# ---------------------------------------------------------------------------
+
+class TestBuildNotes:
+    """_build_notes generates human-readable diagnostics about rejection reasons."""
+
+    def test_build_notes_returns_empty_for_passed_sequence(self) -> None:
+        """A sequence in passed_ids gets empty notes."""
+        row = helper.PredictionRow(tm_count=3, tm_confidence=0.1)
+        notes = helper._build_notes(
+            "seq1", row,
+            hmm_positive_set={"seq1"},
+            passed_ids={"seq1"},
+            min_tm=6, min_confidence=0.5,
+        )
+        assert notes == ""
+
+    def test_build_notes_reports_hmm_negative(self) -> None:
+        """A sequence not in hmm_positive_set gets 'hmm_negative'."""
+        row = helper.PredictionRow(tm_count=7, tm_confidence=0.9)
+        notes = helper._build_notes(
+            "seq1", row,
+            hmm_positive_set=set(),  # seq1 NOT in set
+            passed_ids=set(),
+            min_tm=6, min_confidence=0.5,
+        )
+        assert notes == "hmm_negative"
+
+    def test_build_notes_uses_actual_min_tm_threshold(self) -> None:
+        """When min_tm=7 and tm_count=6, should report 'tm_count=6_below_min=7'."""
+        row = helper.PredictionRow(tm_count=6, tm_confidence=0.9)
+        notes = helper._build_notes(
+            "seq1", row,
+            hmm_positive_set={"seq1"},  # HMM positive
+            passed_ids=set(),  # not passed
+            min_tm=7,  # threshold is 7
+            min_confidence=0.5,
+        )
+        assert notes == "tm_count=6_below_min=7"
+
+    def test_build_notes_reports_confidence_failure(self) -> None:
+        """When min_confidence=0.5 and tm_confidence=0.3, should report confidence failure."""
+        row = helper.PredictionRow(tm_count=8, tm_confidence=0.3)
+        notes = helper._build_notes(
+            "seq1", row,
+            hmm_positive_set={"seq1"},
+            passed_ids=set(),
+            min_tm=6,
+            min_confidence=0.5,
+        )
+        assert notes == "tm_confidence=0.30_below_min=0.50"
+
+
+# ---------------------------------------------------------------------------
 # 5. emit_candidate_fasta — FASTA subset for passed IDs
 # ---------------------------------------------------------------------------
 
