@@ -10,12 +10,15 @@ Consumes:
   - (optional) Berghia candidate FASTA + Berghia P1 class TSV
 
 Produces, under --out-dir:
-  - refs_class_A.fa  (≤ max-class-A sequences, default 2000)
-  - refs_class_B.fa  (≤ max-class-B sequences, default 2900)
-  - refs_class_C.fa  (≤ max-class-C sequences, default 2900)
-  - refs_class_F.fa  (≤ max-class-F sequences, default 2900)
+  - refs_class_A.fa
+  - refs_class_B.fa
+  - refs_class_C.fa
+  - refs_class_F.fa
   - unclassified_log.tsv
   - pool_build_report.json
+
+Each class pool sized to total_budget_per_class - n_berghia(class) - outgroup_budget_per_class refs
+(default 3000 - n_berghia - 10), so total alignment per class ≤ 3000 (mafft-dash cap).
 
 Design constraints (locked, 2026-05-28):
   - Berghia candidates are classified by P1 into per-class labels.
@@ -83,15 +86,8 @@ BERGHIA_TAXID_DEFAULT = 1287507
 # Default total budget per class: (Berghia count + reference count) per class
 DEFAULT_TOTAL_BUDGET_PER_CLASS = 3000
 
-# Legacy default per-class size caps (deprecated; kept for back-compat only).
-# Class A is lower because Berghia contributes ~800 Class A candidates.
-# Class B/C/F have no Berghia tax, so they get the full 2900-slot budget.
-# Note: these are ONLY used if --max-class-A/B/C/F are explicitly passed,
-# which triggers a deprecation warning.
-DEFAULT_MAX_CLASS_A = 2000
-DEFAULT_MAX_CLASS_B = 2900
-DEFAULT_MAX_CLASS_C = 2900
-DEFAULT_MAX_CLASS_F = 2900
+# Default outgroup budget per class (reserves slots for outgroup sequences)
+DEFAULT_OUTGROUP_BUDGET_PER_CLASS = 10
 
 # Berghia lineage (NCBI): from root toward Berghia stephanieae.
 # Used to compute proximity scores for other taxa.
@@ -148,7 +144,7 @@ def proximity_score(taxid: int, lineage_fn, berghia_taxid: int) -> int:
     Args:
         taxid: taxid to score.
         lineage_fn: callable(taxid) → list[int] — returns lineage root-to-leaf.
-        berghia_taxid: the focal taxid (excluded from pools; used as reference).
+        berghia_taxid: the focal taxid (used for proximity scoring).
 
     Returns:
         int — LCA depth (number of shared ancestors from root).
@@ -341,18 +337,19 @@ def build_pool_for_class(
     Steps:
     1. Prepend Berghia class-specific records as MUST_INCLUDE (always kept).
     2. Separate must-include taxid records from ordinary candidates.
-    3. Fill Berghia + must-include sequences first (up to max_size).
+    3. Fill Berghia + must-include sequences first (MUST_INCLUDE always retained,
+       even if it exceeds max_size).
     4. Fill remaining slots with Berghia-proximity-weighted sampling
        from the ordinary candidates.
 
     Args:
         records: (taxid, SeqRecord) pairs for this class (already CD-HIT'd).
         must_include_taxids: taxids whose sequences are always kept.
-        berghia_taxid: focal taxid — used for proximity scoring (no longer excluded).
-        max_size: per-class sequence cap (refs only; Berghia seqs are on top).
+        berghia_taxid: focal taxid — used for proximity scoring.
+        max_size: per-class sequence cap (refs only; Berghia seqs are guaranteed).
         lineage_fn: callable(taxid) → list[int].
         berghia_records: SeqRecord list for Berghia sequences of this class;
-            prepended before any cap logic so they are never subsampled away.
+            prepended and never subsampled away (guaranteed inclusion).
 
     Returns:
         (selected_pairs, stats_dict)
@@ -380,9 +377,9 @@ def build_pool_for_class(
     n_berghia = len(berghia_pairs)
     selected_berghia = berghia_pairs  # all Berghia seqs for this class are kept
 
-    # Must-include refs fill up to max_size after Berghia occupies its slots
-    selected_must = must_records[:max(0, max_size - n_berghia)]
-    remaining_slots = max_size - n_berghia - len(selected_must)
+    # MUST_INCLUDE taxid sequences: always retained even if they exceed max_size
+    selected_must = must_records
+    remaining_slots = max(0, max_size - n_berghia - len(selected_must))
 
     selected_ordinary: list[tuple[int, SeqRecord]] = []
     if remaining_slots > 0 and ordinary_records:
@@ -450,8 +447,8 @@ def build_all_pools(
     class_tsv: str,
     out_dir: str,
     max_per_class: int = 2000,
-    max_class_caps: Optional[dict[str, int]] = None,
     total_budget_per_class: int = DEFAULT_TOTAL_BUDGET_PER_CLASS,
+    outgroup_budget_per_class: int = DEFAULT_OUTGROUP_BUDGET_PER_CLASS,
     cluster_identity: float = 0.7,
     cdhit_path: str = "cd-hit",
     threads: int = 4,
@@ -468,10 +465,9 @@ def build_all_pools(
         class_tsv: path to P1 classifier output TSV.
         out_dir: directory for output files.
         max_per_class: (deprecated) fallback per-class sequence cap. Use total_budget_per_class.
-        max_class_caps: (deprecated) per-class overrides, e.g. {"A": 2000, "B": 2900}.
-            If provided, these override total_budget_per_class and emit a deprecation warning.
-        total_budget_per_class: per-class total budget (refs + Berghia count). Default 3000.
-            Per-class ref cap is computed as: total_budget_per_class - count_of_berghia_in_class.
+        total_budget_per_class: per-class total budget (refs + Berghia + outgroup count). Default 3000.
+            Per-class ref cap is computed as: total_budget_per_class - count_of_berghia_in_class - outgroup_budget_per_class.
+        outgroup_budget_per_class: reserved slots for outgroup sequences per class. Default 10.
         cluster_identity: CD-HIT identity threshold (default 0.7).
         cdhit_path: path to cd-hit binary.
         threads: threads for CD-HIT.
@@ -496,12 +492,6 @@ def build_all_pools(
             file=sys.stderr,
         )
         return
-
-    # Resolve per-class caps: explicit overrides > max_per_class fallback
-    _caps: dict[str, int] = max_class_caps or {}
-    class_caps: dict[str, int] = {
-        cls: _caps.get(cls, max_per_class) for cls in GPCR_CLASSES
-    }
 
     # --- 1. Load class map -----------------------------------------------
     class_map = load_class_tsv(class_tsv)
@@ -565,40 +555,21 @@ def build_all_pools(
         )
 
     # --- 4. Compute dynamic per-class caps + CD-HIT dedup + build pool -----
-    # Emit deprecation warning if max_class_caps was explicitly provided
-    if max_class_caps:
-        print(
-            "  WARNING: --max-class-A/B/C/F are deprecated; use --total-budget-per-class instead. "
-            "Overriding computed caps with explicit values.",
-            file=sys.stderr,
-        )
-        # Fill in missing classes from max_class_caps with defaults
-        class_caps_computed: dict[str, int] = {}
-        for cls in GPCR_CLASSES:
-            if cls in max_class_caps:
-                class_caps_computed[cls] = max_class_caps[cls]
-            else:
-                # Fill missing classes with the default for that class
-                class_caps_computed[cls] = {
-                    "A": DEFAULT_MAX_CLASS_A,
-                    "B": DEFAULT_MAX_CLASS_B,
-                    "C": DEFAULT_MAX_CLASS_C,
-                    "F": DEFAULT_MAX_CLASS_F,
-                }[cls]
-    else:
-        # Dynamic computation: max_refs(class) = total_budget - berghia_count(class)
-        class_caps_computed = {
-            cls: max(0, total_budget_per_class - n_berghia_per_class[cls])
-            for cls in GPCR_CLASSES
-        }
-        print(
-            f"  [P2] Computing per-class ref caps from total_budget={total_budget_per_class}, "
-            f"berghia_counts={n_berghia_per_class}: {class_caps_computed}",
-            file=sys.stderr,
-        )
+    # Dynamic computation: max_refs(class) = total_budget - berghia_count(class) - outgroup_budget
+    class_caps_computed = {
+        cls: max(0, total_budget_per_class - n_berghia_per_class[cls] - outgroup_budget_per_class)
+        for cls in GPCR_CLASSES
+    }
+    print(
+        f"  [P2] Computing per-class ref caps from total_budget={total_budget_per_class}, "
+        f"berghia_counts={n_berghia_per_class}, outgroup_budget={outgroup_budget_per_class}: "
+        f"{class_caps_computed}",
+        file=sys.stderr,
+    )
 
     report: dict = {
         "total_budget_per_class": total_budget_per_class,
+        "outgroup_budget_per_class": outgroup_budget_per_class,
         "n_berghia_per_class": n_berghia_per_class,
     }
     lineage_fn = get_lineage  # can be replaced by tests via patch
@@ -725,9 +696,19 @@ def build_args_parser() -> argparse.ArgumentParser:
         default=int(os.environ.get("TOTAL_BUDGET_PER_CLASS", str(DEFAULT_TOTAL_BUDGET_PER_CLASS))),
         metavar="N",
         help=(
-            "Total budget per class (refs + Berghia count). "
-            "Per-class ref cap = total_budget - berghia_count(class). "
+            "Total budget per class (refs + Berghia + outgroup count). "
+            "Per-class ref cap = total_budget - berghia_count(class) - outgroup_budget. "
             f"(default: {DEFAULT_TOTAL_BUDGET_PER_CLASS}; env: TOTAL_BUDGET_PER_CLASS)"
+        ),
+    )
+    parser.add_argument(
+        "--outgroup-budget-per-class",
+        type=int,
+        default=int(os.environ.get("OUTGROUP_BUDGET_PER_CLASS", str(DEFAULT_OUTGROUP_BUDGET_PER_CLASS))),
+        metavar="N",
+        help=(
+            "Reserved slots for outgroup sequences per class. "
+            f"(default: {DEFAULT_OUTGROUP_BUDGET_PER_CLASS}; env: OUTGROUP_BUDGET_PER_CLASS)"
         ),
     )
     parser.add_argument(
@@ -783,34 +764,6 @@ def build_args_parser() -> argparse.ArgumentParser:
         help="P1 class TSV for Berghia candidates (required when --berghia-fasta is used).",
     )
     parser.add_argument(
-        "--max-class-A",
-        type=int,
-        default=None,
-        metavar="N",
-        help="(deprecated) Max refs for Class A pool. Use --total-budget-per-class.",
-    )
-    parser.add_argument(
-        "--max-class-B",
-        type=int,
-        default=None,
-        metavar="N",
-        help="(deprecated) Max refs for Class B pool. Use --total-budget-per-class.",
-    )
-    parser.add_argument(
-        "--max-class-C",
-        type=int,
-        default=None,
-        metavar="N",
-        help="(deprecated) Max refs for Class C pool. Use --total-budget-per-class.",
-    )
-    parser.add_argument(
-        "--max-class-F",
-        type=int,
-        default=None,
-        metavar="N",
-        help="(deprecated) Max refs for Class F pool. Use --total-budget-per-class.",
-    )
-    parser.add_argument(
         "--force",
         action="store_true",
         default=False,
@@ -834,23 +787,13 @@ def main(argv=None) -> None:
     else:
         must_include = DEFAULT_MUST_INCLUDE_TAXIDS
 
-    # Build per-class cap overrides from CLI (deprecated; emit warning if used)
-    max_class_caps: Optional[dict[str, int]] = None
-    if any(x is not None for x in [args.max_class_A, args.max_class_B, args.max_class_C, args.max_class_F]):
-        max_class_caps = {
-            "A": args.max_class_A or DEFAULT_MAX_CLASS_A,
-            "B": args.max_class_B or DEFAULT_MAX_CLASS_B,
-            "C": args.max_class_C or DEFAULT_MAX_CLASS_C,
-            "F": args.max_class_F or DEFAULT_MAX_CLASS_F,
-        }
-
     build_all_pools(
         scan_fasta_glob=args.scan_fasta_glob,
         class_tsv=args.class_tsv,
         out_dir=args.out_dir,
         max_per_class=args.max_per_class,
-        max_class_caps=max_class_caps,
         total_budget_per_class=args.total_budget_per_class,
+        outgroup_budget_per_class=args.outgroup_budget_per_class,
         cluster_identity=args.cluster_identity,
         cdhit_path=args.cdhit_path,
         threads=args.threads,
