@@ -128,12 +128,12 @@ def test_taxid_from_filename_bad_returns_none():
 
 
 # ---------------------------------------------------------------------------
-# 3. Berghia exclusion: sequences from taxid 1287507 never appear in pools
+# 3. Berghia scan-file seqs route normally; --berghia-fasta adds MUST_INCLUDE
 # ---------------------------------------------------------------------------
 
-def test_berghia_excluded_from_all_pools(tmp_path):
-    """Berghia sequences must be absent from every per-class FASTA output."""
-    # Create scan FASTAs: one Berghia file (taxid 1287507), one Aplysia (6500)
+def test_berghia_scan_seqs_routed_normally(tmp_path):
+    """Berghia sequences in scan FASTA files are no longer excluded — they
+    route through the normal class-map path like any other species."""
     berghia_fa = tmp_path / "1287507_Berghia_stephanieae.chemo_candidates.fa"
     aplysia_fa = tmp_path / "6500_Aplysia_californica.chemo_candidates.fa"
 
@@ -151,7 +151,6 @@ def test_berghia_excluded_from_all_pools(tmp_path):
 
     scan_fasta_glob = str(tmp_path / "*.chemo_candidates.fa")
 
-    # Patch cdhit to be a passthrough (returns same records)
     with patch.object(bpcp, "cdhit_dedup", side_effect=lambda records, **kw: records):
         with patch.object(bpcp, "get_lineage", side_effect=mock_get_lineage):
             bpcp.build_all_pools(
@@ -169,8 +168,9 @@ def test_berghia_excluded_from_all_pools(tmp_path):
 
     pool_a = list(SeqIO.parse(str(out_dir / "refs_class_A.fa"), "fasta"))
     ids_in_pool = {r.id for r in pool_a}
-    assert "ber_A1" not in ids_in_pool
-    assert "ber_A2" not in ids_in_pool
+    # Berghia seqs now appear in the pool (routed via class_tsv like any species)
+    assert "ber_A1" in ids_in_pool
+    assert "ber_A2" in ids_in_pool
     assert "apl_A1" in ids_in_pool
 
 
@@ -402,8 +402,11 @@ def test_json_report_emitted(tmp_path):
         assert "must_include_taxids_missing" in entry
 
     assert "unclassified" in report
+    assert "berghia_included" in report
+    assert report["berghia_included"]["n_total"] == 0  # no berghia_fasta provided
     assert report["class_A"]["n_total_candidates"] == 5
     assert report["class_A"]["n_output"] == 5
+    assert "n_berghia_included" in report["class_A"]
 
 
 # ---------------------------------------------------------------------------
@@ -533,3 +536,192 @@ def test_small_pool_passthrough(tmp_path):
     ids_out = {r.id for r in pool_b}
     for sid, _ in seqs:
         assert sid in ids_out
+
+
+# ---------------------------------------------------------------------------
+# 14. Berghia Class A seqs appear in refs_class_A.fa as MUST_INCLUDE
+# ---------------------------------------------------------------------------
+
+def test_berghia_class_a_included_as_must_include(tmp_path):
+    """Berghia Class A candidates appear in refs_class_A.fa even when they
+    are not in DEFAULT_MUST_INCLUDE_TAXIDS."""
+    # Scan FASTA from Aplysia only (no Berghia scan file here)
+    aplysia_fa = tmp_path / "6500_Aplysia_californica.chemo_candidates.fa"
+    _make_fasta(aplysia_fa, [("apl_A1", "MSTL" * 30)])
+
+    scan_class_tsv = tmp_path / "scan_classes.tsv"
+    _make_class_tsv(scan_class_tsv, [("apl_A1", "A")])
+
+    # Berghia FASTA + class TSV (separate from the scan input)
+    berghia_fa = tmp_path / "berghia_candidates.fa"
+    _make_fasta(berghia_fa, [("ber_A1", "MKVL" * 30), ("ber_A2", "MSFT" * 30)])
+
+    berghia_class_tsv = tmp_path / "berghia_classes.tsv"
+    _make_class_tsv(berghia_class_tsv, [("ber_A1", "A"), ("ber_A2", "A")])
+
+    out_dir = tmp_path / "pools"
+    out_dir.mkdir()
+
+    with patch.object(bpcp, "cdhit_dedup", side_effect=lambda records, **kw: records):
+        with patch.object(bpcp, "get_lineage", side_effect=mock_get_lineage):
+            bpcp.build_all_pools(
+                scan_fasta_glob=str(tmp_path / "6500_*.fa"),
+                class_tsv=str(scan_class_tsv),
+                out_dir=str(out_dir),
+                max_per_class=2000,
+                cluster_identity=0.7,
+                cdhit_path="cd-hit",
+                threads=1,
+                must_include_taxids=frozenset(),  # Berghia NOT in must_include_taxids
+                berghia_taxid=1287507,
+                berghia_fasta=str(berghia_fa),
+                berghia_class_tsv=str(berghia_class_tsv),
+                force=True,
+            )
+
+    pool_a = list(SeqIO.parse(str(out_dir / "refs_class_A.fa"), "fasta"))
+    ids_out = {r.id for r in pool_a}
+    # Berghia Class A seqs must be present despite not being in must_include_taxids
+    assert "ber_A1" in ids_out, "ber_A1 missing from Class A pool"
+    assert "ber_A2" in ids_out, "ber_A2 missing from Class A pool"
+    assert "apl_A1" in ids_out
+
+
+# ---------------------------------------------------------------------------
+# 15. Berghia Class B seqs go to Class B pool, not Class A
+# ---------------------------------------------------------------------------
+
+def test_berghia_class_b_routed_to_class_b_pool(tmp_path):
+    """Berghia sequences classified as B must appear in refs_class_B.fa only."""
+    # Empty scan FASTA (just need the glob to work)
+    dummy_fa = tmp_path / "9606_Homo_sapiens.chemo_candidates.fa"
+    _make_fasta(dummy_fa, [("hs_B1", "MSTL" * 30)])
+
+    scan_class_tsv = tmp_path / "scan_classes.tsv"
+    _make_class_tsv(scan_class_tsv, [("hs_B1", "B")])
+
+    berghia_fa = tmp_path / "berghia_candidates.fa"
+    _make_fasta(berghia_fa, [("ber_A1", "MKVL" * 30), ("ber_B1", "MKGT" * 30)])
+
+    berghia_class_tsv = tmp_path / "berghia_classes.tsv"
+    _make_class_tsv(berghia_class_tsv, [("ber_A1", "A"), ("ber_B1", "B")])
+
+    out_dir = tmp_path / "pools"
+    out_dir.mkdir()
+
+    with patch.object(bpcp, "cdhit_dedup", side_effect=lambda records, **kw: records):
+        with patch.object(bpcp, "get_lineage", side_effect=mock_get_lineage):
+            bpcp.build_all_pools(
+                scan_fasta_glob=str(tmp_path / "*.chemo_candidates.fa"),
+                class_tsv=str(scan_class_tsv),
+                out_dir=str(out_dir),
+                max_per_class=2000,
+                cluster_identity=0.7,
+                cdhit_path="cd-hit",
+                threads=1,
+                must_include_taxids=frozenset(),
+                berghia_taxid=1287507,
+                berghia_fasta=str(berghia_fa),
+                berghia_class_tsv=str(berghia_class_tsv),
+                force=True,
+            )
+
+    ids_A = {r.id for r in SeqIO.parse(str(out_dir / "refs_class_A.fa"), "fasta")}
+    ids_B = {r.id for r in SeqIO.parse(str(out_dir / "refs_class_B.fa"), "fasta")}
+
+    # ber_B1 goes to B only; ber_A1 goes to A only
+    assert "ber_B1" in ids_B, "ber_B1 missing from Class B pool"
+    assert "ber_B1" not in ids_A, "ber_B1 must not appear in Class A pool"
+    assert "ber_A1" in ids_A, "ber_A1 missing from Class A pool"
+    assert "ber_A1" not in ids_B, "ber_A1 must not appear in Class B pool"
+
+
+# ---------------------------------------------------------------------------
+# 16. Per-class caps: Class A cap < Class B cap when configured differently
+# ---------------------------------------------------------------------------
+
+def test_per_class_cap_class_a_vs_bcf_differs(tmp_path):
+    """Class A pool respects a smaller cap than Class B/C/F pools."""
+    # 50 seqs each for Class A and Class B
+    fa_path = tmp_path / "7227_Drosophila_melanogaster.chemo_candidates.fa"
+    seqs_a = [(f"dm_A{i}", "MKLF" * 30) for i in range(50)]
+    seqs_b = [(f"dm_B{i}", "MKQP" * 30) for i in range(50)]
+    _make_fasta(fa_path, seqs_a + seqs_b)
+
+    class_tsv = tmp_path / "classes.tsv"
+    _make_class_tsv(class_tsv, [(sid, "A") for sid, _ in seqs_a] +
+                               [(sid, "B") for sid, _ in seqs_b])
+
+    out_dir = tmp_path / "pools"
+    out_dir.mkdir()
+
+    cap_a = 20
+    cap_b = 40
+
+    with patch.object(bpcp, "cdhit_dedup", side_effect=lambda records, **kw: records):
+        with patch.object(bpcp, "get_lineage", side_effect=mock_get_lineage):
+            bpcp.build_all_pools(
+                scan_fasta_glob=str(tmp_path / "*.chemo_candidates.fa"),
+                class_tsv=str(class_tsv),
+                out_dir=str(out_dir),
+                max_per_class=2000,
+                max_class_caps={"A": cap_a, "B": cap_b},
+                cluster_identity=0.7,
+                cdhit_path="cd-hit",
+                threads=1,
+                must_include_taxids=frozenset(),
+                berghia_taxid=1287507,
+                force=True,
+            )
+
+    pool_a = list(SeqIO.parse(str(out_dir / "refs_class_A.fa"), "fasta"))
+    pool_b = list(SeqIO.parse(str(out_dir / "refs_class_B.fa"), "fasta"))
+
+    assert len(pool_a) <= cap_a, f"Class A pool {len(pool_a)} exceeds cap {cap_a}"
+    assert len(pool_b) <= cap_b, f"Class B pool {len(pool_b)} exceeds cap {cap_b}"
+    assert len(pool_b) > len(pool_a), "Class B should have more seqs than Class A"
+
+
+# ---------------------------------------------------------------------------
+# 17. No --berghia-fasta: P2 works, Berghia count is 0 in report
+# ---------------------------------------------------------------------------
+
+def test_no_berghia_fasta_falls_back_gracefully(tmp_path):
+    """When --berghia-fasta is not provided, build_all_pools still runs and
+    report shows zero Berghia inclusions."""
+    fa_path = tmp_path / "29159_Crassostrea_gigas.chemo_candidates.fa"
+    seqs = [(f"cg_{i}", "MSTL" * 20) for i in range(4)]
+    _make_fasta(fa_path, seqs)
+
+    class_tsv = tmp_path / "classes.tsv"
+    _make_class_tsv(class_tsv, [(sid, "C") for sid, _ in seqs])
+
+    out_dir = tmp_path / "pools"
+    out_dir.mkdir()
+
+    with patch.object(bpcp, "cdhit_dedup", side_effect=lambda records, **kw: records):
+        with patch.object(bpcp, "get_lineage", side_effect=mock_get_lineage):
+            bpcp.build_all_pools(
+                scan_fasta_glob=str(tmp_path / "*.chemo_candidates.fa"),
+                class_tsv=str(class_tsv),
+                out_dir=str(out_dir),
+                max_per_class=2000,
+                cluster_identity=0.7,
+                cdhit_path="cd-hit",
+                threads=1,
+                must_include_taxids=frozenset(),
+                berghia_taxid=1287507,
+                berghia_fasta=None,        # not provided
+                berghia_class_tsv=None,    # not provided
+                force=True,
+            )
+
+    # Outputs exist and Class C pool has the right seqs
+    pool_c = list(SeqIO.parse(str(out_dir / "refs_class_C.fa"), "fasta"))
+    assert len(pool_c) == 4
+
+    # Report shows zero Berghia inclusions
+    report = json.loads((out_dir / "pool_build_report.json").read_text())
+    assert report["berghia_included"]["n_total"] == 0
+    for cls in ("A", "B", "C", "F"):
+        assert report[f"class_{cls}"]["n_berghia_included"] == 0

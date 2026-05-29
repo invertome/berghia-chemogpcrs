@@ -7,23 +7,26 @@ P2 of the per-class refactor.
 Consumes:
   - Per-species chemo_candidates.fa files from a P0 scan (glob pattern)
   - A P1 class TSV mapping seq_id → {A,B,C,F,unclassified}
+  - (optional) Berghia candidate FASTA + Berghia P1 class TSV
 
 Produces, under --out-dir:
-  - refs_class_A.fa  (≤ MAX_PHYLO_REFS sequences)
-  - refs_class_B.fa
-  - refs_class_C.fa
-  - refs_class_F.fa
+  - refs_class_A.fa  (≤ max-class-A sequences, default 2000)
+  - refs_class_B.fa  (≤ max-class-B sequences, default 2900)
+  - refs_class_C.fa  (≤ max-class-C sequences, default 2900)
+  - refs_class_F.fa  (≤ max-class-F sequences, default 2900)
   - unclassified_log.tsv
   - pool_build_report.json
 
 Design constraints (locked, 2026-05-28):
-  - Berghia (taxid 1287507) is excluded from all pools.
+  - Berghia candidates are classified by P1 into per-class labels.
+  - Each per-class pool includes Berghia sequences of that class as
+    MUST_INCLUDE (always retained, not subsampled away).
   - MUST_INCLUDE taxids are always retained (their candidates fill first).
   - Remaining slots are filled by Berghia-proximity-weighted sampling
     of the non-must-include candidates.
   - CD-HIT 0.7 deduplication before subsampling.
-  - MAX_PHYLO_REFS=2000 per class.
-  - Berghia's 888 candidates are appended at stage-04 tree-build time.
+  - Class A budget reduced (~2000) to account for ~800 Berghia Class A seqs.
+  - Class B/C/F budget at ~2900 (no Berghia tax for those classes).
 
 Author: Jorge L. Perez-Moreno, Ph.D., Katz Lab, University of Massachusetts
 """
@@ -76,6 +79,14 @@ DEFAULT_MUST_INCLUDE_TAXIDS: frozenset[int] = frozenset({
 })
 
 BERGHIA_TAXID_DEFAULT = 1287507
+
+# Default per-class size caps.
+# Class A is lower because Berghia contributes ~800 Class A candidates.
+# Class B/C/F have no Berghia tax, so they get the full 2900-slot budget.
+DEFAULT_MAX_CLASS_A = 2000
+DEFAULT_MAX_CLASS_B = 2900
+DEFAULT_MAX_CLASS_C = 2900
+DEFAULT_MAX_CLASS_F = 2900
 
 # Berghia lineage (NCBI): from root toward Berghia stephanieae.
 # Used to compute proximity scores for other taxa.
@@ -201,6 +212,39 @@ def load_must_include_taxids(tsv_path: str) -> frozenset[int]:
     return frozenset(taxids)
 
 
+def load_berghia_candidates(
+    berghia_fasta: str,
+    berghia_class_tsv: str,
+    berghia_taxid: int,
+) -> dict[str, list[SeqRecord]]:
+    """Load Berghia candidate sequences classified by P1 into per-class bins.
+
+    Args:
+        berghia_fasta: path to FASTA of Berghia chemoreceptor candidates.
+        berghia_class_tsv: path to P1 class TSV for those candidates.
+        berghia_taxid: taxid used for identity tracking (informational only).
+
+    Returns:
+        dict mapping class label (A/B/C/F) → list of SeqRecord.
+        Unclassified sequences are silently dropped (they add no tree value).
+    """
+    class_map = load_class_tsv(berghia_class_tsv)
+    per_class: dict[str, list[SeqRecord]] = {cls: [] for cls in GPCR_CLASSES}
+
+    for rec in SeqIO.parse(berghia_fasta, "fasta"):
+        seq_class = class_map.get(rec.id)
+        if seq_class in per_class:
+            per_class[seq_class].append(rec)
+
+    total = sum(len(v) for v in per_class.values())
+    print(
+        f"[build_per_class_reference_pools] Loaded {total} Berghia candidates "
+        f"(taxid {berghia_taxid}) from {berghia_fasta}",
+        file=sys.stderr,
+    )
+    return per_class
+
+
 # ---------------------------------------------------------------------------
 # CD-HIT deduplication
 # ---------------------------------------------------------------------------
@@ -285,25 +329,34 @@ def build_pool_for_class(
     berghia_taxid: int,
     max_size: int,
     lineage_fn,
+    berghia_records: Optional[list[SeqRecord]] = None,
 ) -> tuple[list[tuple[int, SeqRecord]], dict]:
     """Build a single per-class reference pool.
 
     Steps:
-    1. Separate must-include from ordinary candidates.
-    2. Fill must-include sequences first (up to max_size).
-    3. Fill remaining slots with Berghia-proximity-weighted sampling
+    1. Prepend Berghia class-specific records as MUST_INCLUDE (always kept).
+    2. Separate must-include taxid records from ordinary candidates.
+    3. Fill Berghia + must-include sequences first (up to max_size).
+    4. Fill remaining slots with Berghia-proximity-weighted sampling
        from the ordinary candidates.
 
     Args:
         records: (taxid, SeqRecord) pairs for this class (already CD-HIT'd).
         must_include_taxids: taxids whose sequences are always kept.
-        berghia_taxid: excluded taxid (must not appear in records already).
-        max_size: per-class sequence cap.
+        berghia_taxid: focal taxid — used for proximity scoring (no longer excluded).
+        max_size: per-class sequence cap (refs only; Berghia seqs are on top).
         lineage_fn: callable(taxid) → list[int].
+        berghia_records: SeqRecord list for Berghia sequences of this class;
+            prepended before any cap logic so they are never subsampled away.
 
     Returns:
         (selected_pairs, stats_dict)
     """
+    # Berghia seqs are stored as (berghia_taxid, rec) to unify the pair format
+    berghia_pairs: list[tuple[int, SeqRecord]] = [
+        (berghia_taxid, rec) for rec in (berghia_records or [])
+    ]
+
     must_records: list[tuple[int, SeqRecord]] = []
     ordinary_records: list[tuple[int, SeqRecord]] = []
 
@@ -318,9 +371,13 @@ def build_pool_for_class(
 
     missing_must = sorted(must_include_taxids - must_taxids_with_hits)
 
-    # Must-include seqs fill first (take all if within cap)
-    selected_must = must_records[:max_size]
-    remaining_slots = max_size - len(selected_must)
+    # Berghia seqs (class-specific) are always retained first, then must-include
+    n_berghia = len(berghia_pairs)
+    selected_berghia = berghia_pairs  # all Berghia seqs for this class are kept
+
+    # Must-include refs fill up to max_size after Berghia occupies its slots
+    selected_must = must_records[:max(0, max_size - n_berghia)]
+    remaining_slots = max_size - n_berghia - len(selected_must)
 
     selected_ordinary: list[tuple[int, SeqRecord]] = []
     if remaining_slots > 0 and ordinary_records:
@@ -362,12 +419,13 @@ def build_pool_for_class(
                         break
             selected_ordinary = [ordinary_records[i] for i in selected_indices]
 
-    selected = selected_must + selected_ordinary
+    selected = selected_berghia + selected_must + selected_ordinary
     species_contributing = len({taxid for taxid, _ in selected})
 
     stats = {
         "n_total_candidates": len(records),
         "n_after_cdhit": len(records),   # caller may update this field
+        "n_berghia_included": n_berghia,
         "n_must_include": len(selected_must),
         "n_subsampled": len(selected_ordinary),
         "n_output": len(selected),
@@ -387,11 +445,14 @@ def build_all_pools(
     class_tsv: str,
     out_dir: str,
     max_per_class: int = 2000,
+    max_class_caps: Optional[dict[str, int]] = None,
     cluster_identity: float = 0.7,
     cdhit_path: str = "cd-hit",
     threads: int = 4,
     must_include_taxids: frozenset[int] = DEFAULT_MUST_INCLUDE_TAXIDS,
     berghia_taxid: int = BERGHIA_TAXID_DEFAULT,
+    berghia_fasta: Optional[str] = None,
+    berghia_class_tsv: Optional[str] = None,
     force: bool = False,
 ) -> None:
     """Build four per-class reference pools.
@@ -400,12 +461,17 @@ def build_all_pools(
         scan_fasta_glob: glob pattern matching per-species scan FASTA files.
         class_tsv: path to P1 classifier output TSV.
         out_dir: directory for output files.
-        max_per_class: per-class sequence cap (default 2000).
+        max_per_class: fallback per-class sequence cap (default 2000).
+        max_class_caps: per-class overrides, e.g. {"A": 2000, "B": 2900}.
+            Keys not present fall back to max_per_class.
         cluster_identity: CD-HIT identity threshold (default 0.7).
         cdhit_path: path to cd-hit binary.
         threads: threads for CD-HIT.
         must_include_taxids: taxids whose candidates are always kept.
-        berghia_taxid: taxid to exclude from all pools.
+        berghia_taxid: focal species taxid (used for proximity scoring).
+        berghia_fasta: optional path to Berghia candidate FASTA.
+        berghia_class_tsv: optional path to Berghia P1 class TSV.
+            Required when berghia_fasta is provided.
         force: re-run even if outputs already exist.
     """
     out_path = Path(out_dir)
@@ -423,15 +489,33 @@ def build_all_pools(
         )
         return
 
+    # Resolve per-class caps: explicit overrides > max_per_class fallback
+    _caps: dict[str, int] = max_class_caps or {}
+    class_caps: dict[str, int] = {
+        cls: _caps.get(cls, max_per_class) for cls in GPCR_CLASSES
+    }
+
     # --- 1. Load class map -----------------------------------------------
     class_map = load_class_tsv(class_tsv)
 
-    # --- 2. Read scan FASTAs → per-class (taxid, SeqRecord) lists ---------
+    # --- 2. Load Berghia candidates (optional) ----------------------------
+    berghia_per_class: dict[str, list[SeqRecord]] = {cls: [] for cls in GPCR_CLASSES}
+    if berghia_fasta and berghia_class_tsv:
+        berghia_per_class = load_berghia_candidates(
+            berghia_fasta, berghia_class_tsv, berghia_taxid
+        )
+    elif berghia_fasta:
+        print(
+            "  WARNING: --berghia-fasta provided but --berghia-class-tsv missing; "
+            "Berghia candidates will not be added to pools.",
+            file=sys.stderr,
+        )
+
+    # --- 3. Read scan FASTAs → per-class (taxid, SeqRecord) lists ---------
     per_class: dict[str, list[tuple[int, SeqRecord]]] = {
         cls: [] for cls in GPCR_CLASSES
     }
     unclassified_records: list[tuple[int, str, str]] = []  # (taxid, seq_id, reason)
-    berghia_excluded_count = 0
     missing_from_class_map: set[str] = set()
 
     scan_files = sorted(glob.glob(scan_fasta_glob))
@@ -446,13 +530,6 @@ def build_all_pools(
             print(
                 f"  WARNING: cannot parse taxid from {fa_path}; skipping",
                 file=sys.stderr,
-            )
-            continue
-
-        if taxid == berghia_taxid:
-            # Count but do not load — Berghia added at tree-build time
-            berghia_excluded_count += sum(
-                1 for _ in SeqIO.parse(fa_path, "fasta")
             )
             continue
 
@@ -474,21 +551,17 @@ def build_all_pools(
             "(logged as unclassified)",
             file=sys.stderr,
         )
-    if berghia_excluded_count:
-        print(
-            f"  INFO: excluded {berghia_excluded_count} Berghia sequences (taxid {berghia_taxid})",
-            file=sys.stderr,
-        )
 
-    # --- 3. CD-HIT dedup per class + build pool ---------------------------
+    # --- 4. CD-HIT dedup per class + build pool ---------------------------
     report: dict = {}
     lineage_fn = get_lineage  # can be replaced by tests via patch
 
     for cls in GPCR_CLASSES:
         candidates = per_class[cls]
         n_total = len(candidates)
+        cap = class_caps[cls]
         print(
-            f"  Class {cls}: {n_total} candidates before CD-HIT",
+            f"  Class {cls}: {n_total} candidates before CD-HIT (cap={cap})",
             file=sys.stderr,
         )
 
@@ -508,8 +581,9 @@ def build_all_pools(
             records=after_cdhit,
             must_include_taxids=must_include_taxids,
             berghia_taxid=berghia_taxid,
-            max_size=max_per_class,
+            max_size=cap,
             lineage_fn=lineage_fn,
+            berghia_records=berghia_per_class.get(cls),
         )
         stats["n_total_candidates"] = n_total
         stats["n_after_cdhit"] = n_after
@@ -522,11 +596,12 @@ def build_all_pools(
 
         report[f"class_{cls}"] = stats
         print(
-            f"  Class {cls}: wrote {stats['n_output']} sequences to {out_fa}",
+            f"  Class {cls}: wrote {stats['n_output']} sequences to {out_fa} "
+            f"({stats['n_berghia_included']} Berghia)",
             file=sys.stderr,
         )
 
-    # --- 4. Unclassified log ---------------------------------------------
+    # --- 5. Unclassified log ---------------------------------------------
     unclass_path = out_path / "unclassified_log.tsv"
     with open(unclass_path, "w", newline="") as fh:
         writer = csv.writer(fh, delimiter="\t")
@@ -538,12 +613,16 @@ def build_all_pools(
         "n": len(unclassified_records),
         "log_path": str(unclass_path),
     }
-    report["berghia_excluded"] = {
+    berghia_totals = {
+        cls: len(berghia_per_class[cls]) for cls in GPCR_CLASSES
+    }
+    report["berghia_included"] = {
         "taxid": berghia_taxid,
-        "n_sequences": berghia_excluded_count,
+        "n_per_class": berghia_totals,
+        "n_total": sum(berghia_totals.values()),
     }
 
-    # --- 5. JSON report ---------------------------------------------------
+    # --- 6. JSON report ---------------------------------------------------
     with open(report_path, "w") as fh:
         json.dump(report, fh, indent=2)
     print(
@@ -623,7 +702,51 @@ def build_args_parser() -> argparse.ArgumentParser:
         type=int,
         default=BERGHIA_TAXID_DEFAULT,
         metavar="TAXID",
-        help=f"Taxid of the focal species to exclude from all pools (default: {BERGHIA_TAXID_DEFAULT})",
+        help=f"Taxid of the focal species (used for proximity scoring; default: {BERGHIA_TAXID_DEFAULT})",
+    )
+    parser.add_argument(
+        "--berghia-fasta",
+        default=None,
+        metavar="FASTA",
+        help=(
+            "FASTA of Berghia chemoreceptor candidates from stage-02. "
+            "When provided together with --berghia-class-tsv, Berghia sequences "
+            "of each class are added as MUST_INCLUDE to that class's pool."
+        ),
+    )
+    parser.add_argument(
+        "--berghia-class-tsv",
+        default=None,
+        metavar="TSV",
+        help="P1 class TSV for Berghia candidates (required when --berghia-fasta is used).",
+    )
+    parser.add_argument(
+        "--max-class-A",
+        type=int,
+        default=DEFAULT_MAX_CLASS_A,
+        metavar="N",
+        help=f"Max refs for Class A pool (default: {DEFAULT_MAX_CLASS_A}; lower to account for Berghia tax)",
+    )
+    parser.add_argument(
+        "--max-class-B",
+        type=int,
+        default=DEFAULT_MAX_CLASS_B,
+        metavar="N",
+        help=f"Max refs for Class B pool (default: {DEFAULT_MAX_CLASS_B})",
+    )
+    parser.add_argument(
+        "--max-class-C",
+        type=int,
+        default=DEFAULT_MAX_CLASS_C,
+        metavar="N",
+        help=f"Max refs for Class C pool (default: {DEFAULT_MAX_CLASS_C})",
+    )
+    parser.add_argument(
+        "--max-class-F",
+        type=int,
+        default=DEFAULT_MAX_CLASS_F,
+        metavar="N",
+        help=f"Max refs for Class F pool (default: {DEFAULT_MAX_CLASS_F})",
     )
     parser.add_argument(
         "--force",
@@ -649,16 +772,27 @@ def main(argv=None) -> None:
     else:
         must_include = DEFAULT_MUST_INCLUDE_TAXIDS
 
+    # Build per-class cap overrides from CLI
+    max_class_caps: dict[str, int] = {
+        "A": args.max_class_A,
+        "B": args.max_class_B,
+        "C": args.max_class_C,
+        "F": args.max_class_F,
+    }
+
     build_all_pools(
         scan_fasta_glob=args.scan_fasta_glob,
         class_tsv=args.class_tsv,
         out_dir=args.out_dir,
         max_per_class=args.max_per_class,
+        max_class_caps=max_class_caps,
         cluster_identity=args.cluster_identity,
         cdhit_path=args.cdhit_path,
         threads=args.threads,
         must_include_taxids=must_include,
         berghia_taxid=args.berghia_taxid,
+        berghia_fasta=args.berghia_fasta,
+        berghia_class_tsv=args.berghia_class_tsv,
         force=args.force,
     )
 
