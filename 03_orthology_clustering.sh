@@ -1,7 +1,8 @@
 #!/bin/bash
 # 03_orthology_clustering.sh
 # Purpose: Cluster orthologous groups with OrthoFinder using one FASTA per species.
-# Inputs: GPCR FASTA files from step 02, reference sequences from step 01
+# Inputs: Berghia chemoreceptor candidates (stage 02), scan-derived candidates from
+#         P5/P6 (${SCAN_DERIVED_CANDIDATES_DIR}/*.chemo_candidates.fa), outgroup.
 # Outputs: Orthogroups in ${RESULTS_DIR}/orthogroups/OrthoFinder/Results*/Orthogroups/
 # Author: Jorge L. Perez-Moreno, Ph.D., Katz Lab, University of Massachusetts, Amherst
 
@@ -25,81 +26,52 @@ check_file "${RESULTS_DIR}/step_completed_02.txt"
 log "Starting orthology clustering."
 
 # --- Prepare OrthoFinder input: one FASTA per species ---
-# Berghia
+
+# Berghia chemoreceptor candidates (stage 02 output — unchanged)
 cp "${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa" "${RESULTS_DIR}/orthogroups/input/${BERGHIA_TAXID}_berghia.fa" || { log "Error: Failed to copy Berghia GPCR FASTA"; exit 1; }
 
-# Additional transcriptomes
-for trans in "${TRANSCRIPTOME_DIR}"/*.aa; do
-    [ -f "$trans" ] || continue
-    # Skip Berghia transcriptome (already copied above)
-    [ "$(realpath "$trans")" = "$(realpath "${TRANSCRIPTOME}")" ] && continue
-    sample=$(basename "$trans" .aa)
-    taxid_sample="${sample}"
-    cp "${RESULTS_DIR}/chemogpcrs/chemogpcrs_${taxid_sample}.fa" "${RESULTS_DIR}/orthogroups/input/${taxid_sample}.fa" 2>/dev/null || log "Warning: No GPCR FASTA for ${taxid_sample}"
+# --- Scan-derived candidates (P5 / P6) ---
+# SCAN_DERIVED_CANDIDATES_DIR must exist and contain at least one
+# *.chemo_candidates.fa file produced by scan_proteome_for_chemoreceptors.sh.
+# Default: ${RESULTS_DIR}/p5_phase1a_validation/scan  (P5 Phase 1a output).
+# Override with SCAN_DERIVED_CANDIDATES_DIR env var to point at the P6
+# full-557 scan directory when that run is available.
+SCAN_DIR="${SCAN_DERIVED_CANDIDATES_DIR:-${RESULTS_DIR}/p5_phase1a_validation/scan}"
+
+if [ ! -d "${SCAN_DIR}" ]; then
+    log "Error: SCAN_DERIVED_CANDIDATES_DIR does not exist: ${SCAN_DIR}"
+    log "Run P5 (sbatch sbatch_run_p5_phase1a_scan.sh + sbatch_run_p5_classify_and_pool.sh) or P6 (full 557 scan) first to produce scan-derived candidates."
+    exit 1
+fi
+
+shopt -s nullglob
+scan_files=( "${SCAN_DIR}"/*.chemo_candidates.fa )
+shopt -u nullglob
+
+if [ "${#scan_files[@]}" -eq 0 ]; then
+    log "Error: No *.chemo_candidates.fa files found in ${SCAN_DIR}"
+    log "Run P5 (sbatch sbatch_run_p5_phase1a_scan.sh + sbatch_run_p5_classify_and_pool.sh) or P6 (full 557 scan) first to produce scan-derived candidates."
+    exit 1
+fi
+
+scan_species_count=0
+for fa in "${scan_files[@]}"; do
+    # Derive a safe destination name from the filename stem.
+    # Files are named <taxid>_<sanitized_binomial>.chemo_candidates.fa.
+    # Strip .chemo_candidates.fa suffix; sanitize any remaining non-[A-Za-z0-9_]
+    # characters (same logic as sanitize_sample_name in build_braker4_samples_csv.py).
+    stem=$(basename "$fa" .chemo_candidates.fa)
+    safe_name=$(printf '%s' "$stem" | tr -c 'A-Za-z0-9_' '_' | sed 's/_\+/_/g; s/^_//; s/_$//')
+    dest="${RESULTS_DIR}/orthogroups/input/${safe_name}.fa"
+    cp "$fa" "$dest" || { log "Warning: Failed to copy scan candidate ${fa}"; continue; }
+    scan_species_count=$((scan_species_count + 1))
 done
+log "Included ${scan_species_count} scan-derived species files for OrthoFinder (from ${SCAN_DIR})"
 
-# --- Include reference sequences: one file per species ---
-NATH_ET_AL_DIR="${REFERENCE_DIR}/nath_et_al"
-
-if [ -d "${NATH_ET_AL_DIR}" ]; then
-    # Nath et al. structure: include per-species FASTA files directly
-    # ORTHOFINDER_REF_GROUPS controls which taxonomic groups to include.
-    # Default: all groups. Set to e.g. "gastropoda" for faster preliminary runs.
-    REF_GROUPS="${ORTHOFINDER_REF_GROUPS:-all}"
-
-    ref_species_count=0
-    for category_dir in "${NATH_ET_AL_DIR}/one_to_one_ortholog" "${NATH_ET_AL_DIR}/lse"; do
-        [ -d "$category_dir" ] || continue
-        for group_dir in "$category_dir"/*/; do
-            [ -d "$group_dir" ] || continue
-            group_name=$(basename "$group_dir")
-
-            # Filter by group if specified
-            if [ "$REF_GROUPS" != "all" ]; then
-                echo "$REF_GROUPS" | tr ',' '\n' | grep -qx "$group_name" || continue
-            fi
-
-            for faa in "$group_dir"/*.faa; do
-                [ -f "$faa" ] || continue
-                species=$(basename "$faa" .faa)
-                category=$(basename "$category_dir")
-                dest="${RESULTS_DIR}/orthogroups/input/ref_${category}_${species}.fa"
-
-                # Extract taxid from filename (format: TAXID_Species_name.faa)
-                taxid=$(echo "$species" | cut -d'_' -f1)
-
-                # Only copy if not already there (avoid LSE overwriting conserved)
-                if [ ! -f "$dest" ]; then
-                    # Prefix each header with ref_TAXID_ for traceability
-                    sed "s/^>/>ref_${taxid}_/" "$faa" > "$dest"
-                    ref_species_count=$((ref_species_count + 1))
-                fi
-            done
-        done
-    done
-    log "Included ${ref_species_count} reference species files for OrthoFinder"
-else
-    # Legacy structure: group references by taxid prefix
-    for taxid in "${TAXA[@]}"; do
-        awk -v pattern="^>ref_${taxid}_" '
-            /^>/ {
-                if (match($0, pattern)) { print_seq = 1 }
-                else { print_seq = 0 }
-            }
-            print_seq { print }
-        ' "${RESULTS_DIR}/reference_sequences/all_references.fa" > "${RESULTS_DIR}/orthogroups/input/ref_${taxid}.fa" 2>/dev/null
-
-        if [ ! -s "${RESULTS_DIR}/orthogroups/input/ref_${taxid}.fa" ]; then
-            rm -f "${RESULTS_DIR}/orthogroups/input/ref_${taxid}.fa"
-            log "Note: No references found for taxid ${taxid}"
-        fi
-    done
-
-    # Fallback: include all references as single file
-    if [ -z "$(ls "${RESULTS_DIR}/orthogroups/input/ref_"*.fa 2>/dev/null)" ]; then
-        log "Including all references as single outgroup"
-        cp "${RESULTS_DIR}/reference_sequences/all_references.fa" "${RESULTS_DIR}/orthogroups/input/references.fa"
-    fi
+# --- Outgroup (optional) ---
+if [ -n "${OUTGROUP_FASTA:-}" ] && [ -f "${OUTGROUP_FASTA}" ]; then
+    cp "${OUTGROUP_FASTA}" "${RESULTS_DIR}/orthogroups/input/outgroup.fa" || log "Warning: Failed to copy outgroup FASTA"
+    log "Included outgroup: ${OUTGROUP_FASTA}"
 fi
 
 # --- Pre-flight resource check ---

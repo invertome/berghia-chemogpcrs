@@ -359,6 +359,19 @@ export TREESHRINK_QUANTILE="${TREESHRINK_QUANTILE:-0.05}"
 # --- Outgroup for Tree Rooting ---
 export OUTGROUP_FASTA="${REFERENCE_DIR}/outgroup.fa"
 
+# --- Scan-derived candidates for stage-03 chemoreceptor OG run ---
+# Stage 03 OrthoFinder now consumes per-species scan-derived candidates
+# (*.chemo_candidates.fa) produced by P5 (phase1a validation scan) or P6
+# (full 557-species scan).  Default points at the P5 output directory;
+# override with SCAN_DERIVED_CANDIDATES_DIR env var when P6 is available.
+export SCAN_DERIVED_CANDIDATES_DIR="${SCAN_DERIVED_CANDIDATES_DIR:-${RESULTS_DIR}/p5_phase1a_validation/scan}"
+
+# ORTHOFINDER_REF_GROUPS: DEPRECATED 2026-05-28.  Was used to filter Nath et al.
+# taxonomic groups fed into stage-03 OrthoFinder.  Nath et al. references have
+# been dropped; stage 03 now uses scan-derived candidates exclusively.
+# Retained here for back-compatibility (env var read by old resume jobs).
+export ORTHOFINDER_REF_GROUPS="${ORTHOFINDER_REF_GROUPS:-all}"
+
 # --- Orthogroup Confidence Score ---
 export OG_CONFIDENCE_WEIGHT=1
 
