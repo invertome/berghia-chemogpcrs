@@ -157,7 +157,6 @@ def test_berghia_scan_seqs_routed_normally(tmp_path):
                 scan_fasta_glob=scan_fasta_glob,
                 class_tsv=str(class_tsv),
                 out_dir=str(out_dir),
-                max_per_class=2000,
                 total_budget_per_class=3000,
                 outgroup_budget_per_class=10,
                 cluster_identity=0.7,
@@ -207,7 +206,6 @@ def test_must_include_always_retained(tmp_path):
                 scan_fasta_glob=str(tmp_path / "*.chemo_candidates.fa"),
                 class_tsv=str(class_tsv),
                 out_dir=str(out_dir),
-                max_per_class=15,
                 total_budget_per_class=15,
                 outgroup_budget_per_class=10,
                 cluster_identity=0.7,
@@ -249,7 +247,6 @@ def test_max_phylo_refs_cap(tmp_path):
                 scan_fasta_glob=str(tmp_path / "*.chemo_candidates.fa"),
                 class_tsv=str(class_tsv),
                 out_dir=str(out_dir),
-                max_per_class=cap,
                 total_budget_per_class=cap,
                 outgroup_budget_per_class=10,
                 cluster_identity=0.7,
@@ -261,8 +258,9 @@ def test_max_phylo_refs_cap(tmp_path):
             )
 
     pool_a = list(SeqIO.parse(str(out_dir / "refs_class_A.fa"), "fasta"))
-    # cap=50 with outgroup_budget=10 means refs_cap = 50 - 10 = 40
-    assert len(pool_a) <= cap
+    # cap=50 with outgroup_budget=10 and no Berghia means refs_cap = 50 - 10 = 40
+    report = json.loads((out_dir / "pool_build_report.json").read_text())
+    assert len(pool_a) <= report['class_A']['n_refs_target']
 
 
 # ---------------------------------------------------------------------------
@@ -294,7 +292,6 @@ def test_bcf_pools_independent(tmp_path):
                 scan_fasta_glob=str(tmp_path / "*.chemo_candidates.fa"),
                 class_tsv=str(class_tsv),
                 out_dir=str(out_dir),
-                max_per_class=2000,
                 total_budget_per_class=3000,
                 outgroup_budget_per_class=10,
                 cluster_identity=0.7,
@@ -342,7 +339,6 @@ def test_unclassified_log(tmp_path):
                 scan_fasta_glob=str(tmp_path / "*.chemo_candidates.fa"),
                 class_tsv=str(class_tsv),
                 out_dir=str(out_dir),
-                max_per_class=2000,
                 total_budget_per_class=3000,
                 outgroup_budget_per_class=10,
                 cluster_identity=0.7,
@@ -385,7 +381,6 @@ def test_json_report_emitted(tmp_path):
                 scan_fasta_glob=str(tmp_path / "*.chemo_candidates.fa"),
                 class_tsv=str(class_tsv),
                 out_dir=str(out_dir),
-                max_per_class=2000,
                 total_budget_per_class=3000,
                 outgroup_budget_per_class=10,
                 cluster_identity=0.7,
@@ -482,7 +477,6 @@ def test_idempotent_skip(tmp_path):
             scan_fasta_glob=str(tmp_path / "*.fa"),
             class_tsv=str(dummy_tsv),
             out_dir=str(out_dir),
-            max_per_class=2000,
             total_budget_per_class=3000,
             outgroup_budget_per_class=10,
             cluster_identity=0.7,
@@ -508,7 +502,6 @@ def test_cli_argparse_defaults(tmp_path):
         "--class-tsv", "classes.tsv",
         "--out-dir", str(tmp_path),
     ])
-    assert args.max_per_class == 2000
     assert args.cluster_identity == 0.7
     assert args.berghia_taxid == 1287507
     assert args.threads >= 1
@@ -545,7 +538,6 @@ def test_small_pool_passthrough(tmp_path):
                 scan_fasta_glob=str(tmp_path / "*.chemo_candidates.fa"),
                 class_tsv=str(class_tsv),
                 out_dir=str(out_dir),
-                max_per_class=2000,
                 total_budget_per_class=3000,
                 outgroup_budget_per_class=10,
                 cluster_identity=0.7,
@@ -593,7 +585,6 @@ def test_berghia_class_a_included_as_must_include(tmp_path):
                 scan_fasta_glob=str(tmp_path / "6500_*.fa"),
                 class_tsv=str(scan_class_tsv),
                 out_dir=str(out_dir),
-                max_per_class=2000,
                 total_budget_per_class=3000,
                 outgroup_budget_per_class=10,
                 cluster_identity=0.7,
@@ -642,7 +633,6 @@ def test_berghia_class_b_routed_to_class_b_pool(tmp_path):
                 scan_fasta_glob=str(tmp_path / "*.chemo_candidates.fa"),
                 class_tsv=str(scan_class_tsv),
                 out_dir=str(out_dir),
-                max_per_class=2000,
                 total_budget_per_class=3000,
                 outgroup_budget_per_class=10,
                 cluster_identity=0.7,
@@ -694,7 +684,6 @@ def test_per_class_cap_respected_via_total_budget(tmp_path):
                 scan_fasta_glob=str(tmp_path / "*.chemo_candidates.fa"),
                 class_tsv=str(class_tsv),
                 out_dir=str(out_dir),
-                max_per_class=2000,
                 total_budget_per_class=total_budget,
                 outgroup_budget_per_class=outgroup_budget,
                 cluster_identity=0.7,
@@ -736,7 +725,6 @@ def test_no_berghia_fasta_falls_back_gracefully(tmp_path):
                 scan_fasta_glob=str(tmp_path / "*.chemo_candidates.fa"),
                 class_tsv=str(class_tsv),
                 out_dir=str(out_dir),
-                max_per_class=2000,
                 total_budget_per_class=3000,
                 outgroup_budget_per_class=10,
                 cluster_identity=0.7,
@@ -782,8 +770,8 @@ def test_must_include_retained_when_berghia_exceeds_budget(tmp_path):
     out_dir = tmp_path / "pools"
     out_dir.mkdir()
 
-    # Set a very small cap: total_budget=50, outgroup=10 => refs_cap = 30
-    # Aplysia has 100 seqs (MUST_INCLUDE), which exceeds 30
+    # Set a very small cap: total_budget=50, outgroup=10 => refs_cap = 40
+    # Aplysia has 100 seqs (MUST_INCLUDE), which exceeds 40
     # All Aplysia sequences should still be in the pool
     with patch.object(bpcp, "cdhit_dedup", side_effect=lambda records, **kw: records):
         with patch.object(bpcp, "get_lineage", side_effect=mock_get_lineage):
@@ -791,7 +779,6 @@ def test_must_include_retained_when_berghia_exceeds_budget(tmp_path):
                 scan_fasta_glob=str(tmp_path / "*.chemo_candidates.fa"),
                 class_tsv=str(scan_class_tsv),
                 out_dir=str(out_dir),
-                max_per_class=50,
                 total_budget_per_class=50,
                 outgroup_budget_per_class=10,
                 cluster_identity=0.7,
@@ -862,7 +849,6 @@ def test_max_refs_computed_from_total_budget_minus_berghia(tmp_path):
                 scan_fasta_glob=str(tmp_path / "*.chemo_candidates.fa"),
                 class_tsv=str(scan_class_tsv),
                 out_dir=str(out_dir),
-                max_per_class=2000,
                 total_budget_per_class=total_budget,
                 outgroup_budget_per_class=outgroup_budget,
                 cluster_identity=0.7,
@@ -926,7 +912,6 @@ def test_no_berghia_means_full_budget_minus_outgroup(tmp_path):
                 scan_fasta_glob=str(tmp_path / "*.chemo_candidates.fa"),
                 class_tsv=str(class_tsv),
                 out_dir=str(out_dir),
-                max_per_class=2000,
                 total_budget_per_class=total_budget,
                 outgroup_budget_per_class=outgroup_budget,
                 cluster_identity=0.7,

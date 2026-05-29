@@ -45,7 +45,6 @@ import random
 import subprocess
 import sys
 import tempfile
-from collections import defaultdict
 from pathlib import Path
 from typing import Optional
 
@@ -88,11 +87,6 @@ DEFAULT_TOTAL_BUDGET_PER_CLASS = 3000
 
 # Default outgroup budget per class (reserves slots for outgroup sequences)
 DEFAULT_OUTGROUP_BUDGET_PER_CLASS = 10
-
-# Berghia lineage (NCBI): from root toward Berghia stephanieae.
-# Used to compute proximity scores for other taxa.
-# Computed lazily via get_lineage() on first call.
-_BERGHIA_LINEAGE_CACHE: Optional[list[int]] = None
 
 GPCR_CLASSES = ("A", "B", "C", "F")
 
@@ -446,7 +440,6 @@ def build_all_pools(
     scan_fasta_glob: str,
     class_tsv: str,
     out_dir: str,
-    max_per_class: int = 2000,
     total_budget_per_class: int = DEFAULT_TOTAL_BUDGET_PER_CLASS,
     outgroup_budget_per_class: int = DEFAULT_OUTGROUP_BUDGET_PER_CLASS,
     cluster_identity: float = 0.7,
@@ -464,7 +457,6 @@ def build_all_pools(
         scan_fasta_glob: glob pattern matching per-species scan FASTA files.
         class_tsv: path to P1 classifier output TSV.
         out_dir: directory for output files.
-        max_per_class: (deprecated) fallback per-class sequence cap. Use total_budget_per_class.
         total_budget_per_class: per-class total budget (refs + Berghia + outgroup count). Default 3000.
             Per-class ref cap is computed as: total_budget_per_class - count_of_berghia_in_class - outgroup_budget_per_class.
         outgroup_budget_per_class: reserved slots for outgroup sequences per class. Default 10.
@@ -684,13 +676,6 @@ def build_args_parser() -> argparse.ArgumentParser:
         help="Output directory for per-class FASTAs, unclassified log, and JSON report",
     )
     parser.add_argument(
-        "--max-per-class",
-        type=int,
-        default=2000,
-        metavar="N",
-        help="(deprecated) Maximum sequences per class FASTA. Use --total-budget-per-class.",
-    )
-    parser.add_argument(
         "--total-budget-per-class",
         type=int,
         default=int(os.environ.get("TOTAL_BUDGET_PER_CLASS", str(DEFAULT_TOTAL_BUDGET_PER_CLASS))),
@@ -791,7 +776,6 @@ def main(argv=None) -> None:
         scan_fasta_glob=args.scan_fasta_glob,
         class_tsv=args.class_tsv,
         out_dir=args.out_dir,
-        max_per_class=args.max_per_class,
         total_budget_per_class=args.total_budget_per_class,
         outgroup_budget_per_class=args.outgroup_budget_per_class,
         cluster_identity=args.cluster_identity,
