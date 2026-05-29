@@ -8,8 +8,10 @@ tblout text fed to the parser directly.
 from __future__ import annotations
 
 import csv
+import gzip
 import io
 import sys
+import urllib.error
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
@@ -468,3 +470,145 @@ def test_pf10324_atypical_with_versioned_accession(tmp_path):
     assert subfam == "insect_OR_atypical", (
         "PF10324 should map to insect_OR_atypical in _PFAM_SUBFAMILY"
     )
+
+
+# ---------------------------------------------------------------------------
+# 19. NEW: Bootstrap robustness — fallback URL + integrity check
+# ---------------------------------------------------------------------------
+
+def test_download_retries_on_interpro_failure(tmp_path):
+    """_download_pfam_hmm should retry Pfam direct URL when InterPro fails."""
+    accession = "PF00001"
+    out_path = tmp_path / "PF00001.hmm"
+
+    valid_hmm_content = b"HMMER3/f\nNAME PF00001\n..."
+
+    call_count = [0]
+
+    def mock_urlopen(req, timeout=60):
+        call_count[0] += 1
+        url = req.full_url
+
+        # First call (InterPro) raises exception
+        if "interpro.ebi.ac.uk" in url:
+            raise urllib.error.URLError("Connection refused")
+        # Second call (Pfam direct) succeeds
+        elif "pfam.xfam.org" in url:
+            return io.BytesIO(valid_hmm_content)
+        else:
+            raise ValueError(f"Unexpected URL: {url}")
+
+    with patch("classify_gpcr_by_class.urllib.request.urlopen", side_effect=mock_urlopen):
+        with patch("classify_gpcr_by_class._hmmpress") as mock_hmmpress:
+            cgc._download_pfam_hmm(accession, str(out_path))
+
+    # Should have tried both URLs
+    assert call_count[0] == 2, "Should attempt both InterPro and Pfam"
+    # File should exist and contain the valid content
+    assert out_path.exists()
+    assert out_path.read_bytes() == valid_hmm_content
+    # hmmpress should have been called
+    mock_hmmpress.assert_called_once()
+
+
+def test_download_rejects_html_body(tmp_path):
+    """_download_pfam_hmm should reject HTML responses (invalid HMM format)."""
+    accession = "PF00001"
+    out_path = tmp_path / "PF00001.hmm"
+
+    html_error = b"<html><body>404 Not Found</body></html>"
+
+    def mock_urlopen(req, timeout=60):
+        # Both URLs return HTML error
+        return io.BytesIO(html_error)
+
+    with patch("classify_gpcr_by_class.urllib.request.urlopen", side_effect=mock_urlopen):
+        with patch("classify_gpcr_by_class._hmmpress"):
+            # Should raise RuntimeError, not write the file
+            with pytest.raises(RuntimeError) as exc_info:
+                cgc._download_pfam_hmm(accession, str(out_path))
+
+            error_msg = str(exc_info.value)
+            assert "Failed to download valid HMM" in error_msg
+            assert "ebi.ac.uk" in error_msg  # Contains the InterPro URL
+            assert "pfam.xfam.org" in error_msg  # Contains the Pfam fallback URL
+
+    # File should NOT exist
+    assert not out_path.exists(), "Invalid HMM should not be written to disk"
+
+
+def test_download_accepts_valid_uncompressed_hmm(tmp_path):
+    """_download_pfam_hmm should accept valid uncompressed HMMER3 HMM."""
+    accession = "PF00002"
+    out_path = tmp_path / "PF00002.hmm"
+
+    valid_hmm = b"HMMER3/f\nNAME PF00002\nACC  PF00002.14\n... rest of HMM ...\n"
+
+    def mock_urlopen(req, timeout=60):
+        return io.BytesIO(valid_hmm)
+
+    with patch("classify_gpcr_by_class.urllib.request.urlopen", side_effect=mock_urlopen):
+        with patch("classify_gpcr_by_class._hmmpress") as mock_hmmpress:
+            cgc._download_pfam_hmm(accession, str(out_path))
+
+    # File should exist with correct content
+    assert out_path.exists()
+    assert out_path.read_bytes() == valid_hmm
+    mock_hmmpress.assert_called_once()
+
+
+def test_download_accepts_valid_gzipped_hmm(tmp_path):
+    """_download_pfam_hmm should decompress and accept gzipped HMMER3 HMM."""
+    accession = "PF00003"
+    out_path = tmp_path / "PF00003.hmm"
+
+    valid_hmm_content = b"HMMER3/f\nNAME PF00003\nACC  PF00003.19\n"
+    gzipped = gzip.compress(valid_hmm_content)
+
+    def mock_urlopen(req, timeout=60):
+        return io.BytesIO(gzipped)
+
+    with patch("classify_gpcr_by_class.urllib.request.urlopen", side_effect=mock_urlopen):
+        with patch("classify_gpcr_by_class._hmmpress") as mock_hmmpress:
+            cgc._download_pfam_hmm(accession, str(out_path))
+
+    # File should exist with decompressed content
+    assert out_path.exists()
+    assert out_path.read_bytes() == valid_hmm_content
+    mock_hmmpress.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# 20. _is_valid_hmm_format validation
+# ---------------------------------------------------------------------------
+
+def test_is_valid_hmm_format_accepts_hmmer3_f():
+    """_is_valid_hmm_format should accept HMMER3/f header."""
+    assert cgc._is_valid_hmm_format(b"HMMER3/f\nNAME PF00001\n")
+
+
+def test_is_valid_hmm_format_accepts_hmmer3_slash():
+    """_is_valid_hmm_format should accept HMMER3/ header variants."""
+    assert cgc._is_valid_hmm_format(b"HMMER3/3\nNAME PF00001\n")
+    assert cgc._is_valid_hmm_format(b"HMMER3/\nNAME PF00001\n")
+
+
+def test_is_valid_hmm_format_accepts_bare_hmmer3():
+    """_is_valid_hmm_format should accept bare HMMER3 header."""
+    assert cgc._is_valid_hmm_format(b"HMMER3")
+
+
+def test_is_valid_hmm_format_rejects_html():
+    """_is_valid_hmm_format should reject HTML."""
+    assert not cgc._is_valid_hmm_format(b"<html><body>404</body></html>")
+
+
+def test_is_valid_hmm_format_rejects_empty():
+    """_is_valid_hmm_format should reject empty or too-short data."""
+    assert not cgc._is_valid_hmm_format(b"")
+    assert not cgc._is_valid_hmm_format(b"HMM")  # 3 bytes, too short
+
+
+def test_is_valid_hmm_format_rejects_random_data():
+    """_is_valid_hmm_format should reject random binary data."""
+    assert not cgc._is_valid_hmm_format(b"\x00\x01\x02\x03\x04\x05")

@@ -275,26 +275,76 @@ def select_hmm_library(
 # ---------------------------------------------------------------------------
 
 def _download_pfam_hmm(accession: str, out_path: str) -> None:
-    """Download a single Pfam HMM from InterPro (gzip -> decompress)."""
-    url = _INTERPRO_HMM_URL.format(accession=accession)
-    print(f"[classify_gpcr_by_class] Downloading {accession} from {url} ...",
-          file=sys.stderr)
-    req = urllib.request.Request(url, headers={"Accept": "application/octet-stream"})
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            raw = resp.read()
-    except Exception as exc:
-        raise RuntimeError(f"Failed to download {accession}: {exc}") from exc
+    """Download a single Pfam HMM from InterPro or Pfam, with integrity check.
 
-    # Response may be gzipped (content-type application/x-gzip or gzip magic)
-    if raw[:2] == b"\x1f\x8b":
-        raw = gzip.decompress(raw)
+    Tries InterPro first, falls back to Pfam direct if that fails.
+    Validates magic bytes before writing to prevent poison cache.
+    """
+    interpro_url = _INTERPRO_HMM_URL.format(accession=accession)
+    pfam_url = f"https://pfam.xfam.org/family/{accession}/hmm"
 
-    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-    Path(out_path).write_bytes(raw)
+    urls_tried = []
 
-    # hmmpress the downloaded HMM for fast hmmscan
-    _hmmpress(out_path)
+    for attempt, url in enumerate([interpro_url, pfam_url], start=1):
+        try:
+            print(f"[classify_gpcr_by_class] Attempt {attempt}: downloading {accession} "
+                  f"from {url} ...", file=sys.stderr)
+            req = urllib.request.Request(url, headers={"Accept": "application/octet-stream"})
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                raw = resp.read()
+            urls_tried.append(url)
+        except Exception as exc:
+            print(f"[classify_gpcr_by_class]   {url} failed: {exc}", file=sys.stderr)
+            continue
+
+        # Decompress if gzipped
+        if raw[:2] == b"\x1f\x8b":
+            try:
+                raw = gzip.decompress(raw)
+            except Exception as exc:
+                print(f"[classify_gpcr_by_class]   gzip decompression failed: {exc}",
+                      file=sys.stderr)
+                continue
+
+        # Validate HMM magic bytes
+        if _is_valid_hmm_format(raw):
+            # Write only if valid
+            Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(out_path).write_bytes(raw)
+            # hmmpress the downloaded HMM for fast hmmscan
+            _hmmpress(out_path)
+            return
+        else:
+            print(f"[classify_gpcr_by_class]   {url} returned invalid HMM format",
+                  file=sys.stderr)
+
+    # Both URLs failed or returned invalid data
+    raise RuntimeError(
+        f"Failed to download valid HMM for {accession}. "
+        f"Tried: {interpro_url}, {pfam_url}"
+    )
+
+
+def _is_valid_hmm_format(data: bytes) -> bool:
+    """Check if data contains a valid HMMER HMM signature.
+
+    HMMER3 HMMs start with either:
+    - Uncompressed: b'HMMER3/f' or b'HMMER3/' (exact header)
+    - Gzipped: first two bytes b'\\x1f\\x8b', decompress and check above
+
+    Parameters
+    ----------
+    data : bytes
+        Raw file contents (expected to be uncompressed at this point)
+
+    Returns
+    -------
+    bool
+        True if data starts with HMMER3 magic bytes, False otherwise.
+    """
+    if len(data) < 6:
+        return False
+    return data[:6] in (b"HMMER3", ) or data[:7] == b"HMMER3/"
 
 
 def _hmmpress(hmm_path: str) -> None:
