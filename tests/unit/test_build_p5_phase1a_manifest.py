@@ -11,7 +11,6 @@ Idempotent: skips if output already exists unless --force.
 from __future__ import annotations
 
 import csv
-import subprocess
 import sys
 from pathlib import Path
 

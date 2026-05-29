@@ -160,6 +160,30 @@ class TestParseScanRecords:
         total_input = sum(r["n_input"] for r in records)
         assert total_input == 1 + 2 + 3
 
+    def test_oserror_skips_file_and_warns(self, tmp_path: Path, capsys) -> None:
+        """File read error → skip (don't append phantom zero-record), warn to stderr."""
+        scan_dir = tmp_path / "scan"
+        # Write a valid file
+        _write_scan_record(
+            scan_dir / "100_Valid.scan_record.tsv",
+            [{"seq_id": "s1", "gpcr_positive": "1", "passed_gate": "1"}],
+        )
+        # Create a second file but chmod it unreadable (permission denied)
+        bad_file = scan_dir / "101_Unreadable.scan_record.tsv"
+        bad_file.touch()
+        bad_file.chmod(0o000)
+        try:
+            records = agg.parse_scan_records(scan_dir)
+            # Should have exactly 1 record (the valid one), NOT 2
+            assert len(records) == 1
+            assert records[0]["taxid"] == "100"
+            # Check that a warning was printed to stderr
+            captured = capsys.readouterr()
+            assert "WARNING" in captured.err or "cannot read" in captured.err
+        finally:
+            # Restore permissions for cleanup
+            bad_file.chmod(0o644)
+
 
 # ---------------------------------------------------------------------------
 # parse_class_distribution
@@ -282,6 +306,31 @@ class TestBuildValidationReport:
         assert report["class_distribution"]["phase1a"] is None
         assert report["class_distribution"]["berghia"] is None
         assert report["pool_composition"] is None
+
+    def test_pool_report_with_no_class_keys_treated_as_missing(
+        self, tmp_path: Path
+    ) -> None:
+        """pool_data exists but has NO class_* keys → treated as missing, marked in summary."""
+        scan_dir = tmp_path / "scan"
+        _write_scan_record(
+            scan_dir / "100_Alpha_beta.scan_record.tsv",
+            [{"seq_id": "s1", "gpcr_positive": "1", "passed_gate": "1"}],
+        )
+        pool_dir = tmp_path / "pools"
+        # Write pool report with ONLY metadata, no class_* keys
+        _write_pool_report(pool_dir / "pool_build_report.json", {
+            "unclassified": {"n": 0},
+            "berghia_included": {"n_total": 0},
+        })
+        report = agg.build_validation_report(
+            scan_dir=scan_dir,
+            classify_dir=tmp_path / "classify_missing",
+            pool_report_path=pool_dir / "pool_build_report.json",
+        )
+        # pool_composition should be None
+        assert report["pool_composition"] is None
+        # Missing marker should be in the summary
+        assert "pool_composition.no_class_keys" in report["summary"]["missing_sections"]
 
     def test_per_species_stats_are_correct(self, tmp_path: Path) -> None:
         scan_dir = tmp_path / "scan"

@@ -44,7 +44,7 @@ def parse_scan_records(scan_dir: Path) -> list[dict]:
             stem = stem[: -len(".scan_record")]
         # Split on first underscore to get taxid vs binomial
         parts = stem.split("_", 1)
-        taxid = parts[0] if parts else stem
+        taxid_str = parts[0] if parts else stem
         binomial = parts[1] if len(parts) > 1 else ""
 
         n_input = 0
@@ -59,15 +59,26 @@ def parse_scan_records(scan_dir: Path) -> list[dict]:
                         n_hmm_positive += 1
                     if str(row.get("passed_gate", "0")).strip() == "1":
                         n_passed_gate += 1
-        except OSError:
-            pass
+        except OSError as e:
+            print(
+                f"[parse_scan_records] WARNING: cannot read {tsv_path}: {e}",
+                file=sys.stderr,
+            )
+            continue
+
+        # Convert taxid to int for numeric sorting, but keep as string in dict for JSON compat
+        try:
+            taxid = int(taxid_str)
+        except ValueError:
+            taxid = taxid_str
 
         records.append({
-            "taxid": taxid,
+            "taxid": taxid_str,  # Keep string for JSON output compatibility
             "binomial": binomial,
             "n_input": n_input,
             "n_hmm_positive": n_hmm_positive,
             "n_passed_gate": n_passed_gate,
+            "_taxid_numeric": taxid,  # Internal field for sorting
         })
 
     return records
@@ -181,6 +192,10 @@ def build_validation_report(
             pool_composition["unclassified"] = pool_data["unclassified"]
         if "berghia_included" in pool_data:
             pool_composition["berghia_included"] = pool_data["berghia_included"]
+        # If pool_data exists but has NO class_* keys, treat as missing
+        if not any(k.startswith("class_") for k in pool_data.keys()):
+            pool_composition = None
+            missing_sections.append("pool_composition.no_class_keys")
 
     total_candidates = sum(r["n_passed_gate"] for r in per_species)
 
@@ -235,7 +250,7 @@ def write_md_report(report: dict, out_path: Path) -> None:
     if per_species:
         lines.append("| taxid | binomial | n_input | n_hmm_positive | n_passed_gate |")
         lines.append("|-------|----------|---------|----------------|---------------|")
-        for sp in sorted(per_species, key=lambda x: x.get("taxid", "")):
+        for sp in sorted(per_species, key=lambda x: x.get("_taxid_numeric", x.get("taxid", ""))):
             lines.append(
                 f"| {sp['taxid']} | {sp['binomial']} "
                 f"| {sp['n_input']} | {sp['n_hmm_positive']} "
