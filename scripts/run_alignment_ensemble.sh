@@ -94,17 +94,27 @@ fi
 
 mkdir -p "$OUTPUT_DIR"
 
+# --- mafft --dash: structural prior flag (locked decision 2026-05-28) ---
+# When MAFFT_DASH=1 (default), prepend --dash to all MAFFT invocations.
+# --dash uses PDB structural priors to guide alignment of GPCR TM helices.
+# FAMSA calls are not affected (FAMSA does not support --dash).
+MAFFT_DASH_ARGS=""
+if [[ "${MAFFT_DASH:-1}" == "1" ]]; then
+    MAFFT_DASH_ARGS="--dash"
+fi
+
 # --- Canonical alignment (regime-based via run_aligner.sh, OR a chosen mode) ---
 case "$CANONICAL_ALIGNER" in
     auto)
+        # run_aligner.sh respects MAFFT_DASH env var internally via the same mechanism
         bash "${SCRIPT_DIR}/run_aligner.sh" \
             --input="$INPUT" \
             --output="${OUTPUT_DIR}/canonical.fa" \
             --threads="$THREADS"
         ;;
-    linsi) "$MAFFT_BIN" --localpair  --maxiterate 1000 --thread "$THREADS" "$INPUT" > "${OUTPUT_DIR}/canonical.fa" 2>"${OUTPUT_DIR}/canonical.log" ;;
-    ginsi) "$MAFFT_BIN" --globalpair --maxiterate 1000 --thread "$THREADS" "$INPUT" > "${OUTPUT_DIR}/canonical.fa" 2>"${OUTPUT_DIR}/canonical.log" ;;
-    einsi) "$MAFFT_BIN" --genafpair  --maxiterate 1000 --thread "$THREADS" "$INPUT" > "${OUTPUT_DIR}/canonical.fa" 2>"${OUTPUT_DIR}/canonical.log" ;;
+    linsi) "$MAFFT_BIN" ${MAFFT_DASH_ARGS} --localpair  --maxiterate 1000 --thread "$THREADS" "$INPUT" > "${OUTPUT_DIR}/canonical.fa" 2>"${OUTPUT_DIR}/canonical.log" ;;
+    ginsi) "$MAFFT_BIN" ${MAFFT_DASH_ARGS} --globalpair --maxiterate 1000 --thread "$THREADS" "$INPUT" > "${OUTPUT_DIR}/canonical.fa" 2>"${OUTPUT_DIR}/canonical.log" ;;
+    einsi) "$MAFFT_BIN" ${MAFFT_DASH_ARGS} --genafpair  --maxiterate 1000 --thread "$THREADS" "$INPUT" > "${OUTPUT_DIR}/canonical.fa" 2>"${OUTPUT_DIR}/canonical.log" ;;
     famsa)
         if ! command -v "$FAMSA_BIN" >/dev/null 2>&1; then
             echo "ERROR: famsa not found for --canonical-aligner=famsa" >&2; exit 2
@@ -134,7 +144,8 @@ run_mafft_variant() {
     local name="$1"; shift
     local out="${OUTPUT_DIR}/variant_${name}.fa"
     local log="${OUTPUT_DIR}/variant_${name}.log"
-    if "$MAFFT_BIN" "$@" --thread "$THREADS" "$INPUT" > "$out" 2>"$log" \
+    # shellcheck disable=SC2086
+    if "$MAFFT_BIN" ${MAFFT_DASH_ARGS} "$@" --thread "$THREADS" "$INPUT" > "$out" 2>"$log" \
        && [[ -s "$out" ]]; then
         echo "  variant_${name}: OK ($(grep -c '^>' "$out") seqs)" >&2
     else

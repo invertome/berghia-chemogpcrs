@@ -140,31 +140,43 @@ if [[ "$BACKEND" == mafft_* ]] && ! have_mafft; then
     exit 2
 fi
 
+# --- mafft --dash: structural prior flag (locked decision 2026-05-28) ---
+# When MAFFT_DASH=1 (default), prepend --dash to all MAFFT invocations.
+# FAMSA does not support --dash and is left unchanged.
+MAFFT_DASH_ARGS=""
+if [[ "${MAFFT_DASH:-1}" == "1" ]]; then
+    MAFFT_DASH_ARGS="--dash"
+fi
+
 # Run the chosen aligner
 START=$(date +%s)
 case "$BACKEND" in
     mafft_linsi)
         # L-INS-i: localpair + iterative refinement, gold-standard accuracy
         # for small alignments. Time per N^2 — practical up to ~500.
-        "$MAFFT_BIN" --localpair --maxiterate 1000 --thread "$THREADS" \
+        # shellcheck disable=SC2086
+        "$MAFFT_BIN" ${MAFFT_DASH_ARGS} --localpair --maxiterate 1000 --thread "$THREADS" \
             "$INPUT" > "$OUTPUT" 2>"${OUTPUT}.aligner.log"
         RC=$?
         ;;
     mafft_auto)
         # --auto: MAFFT picks L-INS-i / G-INS-i / FFT-NS-i / FFT-NS-2
         # based on N + sequence-similarity heuristics.
-        "$MAFFT_BIN" --auto --thread "$THREADS" \
+        # shellcheck disable=SC2086
+        "$MAFFT_BIN" ${MAFFT_DASH_ARGS} --auto --thread "$THREADS" \
             "$INPUT" > "$OUTPUT" 2>"${OUTPUT}.aligner.log"
         RC=$?
         ;;
     mafft_retree2)
-        "$MAFFT_BIN" --retree 2 --thread "$THREADS" \
+        # shellcheck disable=SC2086
+        "$MAFFT_BIN" ${MAFFT_DASH_ARGS} --retree 2 --thread "$THREADS" \
             "$INPUT" > "$OUTPUT" 2>"${OUTPUT}.aligner.log"
         RC=$?
         ;;
     famsa)
         # FAMSA 2: -t threads. Reads FASTA, writes FASTA. Includes built-in
         # tree construction; we don't need separate guide tree.
+        # FAMSA does not support --dash; leave it unchanged.
         "$FAMSA_BIN" -t "$THREADS" "$INPUT" "$OUTPUT" 2>"${OUTPUT}.aligner.log"
         RC=$?
         ;;
@@ -182,7 +194,8 @@ if [ $RC -ne 0 ] || [ ! -s "$OUTPUT" ]; then
     # Fallback to MAFFT --retree 2 if we haven't already tried it
     if [ "$BACKEND" != "mafft_retree2" ] && have_mafft; then
         echo "WARN: falling back to MAFFT --retree 2" >&2
-        "$MAFFT_BIN" --retree 2 --thread "$THREADS" \
+        # shellcheck disable=SC2086
+        "$MAFFT_BIN" ${MAFFT_DASH_ARGS} --retree 2 --thread "$THREADS" \
             "$INPUT" > "$OUTPUT" 2>>"${OUTPUT}.aligner.log"
         if [ $? -ne 0 ] || [ ! -s "$OUTPUT" ]; then
             exit 3

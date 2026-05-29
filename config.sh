@@ -321,10 +321,40 @@ export CDHIT_WORDSIZE=5          # Word size for sequence comparison
 export CDHIT_MEMORY=16000        # Memory limit in MB
 
 # --- Reference Subsampling for Phylogenetic Trees ---
-export MAX_PHYLO_REFS=2000                 # Max reference sequences in phylogenetic tree
+# DEPRECATED for global tree: use TOTAL_BUDGET_PER_CLASS (in P2) + OUTGROUP_BUDGET_PER_CLASS
+# instead. MAX_PHYLO_REFS kept exported for back-compat (old resume jobs + per-OG subsampling).
+export MAX_PHYLO_REFS=2000                 # Max reference sequences in phylogenetic tree (back-compat; see P2 TOTAL_BUDGET_PER_CLASS)
 export REF_CLUSTER_IDENTITY=0.7            # CD-HIT clustering identity threshold
 export REF_LSE_WEIGHT=1.5                  # Multiplier for LSE vs one-to-one orthologs
 export REF_TAXONOMY_WEIGHTS="gastropoda:3.0,cephalopoda:1.5,bivalvia:1.5,other_molluscan_classes:1.2,annelida:1.0,platyhelminthes:1.0,other_lophotrochozoan_phyla:1.0"
+
+# --- Per-class tree refactor (2026-05-29, plan 2026-05-28-stage04-per-class-refactor.md) ---
+# Active GPCR classes for the per-class tree build. Space-separated.
+export GPCR_CLASSES="${GPCR_CLASSES:-A B C F}"
+# Class A primary; B/C/F extra deliverables. Override to a subset (e.g. "A") for testing.
+
+# Per-class outgroup swap-map. Each class's tree is rooted by sequences from the
+# specified source class (drawn from refs_class_<source>.fa). Best practice:
+# A rooted by C (deepest GPCR sister); B/C/F rooted by A.
+export OUTGROUP_SOURCE_CLASS_A="${OUTGROUP_SOURCE_CLASS_A:-C}"
+export OUTGROUP_SOURCE_CLASS_B="${OUTGROUP_SOURCE_CLASS_B:-A}"
+export OUTGROUP_SOURCE_CLASS_C="${OUTGROUP_SOURCE_CLASS_C:-A}"
+export OUTGROUP_SOURCE_CLASS_F="${OUTGROUP_SOURCE_CLASS_F:-A}"
+
+# Outgroup size per tree (best practice ~10 seqs, override-able).
+export OUTGROUP_BUDGET_PER_CLASS="${OUTGROUP_BUDGET_PER_CLASS:-10}"
+
+# Use mafft --dash structural information for GPCR alignments.
+# DASH adds PDB structural priors to alignment. Required for the per-class
+# architecture per locked decision 2026-05-28. Override to 0 to disable.
+export MAFFT_DASH="${MAFFT_DASH:-1}"
+
+# Per-class reference pool dir (P2 output location).
+export PER_CLASS_POOL_DIR="${PER_CLASS_POOL_DIR:-${RESULTS_DIR}/p5_phase1a_validation/pools}"
+
+# Berghia per-class classifier output (P1 classifier run on Berghia 888).
+# When this file exists, stage 04 reads the Berghia(class) subsets from it.
+export BERGHIA_CLASS_TSV="${BERGHIA_CLASS_TSV:-${RESULTS_DIR}/p5_phase1a_validation/classify/class_berghia.tsv}"
 
 # --- Phylogenetic Tree ---
 # Directory containing the tree file (override for versioned runs, e.g., protein/v2)

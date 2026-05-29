@@ -117,197 +117,197 @@ check_alignment() {
 # --- Pre-flight resource check ---
 detect_resources
 
-# --- All Berghia candidates + references ---
-# Reference subsampling: when raw references exceed MAX_PHYLO_REFS, use CD-HIT clustering
-# + taxonomy-weighted proportional allocation to select a diverse representative subset.
-# This ensures the tree always includes reference sequences for meaningful phylo_scores.
-MAX_PHYLO_REFS=${MAX_PHYLO_REFS:-2000}
-REF_CLUSTER_IDENTITY=${REF_CLUSTER_IDENTITY:-0.7}
-REF_LSE_WEIGHT=${REF_LSE_WEIGHT:-1.5}
-REF_TAXONOMY_WEIGHTS=${REF_TAXONOMY_WEIGHTS:-"gastropoda:3.0,cephalopoda:1.5,bivalvia:1.5,other_molluscan_classes:1.2,annelida:1.0,platyhelminthes:1.0,other_lophotrochozoan_phyla:1.0"}
+# --- Per-class global trees (A, B, C, F) ---
+# Replaces the former single "all_berghia_refs" tree. Each class gets its own
+# combined FASTA (P2 pool refs + Berghia subset + outgroup), filter stack,
+# ClipKit trim, FastTree seed, and IQ-TREE run. Completion is gated per-class
+# so individual classes can be resumed independently.
+#
+# Per-class pool dir and Berghia class TSV are set in config.sh.
+# Outgroup swap-map: A<-C, B<-A, C<-A, F<-A (locked decision 2026-05-28).
+#
+# Back-compat: after the loop the Class A outputs are symlinked to the legacy
+# all_berghia_refs.* paths so stage 04b / 07 / 08 consumers keep working.
+BERGHIA_FA="${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa"
 
-if [ ! -f "${RESULTS_DIR}/step_completed_all_berghia_refs_iqtree.txt" ]; then
-    ALL_REFS="${RESULTS_DIR}/reference_sequences/all_references.fa"
-    BERGHIA_FA="${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa"
-    COMBINED="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.fa"
-    SUBSAMPLED_REFS="${RESULTS_DIR}/reference_sequences/subsampled_references.fa"
-    SUBSAMPLED_RAW="${RESULTS_DIR}/reference_sequences/subsampled_refs_raw.fa"
-    SUBSAMPLED_REPORT="${RESULTS_DIR}/reference_sequences/subsampling_report.json"
-    SUBSAMPLED_ID_MAP="${RESULTS_DIR}/reference_sequences/subsampled_id_map.csv"
-    SUBSAMPLED_CATEGORIES="${RESULTS_DIR}/reference_sequences/subsampled_ref_categories.csv"
-    REF_CATEGORIES_FINAL="${RESULTS_DIR}/reference_sequences/ref_categories_final.csv"
-    NATH_REF_DIR="${REFERENCE_DIR}/nath_et_al"
+for CLASS in ${GPCR_CLASSES:-A B C F}; do
+    CLASS_MARKER="${RESULTS_DIR}/step_completed_class_${CLASS}_iqtree.txt"
+    if [ -f "${CLASS_MARKER}" ]; then
+        log "Class ${CLASS}: skipping (marker present)"
+        continue
+    fi
 
-    BERGHIA_COUNT=$(grep -c "^>" "$BERGHIA_FA")
-    REF_COUNT=$(grep -c "^>" "$ALL_REFS" 2>/dev/null || echo 0)
+    log "=== Class ${CLASS}: building global tree ==="
 
-    if [ "$REF_COUNT" -le "$MAX_PHYLO_REFS" ]; then
-        # References fit within limit — use all
-        cat "$BERGHIA_FA" "$ALL_REFS" > "$COMBINED"
-        log "Combined Berghia ($BERGHIA_COUNT) + references ($REF_COUNT) = $((BERGHIA_COUNT + REF_COUNT)) sequences"
-    elif [ -f "$SUBSAMPLED_REFS" ]; then
-        # Reuse existing subsampled references (idempotent)
-        SUB_COUNT=$(grep -c "^>" "$SUBSAMPLED_REFS")
-        cat "$BERGHIA_FA" "$SUBSAMPLED_REFS" > "$COMBINED"
-        log "Reusing subsampled references ($SUB_COUNT) + Berghia ($BERGHIA_COUNT) = $((BERGHIA_COUNT + SUB_COUNT)) sequences"
-    elif [ -d "$NATH_REF_DIR" ]; then
-        # Subsample: run CD-HIT + taxonomy-weighted selection on raw .faa files
-        log "References ($REF_COUNT) exceed MAX_PHYLO_REFS ($MAX_PHYLO_REFS) — subsampling"
-        run_command "subsample_references" python3 "${SCRIPTS_DIR}/subsample_references.py" \
-            --ref-dir "$NATH_REF_DIR" \
-            --target-size "$MAX_PHYLO_REFS" \
-            --cluster-identity "$REF_CLUSTER_IDENTITY" \
-            --taxonomy-weights "$REF_TAXONOMY_WEIGHTS" \
-            --lse-weight "$REF_LSE_WEIGHT" \
-            --cdhit-memory "${CDHIT_MEMORY:-8000}" \
-            --threads "${CPUS}" \
-            --output "$SUBSAMPLED_RAW" \
-            --report "$SUBSAMPLED_REPORT" \
-            --categories-output "$SUBSAMPLED_CATEGORIES"
+    CLASS_DIR="${RESULTS_DIR}/phylogenies/protein/class_${CLASS}"
+    mkdir -p "${CLASS_DIR}"
 
-        # Standardize headers (same pipeline as step 01)
-        run_command "subsample_update_headers" python3 "${SCRIPTS_DIR}/update_headers.py" \
-            "$SUBSAMPLED_RAW" "$SUBSAMPLED_ID_MAP" --source-type reference
-        mv "${SUBSAMPLED_RAW}_updated.fa" "$SUBSAMPLED_REFS"
+    # --- 1. Assemble class input FASTA: refs + Berghia(class) + outgroup ---
+    REFS_FA="${PER_CLASS_POOL_DIR}/refs_class_${CLASS}.fa"
+    if [ ! -f "${REFS_FA}" ]; then
+        log "ERROR: missing P2 pool ${REFS_FA} — run P2 (per-class pool build) first"
+        exit 1
+    fi
 
-        # Build merged category CSV: join original_id -> standardized ref_ ID
-        if [ -f "$SUBSAMPLED_CATEGORIES" ] && [ -f "$SUBSAMPLED_ID_MAP" ]; then
-            python3 -c "
-import csv
-id_map = {}
-with open('${SUBSAMPLED_ID_MAP}') as f:
-    for row in csv.DictReader(f):
-        id_map[row['original_id']] = row['short_id']
-with open('${SUBSAMPLED_CATEGORIES}') as f_in, open('${REF_CATEGORIES_FINAL}', 'w') as f_out:
-    f_out.write('ref_id,category,group\n')
-    for row in csv.DictReader(f_in):
-        short_id = id_map.get(row['original_id'], '')
-        if short_id:
-            f_out.write(f\"{short_id},{row['category']},{row['group']}\n\")
-"
-            log "Built reference category map: $(wc -l < "${REF_CATEGORIES_FINAL}") entries"
+    # Berghia subset for this class — extract from the full Berghia FASTA
+    # using the class column from the P1 classifier output.
+    BERGHIA_CLASS_FA="${CLASS_DIR}/berghia_class_${CLASS}.fa"
+    if [ -f "${BERGHIA_CLASS_TSV}" ] && [ -f "${BERGHIA_FA}" ]; then
+        # Extract sequence IDs for this class from TSV (col 1=seq_id, col 2=class; skip header)
+        awk -F'\t' -v cls="${CLASS}" 'NR>1 && $2==cls {print $1}' \
+            "${BERGHIA_CLASS_TSV}" > "${CLASS_DIR}/berghia_class_${CLASS}_ids.txt"
+        N_IDS=$(wc -l < "${CLASS_DIR}/berghia_class_${CLASS}_ids.txt")
+        if [ "${N_IDS}" -gt 0 ]; then
+            # Use seqtk (already on PATH per config.sh SEQTK) for ID-based extraction
+            "${SEQTK:-seqtk}" subseq "${BERGHIA_FA}" \
+                "${CLASS_DIR}/berghia_class_${CLASS}_ids.txt" > "${BERGHIA_CLASS_FA}"
+            log "Class ${CLASS}: extracted ${N_IDS} Berghia sequences"
+        else
+            log "WARN: no Berghia sequences assigned to class ${CLASS} in ${BERGHIA_CLASS_TSV}"
+            : > "${BERGHIA_CLASS_FA}"
         fi
-
-        SUB_COUNT=$(grep -c "^>" "$SUBSAMPLED_REFS")
-        cat "$BERGHIA_FA" "$SUBSAMPLED_REFS" > "$COMBINED"
-        log "Subsampled references ($SUB_COUNT) + Berghia ($BERGHIA_COUNT) = $((BERGHIA_COUNT + SUB_COUNT)) sequences"
     else
-        # Fallback: no nath_et_al directory and refs too large — use Berghia only
-        log "WARNING: References ($REF_COUNT) exceed limit and no nath_et_al/ directory found for subsampling"
-        log "Using Berghia candidates only for overview tree"
-        cp "$BERGHIA_FA" "$COMBINED"
+        log "WARN: ${BERGHIA_CLASS_TSV} not found — class ${CLASS} tree skips Berghia inclusion"
+        : > "${BERGHIA_CLASS_FA}"
     fi
 
-    # --- Append outgroup for tree rooting ---
-    # Uses ref_outgroup_ prefix to pass existing startswith('ref_') checks
-    if [ -f "${OUTGROUP_FASTA:-}" ]; then
-        run_command "outgroup_update_headers" python3 "${SCRIPTS_DIR}/update_headers.py" \
-            "${OUTGROUP_FASTA}" "${RESULTS_DIR}/reference_sequences/outgroup_id_map.csv" \
-            --source-type reference --id-prefix ref_outgroup
-        cat "${OUTGROUP_FASTA}_updated.fa" >> "$COMBINED"
-        # Add outgroup entries to category CSV
-        if [ -f "${REF_CATEGORIES_FINAL}" ]; then
-            python3 -c "
-import csv
-with open('${REF_CATEGORIES_FINAL}', 'a') as f:
-    writer = csv.writer(f)
-    with open('${RESULTS_DIR}/reference_sequences/outgroup_id_map.csv') as m:
-        for row in csv.DictReader(m):
-            writer.writerow([row['short_id'], 'outgroup', 'outgroup'])
-"
-        fi
-        OUTGROUP_COUNT=$(grep -c "^>" "${OUTGROUP_FASTA}_updated.fa")
-        log "Added ${OUTGROUP_COUNT} outgroup sequence(s) for tree rooting"
+    # Outgroup: first ${OUTGROUP_BUDGET_PER_CLASS} sequences from the
+    # swap-map source class's ref pool (locked decision 2026-05-28).
+    OUTGROUP_SOURCE_VAR="OUTGROUP_SOURCE_CLASS_${CLASS}"
+    OUTGROUP_SOURCE_CLASS="${!OUTGROUP_SOURCE_VAR}"
+    OUTGROUP_SOURCE_FA="${PER_CLASS_POOL_DIR}/refs_class_${OUTGROUP_SOURCE_CLASS}.fa"
+    OUTGROUP_FA="${CLASS_DIR}/outgroup_class_${CLASS}.fa"
+    if [ -f "${OUTGROUP_SOURCE_FA}" ]; then
+        # Take the first N complete FASTA records (header + sequence block)
+        awk -v n="${OUTGROUP_BUDGET_PER_CLASS:-10}" \
+            '/^>/{c++} c>n{exit} {print}' \
+            "${OUTGROUP_SOURCE_FA}" > "${OUTGROUP_FA}"
+        OG_COUNT=$(grep -c '^>' "${OUTGROUP_FA}" 2>/dev/null || echo 0)
+        log "Class ${CLASS}: outgroup from class ${OUTGROUP_SOURCE_CLASS} = ${OG_COUNT} seqs"
+    else
+        log "WARN: no outgroup source ${OUTGROUP_SOURCE_FA} for class ${CLASS}; tree will be unrooted"
+        : > "${OUTGROUP_FA}"
     fi
 
-    SEQ_COUNT=$(grep -c "^>" "$COMBINED")
-    log "Building tree from $SEQ_COUNT sequences"
+    # Combine into one FASTA for the filter stack
+    COMBINED="${CLASS_DIR}/class_${CLASS}_combined.fa"
+    cat "${REFS_FA}" "${BERGHIA_CLASS_FA}" "${OUTGROUP_FA}" > "${COMBINED}"
+    N_INPUT=$(grep -c '^>' "${COMBINED}")
+    log "Class ${CLASS}: combined input = ${N_INPUT} sequences (refs + Berghia + outgroup, cap 3000)"
 
     # Length filter: remove extreme outliers before alignment
-    FILTERED="${COMBINED%.fa}_filtered.fa"
+    COMBINED_FILTERED="${CLASS_DIR}/class_${CLASS}_combined_filtered.fa"
     python3 "${SCRIPTS_DIR}/filter_sequences_by_length.py" \
-        "$COMBINED" "$FILTERED" \
+        "${COMBINED}" "${COMBINED_FILTERED}" \
         --min-length "${SEQ_LENGTH_FILTER_MIN:-250}" \
         --max-length-method "${SEQ_LENGTH_FILTER_MAX_METHOD:-tukey}" \
         --max-length-floor "${SEQ_LENGTH_FILTER_MAX_FLOOR:-800}" \
-        --report "${RESULTS_DIR}/phylogenies/protein/length_filter_report.tsv"
-    COMBINED="$FILTERED"
-    SEQ_COUNT=$(grep -c "^>" "$COMBINED")
-    log "After length filter: $SEQ_COUNT sequences (report: length_filter_report.tsv)"
+        --report "${CLASS_DIR}/class_${CLASS}_length_filter_report.tsv"
+    COMBINED="${COMBINED_FILTERED}"
+    N_INPUT=$(grep -c '^>' "${COMBINED}")
+    log "Class ${CLASS}: after length filter: ${N_INPUT} sequences"
 
-    # Check resource requirements for alignment and tree building
-    log "Checking resource requirements for phylogenetic analysis..."
-    get_dataset_stats "$COMBINED"
-    check_resource_requirements "$COMBINED" alignment || \
-        log --level=WARN "Proceeding despite alignment resource warning"
+    # Resource pre-flight
+    get_dataset_stats "${COMBINED}"
+    check_resource_requirements "${COMBINED}" alignment || \
+        log --level=WARN "Class ${CLASS}: proceeding despite alignment resource warning"
 
-    # Bead -i61 (May 2026 v2): full filter stack — PREQUAL -> ensemble
-    # alignment (MAFFT canonical + 4 MAFFT variants + FAMSA) -> CLOAK
-    # consensus mask -> TAPER residue-outlier mask. Each stage gated.
-    # Replaces the legacy MAFFT-only + HmmCleaner step. Helper handles
-    # canonical-aligner regime selection and per-stage failure recovery.
+    # --- 2. Filter stack (PREQUAL → ensemble → CLOAK → TAPER) ---
+    # MAFFT_DASH=1 is the default (config.sh); run_alignment_ensemble.sh and
+    # run_aligner.sh both respect MAFFT_DASH env, so --dash is applied to all
+    # MAFFT calls within the ensemble automatically.
     run_alignment_filter_stack \
-        "$COMBINED" \
-        "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" \
-        "${RESULTS_DIR}/phylogenies/protein/_filter_stack_global" \
-        "all_berghia_refs" \
-        "${CPUS}" || { log "Error: filter stack failed for global alignment"; exit 1; }
-    check_alignment "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" || { log "Error: Alignment quality check failed"; exit 1; }
-    # kpic-smart-gap (not plain smart-gap): the filter stack's CLOAK step
-    # produces a super-alignment where disputed pairings are spread into
-    # singleton-variant columns. kpic-smart-gap drops both heavily-gappy
-    # columns (smart-gap) AND singleton variants (kpic), correctly cleaning
-    # up CLOAK's spread artifact while preserving parsimony-informative +
-    # constant sites for IQ-TREE branch-length estimation. See ClipKit
-    # paper recommendation for phylogenomics.
-    run_command "all_berghia_refs_clipkit" ${CLIPKIT} "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa" -m kpic-smart-gap -o "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa"
+        "${COMBINED}" \
+        "${CLASS_DIR}/class_${CLASS}_aligned.fa" \
+        "${CLASS_DIR}/_filter_stack_class_${CLASS}" \
+        "class_${CLASS}" \
+        "${CPUS}" || { log "Error: filter stack failed for class ${CLASS}"; exit 1; }
+    check_alignment "${CLASS_DIR}/class_${CLASS}_aligned.fa" || \
+        { log "Error: alignment quality check failed for class ${CLASS}"; exit 1; }
 
-    # Bead -lfy/-iqg follow-up (commit 7db2a49 fix ported into stage 04):
-    # ClipKit's kpic-smart-gap mode can leave a few sequences with ≥95 %
-    # gaps in the output. IQ-TREE 3 auto-detection then raises "Unknown
-    # sequence type" and aborts. Drop those rows defensively and feed the
-    # result to FastTree + IQ-TREE under explicit `-st AA`.
+    # --- 3. ClipKit kpic-smart-gap ---
+    # kpic-smart-gap: drops both heavily-gappy columns (smart-gap) AND
+    # singleton variants (kpic), correctly cleaning up CLOAK's super-
+    # alignment artifact while preserving parsimony-informative + constant
+    # sites for IQ-TREE branch-length estimation.
+    # shellcheck disable=SC2086
+    run_command "class_${CLASS}_clipkit" \
+        ${CLIPKIT} "${CLASS_DIR}/class_${CLASS}_aligned.fa" \
+        -m kpic-smart-gap \
+        -o "${CLASS_DIR}/class_${CLASS}_trimmed.fa"
+
+    # Drop near-all-gap rows defensively (see per-OG comment below)
     python3 "${SCRIPTS_DIR}/drop_near_all_gap_rows.py" \
-        --input "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa" \
-        --output "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa" \
-        2>>"${LOGS_DIR}/all_berghia_refs_drop_gappy.log" || true
+        --input  "${CLASS_DIR}/class_${CLASS}_trimmed.fa" \
+        --output "${CLASS_DIR}/class_${CLASS}_trimmed.fa" \
+        2>>"${LOGS_DIR}/class_${CLASS}_drop_gappy.log" || true
 
-    # FastTree seed strategy: Generate approximate ML tree first to avoid local optima
-    # This is important for large, divergent gene families like GPCRs
-    run_command "all_berghia_refs_fasttree" --stdout="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_fasttree.tre" ${FASTTREE} -seed "${FASTTREE_SEED}" -lg -gamma "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa"
+    # --- 4. FastTree seed → IQ-TREE ---
+    run_command "class_${CLASS}_fasttree" \
+        --stdout="${CLASS_DIR}/class_${CLASS}_fasttree.tre" \
+        ${FASTTREE} -seed "${FASTTREE_SEED}" -lg -gamma \
+        "${CLASS_DIR}/class_${CLASS}_trimmed.fa"
 
-    # Check resource requirements for IQ-TREE (more memory-intensive than FastTree)
-    check_resource_requirements "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa" iqtree || \
-        log --level=WARN "Proceeding despite IQ-TREE resource warning"
+    check_resource_requirements "${CLASS_DIR}/class_${CLASS}_trimmed.fa" iqtree || \
+        log --level=WARN "Class ${CLASS}: proceeding despite IQ-TREE resource warning"
 
-    # Use FastTree result as starting tree for IQ-TREE (-t option) only if
-    # FastTree actually produced one — on small/odd alignments FastTree can
-    # fail without aborting the pipeline; without the guard IQ-TREE would
-    # then try to read a missing file. -st AA is forced because alphabet
-    # auto-detection fails on alignments where the first rows are sparse.
-    iqtree_seed_arg=""
-    if [ -s "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_fasttree.tre" ]; then
-        iqtree_seed_arg="-t ${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_fasttree.tre"
+    class_iqtree_seed_arg=""
+    if [ -s "${CLASS_DIR}/class_${CLASS}_fasttree.tre" ]; then
+        class_iqtree_seed_arg="-t ${CLASS_DIR}/class_${CLASS}_fasttree.tre"
     fi
     # shellcheck disable=SC2086
-    run_command "all_berghia_refs_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa" -st AA -m "${IQTREE_MODEL_FIND}" -mset "${IQTREE_MODEL_SET}" ${IQTREE_BOOT_FLAGS} -seed "${IQTREE_SEED}" -T "${CPUS}" ${iqtree_seed_arg} --prefix "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs"
-    if [ "$USE_MRBAYES" = true ]; then
-        cat <<EOF > "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.nex"
+    run_command "class_${CLASS}_iqtree" \
+        ${IQTREE} \
+        -s "${CLASS_DIR}/class_${CLASS}_trimmed.fa" \
+        -st AA \
+        -m "${IQTREE_MODEL_FIND}" -mset "${IQTREE_MODEL_SET}" \
+        ${IQTREE_BOOT_FLAGS} \
+        -seed "${IQTREE_SEED}" \
+        -T "${CPUS}" \
+        ${class_iqtree_seed_arg} \
+        --prefix "${CLASS_DIR}/class_${CLASS}"
+
+    if [ "${USE_MRBAYES:-false}" = true ]; then
+        cat <<MBEOF > "${CLASS_DIR}/class_${CLASS}.nex"
 begin mrbayes;
 set autoclose=yes nowarn=yes;
-execute ${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa;
+execute ${CLASS_DIR}/class_${CLASS}_trimmed.fa;
 lset rates=gamma;
 mcmc ngen=1000000 samplefreq=100;
 sump;
 sumt;
 end;
-EOF
-        run_command "all_berghia_refs_mrbayes" ${MRBAYES} -i "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.nex"
+MBEOF
+        run_command "class_${CLASS}_mrbayes" ${MRBAYES} -i "${CLASS_DIR}/class_${CLASS}.nex"
     fi
+
+    touch "${CLASS_MARKER}"
+    log "=== Class ${CLASS}: done ==="
+done
+
+# --- Class A back-compat aliases ---
+# Stage 04b, 07, and 08 reference all_berghia_refs.* paths. Symlink Class A
+# outputs to those canonical names so existing consumers work without
+# modification until P4 updates them.
+if [ -f "${RESULTS_DIR}/phylogenies/protein/class_A/class_A.treefile" ]; then
+    ln -sf "class_A/class_A.treefile" \
+        "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.treefile"
+    ln -sf "class_A/class_A_aligned.fa" \
+        "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa"
+    ln -sf "class_A/class_A_trimmed.fa" \
+        "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa"
+    # Also alias canonical sibling (used by stage 04b ECL divergence)
+    if [ -f "${RESULTS_DIR}/phylogenies/protein/class_A/class_A_aligned_canonical.fa" ]; then
+        ln -sf "class_A/class_A_aligned_canonical.fa" \
+            "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned_canonical.fa"
+    fi
+    log "Class A back-compat aliases created (all_berghia_refs.* -> class_A/*)"
 fi
 
-# --- Visualizations for all_berghia_refs ---
-python3 "${SCRIPTS_DIR}/visualize_tree.py" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.treefile" "${RESULTS_DIR}/phylogenies/visualizations/all_berghia_refs"
+# --- Visualizations for Class A (back-compat visualization path) ---
+python3 "${SCRIPTS_DIR}/visualize_tree.py" \
+    "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.treefile" \
+    "${RESULTS_DIR}/phylogenies/visualizations/all_berghia_refs"
 
 # --- LSE Trees ---
 # Parse LSE levels from config (same format as 03b_lse_classification.sh)
@@ -395,41 +395,76 @@ fi
 og=$(find "${RESULTS_DIR}/orthogroups" -name "${base}.fa" -type f 2>/dev/null | head -1)
 [ -z "$og" ] || [ ! -f "$og" ] && { log "Skipping missing orthogroup: ${base}"; exit 0; }
 
+# --- Per-OG class tagging ---
+# Route each OG into its class subdirectory so outputs are co-located with
+# the per-class global tree. Reads og_class_majority.tsv when available
+# (produced by a future P3b/stage-03 step); defaults to class A with a
+# warning when the file is absent (back-compat for runs without per-OG
+# class assignment).
+OG_CLASS_TSV="${RESULTS_DIR}/classification/og_class_majority.tsv"
+if [ -f "${OG_CLASS_TSV}" ]; then
+    OG_CLASS=$(awk -F'\t' -v og="${base}" 'NR>1 && $1==og {print $2; exit}' "${OG_CLASS_TSV}")
+    [ -z "${OG_CLASS}" ] && OG_CLASS="unclassified"
+else
+    log "WARN: ${OG_CLASS_TSV} not found; routing ${base} to class_A (back-compat)"
+    OG_CLASS="A"
+fi
+OG_OUT_DIR="${RESULTS_DIR}/phylogenies/protein/class_${OG_CLASS}/${base}"
+mkdir -p "${OG_OUT_DIR}"
+
 if [ ! -f "${RESULTS_DIR}/step_completed_${base}_iqtree.txt" ]; then
     # Bead -i61 (May 2026 v2): full filter stack per OG.
+    # MAFFT_DASH=1 is inherited from the environment (config.sh default);
+    # run_alignment_ensemble.sh and run_aligner.sh apply --dash automatically.
     run_alignment_filter_stack \
         "$og" \
-        "${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" \
-        "${RESULTS_DIR}/phylogenies/protein/_filter_stack_${base}" \
+        "${OG_OUT_DIR}/${base}_aligned.fa" \
+        "${OG_OUT_DIR}/_filter_stack_${base}" \
         "${base}" \
         "${CPUS}" || { log "Error: filter stack failed for ${base}"; exit 1; }
-    check_alignment "${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" || { log "Error: Alignment quality check failed for ${base}"; exit 1; }
+    check_alignment "${OG_OUT_DIR}/${base}_aligned.fa" || { log "Error: Alignment quality check failed for ${base}"; exit 1; }
     # ClipKit kpic-smart-gap (consistent with global+LSE paths; correctly
     # handles CLOAK super-alignment).
-    run_command "${base}_clipkit" ${CLIPKIT} "${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa" -m kpic-smart-gap -o "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa"
+    # shellcheck disable=SC2086
+    run_command "${base}_clipkit" \
+        ${CLIPKIT} "${OG_OUT_DIR}/${base}_aligned.fa" \
+        -m kpic-smart-gap \
+        -o "${OG_OUT_DIR}/${base}_trimmed.fa"
 
     # Drop near-all-gap rows defensively (see comment in the global path).
     python3 "${SCRIPTS_DIR}/drop_near_all_gap_rows.py" \
-        --input "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa" \
-        --output "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa" \
+        --input  "${OG_OUT_DIR}/${base}_trimmed.fa" \
+        --output "${OG_OUT_DIR}/${base}_trimmed.fa" \
         2>>"${LOGS_DIR}/${base}_drop_gappy.log" || true
 
     # FastTree seed strategy for orthogroup trees
-    run_command "${base}_fasttree" --stdout="${RESULTS_DIR}/phylogenies/protein/${base}_fasttree.tre" ${FASTTREE} -seed "${FASTTREE_SEED}" -lg -gamma "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa"
+    run_command "${base}_fasttree" \
+        --stdout="${OG_OUT_DIR}/${base}_fasttree.tre" \
+        ${FASTTREE} -seed "${FASTTREE_SEED}" -lg -gamma \
+        "${OG_OUT_DIR}/${base}_trimmed.fa"
     # Guard the FastTree seed file (see global path comment) and force -st AA.
     og_iqtree_seed_arg=""
-    if [ -s "${RESULTS_DIR}/phylogenies/protein/${base}_fasttree.tre" ]; then
-        og_iqtree_seed_arg="-t ${RESULTS_DIR}/phylogenies/protein/${base}_fasttree.tre"
+    if [ -s "${OG_OUT_DIR}/${base}_fasttree.tre" ]; then
+        og_iqtree_seed_arg="-t ${OG_OUT_DIR}/${base}_fasttree.tre"
     fi
     # shellcheck disable=SC2086
-    run_command "${base}_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa" -st AA -m "${IQTREE_MODEL_FIND}" -mset "${IQTREE_MODEL_SET}" ${IQTREE_BOOT_FLAGS} -seed "${IQTREE_SEED}" -T "${CPUS}" ${og_iqtree_seed_arg} --prefix "${RESULTS_DIR}/phylogenies/protein/${base}"
+    run_command "${base}_iqtree" \
+        ${IQTREE} \
+        -s "${OG_OUT_DIR}/${base}_trimmed.fa" \
+        -st AA \
+        -m "${IQTREE_MODEL_FIND}" -mset "${IQTREE_MODEL_SET}" \
+        ${IQTREE_BOOT_FLAGS} \
+        -seed "${IQTREE_SEED}" \
+        -T "${CPUS}" \
+        ${og_iqtree_seed_arg} \
+        --prefix "${OG_OUT_DIR}/${base}"
 
     # Bead -iof: TreeShrink rogue-taxon cleaning. Replaces the tree in place
     # and leaves a rollback copy at <tree>.original.treefile.
-    if [ "${RUN_TREESHRINK:-1}" = "1" ] && [ -f "${RESULTS_DIR}/phylogenies/protein/${base}.treefile" ]; then
+    if [ "${RUN_TREESHRINK:-1}" = "1" ] && [ -f "${OG_OUT_DIR}/${base}.treefile" ]; then
         bash "${SCRIPTS_DIR}/run_treeshrink.sh" \
-            --single-tree="${RESULTS_DIR}/phylogenies/protein/${base}.treefile" \
-            --output-dir="${RESULTS_DIR}/phylogenies/protein/treeshrink/${base}" \
+            --single-tree="${OG_OUT_DIR}/${base}.treefile" \
+            --output-dir="${OG_OUT_DIR}/treeshrink" \
             --quantile="${TREESHRINK_QUANTILE:-0.05}" \
             2>> "${LOGS_DIR}/treeshrink_${base}.err" \
             || log --level=WARN "TreeShrink failed for ${base} (kept original tree)"
@@ -442,13 +477,14 @@ if [ ! -f "${RESULTS_DIR}/step_completed_${base}_iqtree.txt" ]; then
     [ -n "$SLURM_ARRAY_TASK_ID" ] && create_array_checkpoint "04_phylo" "$SLURM_ARRAY_TASK_ID"
 fi
 
-python3 "${SCRIPTS_DIR}/visualize_tree.py" "${RESULTS_DIR}/phylogenies/protein/${base}.treefile" "${RESULTS_DIR}/phylogenies/visualizations/${base}"
+python3 "${SCRIPTS_DIR}/visualize_tree.py" \
+    "${OG_OUT_DIR}/${base}.treefile" \
+    "${RESULTS_DIR}/phylogenies/visualizations/${base}"
 
-log "Phylogenetic analysis completed for ${base}."
+log "Phylogenetic analysis completed for ${base} (class ${OG_CLASS})."
 
-# Create overall completion flag when main tree is built (checked by downstream steps)
-# Note: This flag is created even if not all array tasks are complete, since downstream
-# steps only require the main all_berghia_refs tree
+# Create overall completion flag when main Class A tree is built (checked by
+# downstream steps via the back-compat all_berghia_refs.treefile symlink).
 if [ -f "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.treefile" ]; then
     touch "${RESULTS_DIR}/step_completed_04.txt"
 fi
