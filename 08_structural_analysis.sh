@@ -45,7 +45,7 @@ else
     log "Warning: Ranked candidates not found, using diverse selection"
     # Fallback: use diverse selection method
     run_command "select_diverse" python3 "${SCRIPTS_DIR}/select_diverse_candidates.py" \
-        "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.treefile" \
+        "${RESULTS_DIR}/phylogenies/protein/class_A/class_A.treefile" \
         "${RESULTS_DIR}/ranking/ranked_candidates_sorted.csv" \
         "${NUM_STRUCTURAL_CANDIDATES}" \
         "${RESULTS_DIR}/structural_analysis/candidates_for_alphafold.txt"
@@ -193,7 +193,7 @@ fi
 run_command "foldtree" ${FOLDTREE} --input_dir "${RESULTS_DIR}/structural_analysis/all_pdb" --output "${RESULTS_DIR}/structural_analysis/foldtree.tre" --method "${FOLDTREE_METHOD}"
 
 # --- Compare structural and sequence trees ---
-python3 "${SCRIPTS_DIR}/plot_struct_vs_seq.py" "${RESULTS_DIR}/structural_analysis/foldtree.tre" "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.treefile" "${RESULTS_DIR}/structural_analysis/struct_vs_seq_plot"
+python3 "${SCRIPTS_DIR}/plot_struct_vs_seq.py" "${RESULTS_DIR}/structural_analysis/foldtree.tre" "${RESULTS_DIR}/phylogenies/protein/class_A/class_A.treefile" "${RESULTS_DIR}/structural_analysis/struct_vs_seq_plot"
 
 touch "${RESULTS_DIR}/step_completed_foldtree.txt"
 log "Structural analysis completed."

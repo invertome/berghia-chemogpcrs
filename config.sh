@@ -360,7 +360,7 @@ export BERGHIA_CLASS_TSV="${BERGHIA_CLASS_TSV:-${RESULTS_DIR}/p5_phase1a_validat
 # Directory containing the tree file (override for versioned runs, e.g., protein/v2)
 export PHYLO_DIR="${RESULTS_DIR}/phylogenies/protein"
 # Tree filename (override if different from default IQ-TREE output)
-export PHYLO_TREE_FILENAME="all_berghia_refs.treefile"
+export PHYLO_TREE_FILENAME="class_A/class_A.treefile"
 
 # --- Synteny Backend (Bead -e59) ---
 # `jcvi`     = JCVI MCscan (Tang et al. 2024 iMeta 3:e211) — preferred default.

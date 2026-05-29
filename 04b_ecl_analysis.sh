@@ -5,7 +5,7 @@
 # suggests ligand-binding site diversification, a hallmark of chemoreceptor evolution.
 #
 # Inputs:
-#   - Canonical MAFFT alignment (all_berghia_refs_aligned_canonical.fa) —
+#   - Canonical MAFFT alignment (class_A_aligned_canonical.fa) —
 #     un-cleaned, retains variable ECL columns. Stage 04's filter stack
 #     (PREQUAL+CLOAK+TAPER) would mask exactly the alignment-uncertain ECL
 #     positions we want to study here, so this analysis must read the
@@ -43,8 +43,8 @@ log "=== Step 04b: ECL Divergence Analysis ==="
 # Step 04 completion (we need the alignment).
 # Prefer the canonical sibling (un-cleaned MAFFT alignment, ECL columns
 # preserved); fall back to the filter-stacked output for legacy runs.
-CANONICAL="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned_canonical.fa"
-FILTERED="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa"
+CANONICAL="${RESULTS_DIR}/phylogenies/protein/class_A/class_A_aligned_canonical.fa"
+FILTERED="${RESULTS_DIR}/phylogenies/protein/class_A/class_A_aligned.fa"
 if [ -s "$CANONICAL" ]; then
     ALIGNMENT="$CANONICAL"
     log "Using canonical (un-CLOAKed) alignment for ECL analysis: $(basename "$ALIGNMENT")"

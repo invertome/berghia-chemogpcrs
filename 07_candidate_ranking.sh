@@ -106,7 +106,7 @@ run_command "rank_candidates" python3 "${SCRIPTS_DIR}/rank_candidates.py" \
 # paralog_min_identity, hcr_probe_friendly). Augments the ranked CSV in place.
 HCR_AUG_INPUT="${RESULTS_DIR}/ranking/ranked_candidates_sorted.csv"
 if [ -f "$HCR_AUG_INPUT" ]; then
-    HCR_ALIGNMENT="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_trimmed.fa"
+    HCR_ALIGNMENT="${RESULTS_DIR}/phylogenies/protein/class_A/class_A_trimmed.fa"
     [ -f "$HCR_ALIGNMENT" ] || HCR_ALIGNMENT=""
     HCR_CDS="${GENOME_CDS:-}"
     [ -f "$HCR_CDS" ] || HCR_CDS=""

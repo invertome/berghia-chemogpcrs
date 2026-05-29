@@ -175,7 +175,7 @@ if ref_cat_path:
         print(f"Warning: Could not load reference categories: {e}", file=sys.stderr)
 
 # --- Load Phylogenetic Tree ---
-tree_filename = os.environ.get("PHYLO_TREE_FILENAME", "all_berghia_refs.treefile")
+tree_filename = os.environ.get("PHYLO_TREE_FILENAME", "class_A/class_A.treefile")
 tree_file = f"{phylo_dir}/{tree_filename}"
 t = None
 ref_ids = []
