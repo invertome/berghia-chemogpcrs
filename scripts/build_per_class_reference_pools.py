@@ -80,9 +80,14 @@ DEFAULT_MUST_INCLUDE_TAXIDS: frozenset[int] = frozenset({
 
 BERGHIA_TAXID_DEFAULT = 1287507
 
-# Default per-class size caps.
+# Default total budget per class: (Berghia count + reference count) per class
+DEFAULT_TOTAL_BUDGET_PER_CLASS = 3000
+
+# Legacy default per-class size caps (deprecated; kept for back-compat only).
 # Class A is lower because Berghia contributes ~800 Class A candidates.
 # Class B/C/F have no Berghia tax, so they get the full 2900-slot budget.
+# Note: these are ONLY used if --max-class-A/B/C/F are explicitly passed,
+# which triggers a deprecation warning.
 DEFAULT_MAX_CLASS_A = 2000
 DEFAULT_MAX_CLASS_B = 2900
 DEFAULT_MAX_CLASS_C = 2900
@@ -446,6 +451,7 @@ def build_all_pools(
     out_dir: str,
     max_per_class: int = 2000,
     max_class_caps: Optional[dict[str, int]] = None,
+    total_budget_per_class: int = DEFAULT_TOTAL_BUDGET_PER_CLASS,
     cluster_identity: float = 0.7,
     cdhit_path: str = "cd-hit",
     threads: int = 4,
@@ -461,9 +467,11 @@ def build_all_pools(
         scan_fasta_glob: glob pattern matching per-species scan FASTA files.
         class_tsv: path to P1 classifier output TSV.
         out_dir: directory for output files.
-        max_per_class: fallback per-class sequence cap (default 2000).
-        max_class_caps: per-class overrides, e.g. {"A": 2000, "B": 2900}.
-            Keys not present fall back to max_per_class.
+        max_per_class: (deprecated) fallback per-class sequence cap. Use total_budget_per_class.
+        max_class_caps: (deprecated) per-class overrides, e.g. {"A": 2000, "B": 2900}.
+            If provided, these override total_budget_per_class and emit a deprecation warning.
+        total_budget_per_class: per-class total budget (refs + Berghia count). Default 3000.
+            Per-class ref cap is computed as: total_budget_per_class - count_of_berghia_in_class.
         cluster_identity: CD-HIT identity threshold (default 0.7).
         cdhit_path: path to cd-hit binary.
         threads: threads for CD-HIT.
@@ -500,10 +508,14 @@ def build_all_pools(
 
     # --- 2. Load Berghia candidates (optional) ----------------------------
     berghia_per_class: dict[str, list[SeqRecord]] = {cls: [] for cls in GPCR_CLASSES}
+    n_berghia_per_class: dict[str, int] = {cls: 0 for cls in GPCR_CLASSES}
     if berghia_fasta and berghia_class_tsv:
         berghia_per_class = load_berghia_candidates(
             berghia_fasta, berghia_class_tsv, berghia_taxid
         )
+        # Count Berghia seqs per class for dynamic cap computation
+        for cls in GPCR_CLASSES:
+            n_berghia_per_class[cls] = len(berghia_per_class[cls])
     elif berghia_fasta:
         print(
             "  WARNING: --berghia-fasta provided but --berghia-class-tsv missing; "
@@ -552,16 +564,52 @@ def build_all_pools(
             file=sys.stderr,
         )
 
-    # --- 4. CD-HIT dedup per class + build pool ---------------------------
-    report: dict = {}
+    # --- 4. Compute dynamic per-class caps + CD-HIT dedup + build pool -----
+    # Emit deprecation warning if max_class_caps was explicitly provided
+    if max_class_caps:
+        print(
+            "  WARNING: --max-class-A/B/C/F are deprecated; use --total-budget-per-class instead. "
+            "Overriding computed caps with explicit values.",
+            file=sys.stderr,
+        )
+        # Fill in missing classes from max_class_caps with defaults
+        class_caps_computed: dict[str, int] = {}
+        for cls in GPCR_CLASSES:
+            if cls in max_class_caps:
+                class_caps_computed[cls] = max_class_caps[cls]
+            else:
+                # Fill missing classes with the default for that class
+                class_caps_computed[cls] = {
+                    "A": DEFAULT_MAX_CLASS_A,
+                    "B": DEFAULT_MAX_CLASS_B,
+                    "C": DEFAULT_MAX_CLASS_C,
+                    "F": DEFAULT_MAX_CLASS_F,
+                }[cls]
+    else:
+        # Dynamic computation: max_refs(class) = total_budget - berghia_count(class)
+        class_caps_computed = {
+            cls: max(0, total_budget_per_class - n_berghia_per_class[cls])
+            for cls in GPCR_CLASSES
+        }
+        print(
+            f"  [P2] Computing per-class ref caps from total_budget={total_budget_per_class}, "
+            f"berghia_counts={n_berghia_per_class}: {class_caps_computed}",
+            file=sys.stderr,
+        )
+
+    report: dict = {
+        "total_budget_per_class": total_budget_per_class,
+        "n_berghia_per_class": n_berghia_per_class,
+    }
     lineage_fn = get_lineage  # can be replaced by tests via patch
 
     for cls in GPCR_CLASSES:
         candidates = per_class[cls]
         n_total = len(candidates)
-        cap = class_caps[cls]
+        cap = class_caps_computed[cls]
         print(
-            f"  Class {cls}: {n_total} candidates before CD-HIT (cap={cap})",
+            f"  Class {cls}: {n_total} candidates before CD-HIT (ref_cap={cap}, "
+            f"total_budget={total_budget_per_class}, berghia={n_berghia_per_class[cls]})",
             file=sys.stderr,
         )
 
@@ -587,6 +635,9 @@ def build_all_pools(
         )
         stats["n_total_candidates"] = n_total
         stats["n_after_cdhit"] = n_after
+        # Add budget info to the per-class stats
+        stats["n_refs_target"] = cap
+        stats["total_budget_for_class"] = total_budget_per_class
 
         # Write FASTA
         out_fa = out_path / f"refs_class_{cls}.fa"
@@ -597,7 +648,7 @@ def build_all_pools(
         report[f"class_{cls}"] = stats
         print(
             f"  Class {cls}: wrote {stats['n_output']} sequences to {out_fa} "
-            f"({stats['n_berghia_included']} Berghia)",
+            f"({stats['n_berghia_included']} Berghia, {cap} refs targeted)",
             file=sys.stderr,
         )
 
@@ -666,7 +717,18 @@ def build_args_parser() -> argparse.ArgumentParser:
         type=int,
         default=2000,
         metavar="N",
-        help="Maximum sequences per class FASTA (default: 2000)",
+        help="(deprecated) Maximum sequences per class FASTA. Use --total-budget-per-class.",
+    )
+    parser.add_argument(
+        "--total-budget-per-class",
+        type=int,
+        default=int(os.environ.get("TOTAL_BUDGET_PER_CLASS", str(DEFAULT_TOTAL_BUDGET_PER_CLASS))),
+        metavar="N",
+        help=(
+            "Total budget per class (refs + Berghia count). "
+            "Per-class ref cap = total_budget - berghia_count(class). "
+            f"(default: {DEFAULT_TOTAL_BUDGET_PER_CLASS}; env: TOTAL_BUDGET_PER_CLASS)"
+        ),
     )
     parser.add_argument(
         "--cluster-identity",
@@ -723,30 +785,30 @@ def build_args_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-class-A",
         type=int,
-        default=DEFAULT_MAX_CLASS_A,
+        default=None,
         metavar="N",
-        help=f"Max refs for Class A pool (default: {DEFAULT_MAX_CLASS_A}; lower to account for Berghia tax)",
+        help="(deprecated) Max refs for Class A pool. Use --total-budget-per-class.",
     )
     parser.add_argument(
         "--max-class-B",
         type=int,
-        default=DEFAULT_MAX_CLASS_B,
+        default=None,
         metavar="N",
-        help=f"Max refs for Class B pool (default: {DEFAULT_MAX_CLASS_B})",
+        help="(deprecated) Max refs for Class B pool. Use --total-budget-per-class.",
     )
     parser.add_argument(
         "--max-class-C",
         type=int,
-        default=DEFAULT_MAX_CLASS_C,
+        default=None,
         metavar="N",
-        help=f"Max refs for Class C pool (default: {DEFAULT_MAX_CLASS_C})",
+        help="(deprecated) Max refs for Class C pool. Use --total-budget-per-class.",
     )
     parser.add_argument(
         "--max-class-F",
         type=int,
-        default=DEFAULT_MAX_CLASS_F,
+        default=None,
         metavar="N",
-        help=f"Max refs for Class F pool (default: {DEFAULT_MAX_CLASS_F})",
+        help="(deprecated) Max refs for Class F pool. Use --total-budget-per-class.",
     )
     parser.add_argument(
         "--force",
@@ -772,13 +834,15 @@ def main(argv=None) -> None:
     else:
         must_include = DEFAULT_MUST_INCLUDE_TAXIDS
 
-    # Build per-class cap overrides from CLI
-    max_class_caps: dict[str, int] = {
-        "A": args.max_class_A,
-        "B": args.max_class_B,
-        "C": args.max_class_C,
-        "F": args.max_class_F,
-    }
+    # Build per-class cap overrides from CLI (deprecated; emit warning if used)
+    max_class_caps: Optional[dict[str, int]] = None
+    if any(x is not None for x in [args.max_class_A, args.max_class_B, args.max_class_C, args.max_class_F]):
+        max_class_caps = {
+            "A": args.max_class_A or DEFAULT_MAX_CLASS_A,
+            "B": args.max_class_B or DEFAULT_MAX_CLASS_B,
+            "C": args.max_class_C or DEFAULT_MAX_CLASS_C,
+            "F": args.max_class_F or DEFAULT_MAX_CLASS_F,
+        }
 
     build_all_pools(
         scan_fasta_glob=args.scan_fasta_glob,
@@ -786,6 +850,7 @@ def main(argv=None) -> None:
         out_dir=args.out_dir,
         max_per_class=args.max_per_class,
         max_class_caps=max_class_caps,
+        total_budget_per_class=args.total_budget_per_class,
         cluster_identity=args.cluster_identity,
         cdhit_path=args.cdhit_path,
         threads=args.threads,

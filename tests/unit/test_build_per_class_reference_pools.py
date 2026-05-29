@@ -158,6 +158,7 @@ def test_berghia_scan_seqs_routed_normally(tmp_path):
                 class_tsv=str(class_tsv),
                 out_dir=str(out_dir),
                 max_per_class=2000,
+                total_budget_per_class=3000,
                 cluster_identity=0.7,
                 cdhit_path="cd-hit",
                 threads=1,
@@ -205,6 +206,7 @@ def test_must_include_always_retained(tmp_path):
                 class_tsv=str(class_tsv),
                 out_dir=str(out_dir),
                 max_per_class=15,
+                total_budget_per_class=15,
                 cluster_identity=0.7,
                 cdhit_path="cd-hit",
                 threads=1,
@@ -248,6 +250,7 @@ def test_max_phylo_refs_cap(tmp_path):
                 class_tsv=str(class_tsv),
                 out_dir=str(out_dir),
                 max_per_class=cap,
+                total_budget_per_class=cap,
                 cluster_identity=0.7,
                 cdhit_path="cd-hit",
                 threads=1,
@@ -290,6 +293,7 @@ def test_bcf_pools_independent(tmp_path):
                 class_tsv=str(class_tsv),
                 out_dir=str(out_dir),
                 max_per_class=2000,
+                total_budget_per_class=3000,
                 cluster_identity=0.7,
                 cdhit_path="cd-hit",
                 threads=1,
@@ -336,6 +340,7 @@ def test_unclassified_log(tmp_path):
                 class_tsv=str(class_tsv),
                 out_dir=str(out_dir),
                 max_per_class=2000,
+                total_budget_per_class=3000,
                 cluster_identity=0.7,
                 cdhit_path="cd-hit",
                 threads=1,
@@ -377,6 +382,7 @@ def test_json_report_emitted(tmp_path):
                 class_tsv=str(class_tsv),
                 out_dir=str(out_dir),
                 max_per_class=2000,
+                total_budget_per_class=3000,
                 cluster_identity=0.7,
                 cdhit_path="cd-hit",
                 threads=1,
@@ -389,6 +395,11 @@ def test_json_report_emitted(tmp_path):
     assert report_path.exists(), "pool_build_report.json must be written"
     report = json.loads(report_path.read_text())
 
+    # Check top-level budget fields
+    assert "total_budget_per_class" in report
+    assert report["total_budget_per_class"] == 3000
+    assert "n_berghia_per_class" in report
+
     for cls in ("class_A", "class_B", "class_C", "class_F"):
         assert cls in report, f"{cls} missing from report"
         entry = report[cls]
@@ -400,6 +411,9 @@ def test_json_report_emitted(tmp_path):
         assert "species_contributing" in entry
         assert "must_include_taxids_with_hits" in entry
         assert "must_include_taxids_missing" in entry
+        # New budget fields
+        assert "n_refs_target" in entry
+        assert "total_budget_for_class" in entry
 
     assert "unclassified" in report
     assert "berghia_included" in report
@@ -462,6 +476,7 @@ def test_idempotent_skip(tmp_path):
             class_tsv=str(dummy_tsv),
             out_dir=str(out_dir),
             max_per_class=2000,
+            total_budget_per_class=3000,
             cluster_identity=0.7,
             cdhit_path="cd-hit",
             threads=1,
@@ -523,6 +538,7 @@ def test_small_pool_passthrough(tmp_path):
                 class_tsv=str(class_tsv),
                 out_dir=str(out_dir),
                 max_per_class=2000,
+                total_budget_per_class=3000,
                 cluster_identity=0.7,
                 cdhit_path="cd-hit",
                 threads=1,
@@ -569,6 +585,7 @@ def test_berghia_class_a_included_as_must_include(tmp_path):
                 class_tsv=str(scan_class_tsv),
                 out_dir=str(out_dir),
                 max_per_class=2000,
+                total_budget_per_class=3000,
                 cluster_identity=0.7,
                 cdhit_path="cd-hit",
                 threads=1,
@@ -616,6 +633,7 @@ def test_berghia_class_b_routed_to_class_b_pool(tmp_path):
                 class_tsv=str(scan_class_tsv),
                 out_dir=str(out_dir),
                 max_per_class=2000,
+                total_budget_per_class=3000,
                 cluster_identity=0.7,
                 cdhit_path="cd-hit",
                 threads=1,
@@ -665,7 +683,8 @@ def test_per_class_cap_class_a_vs_bcf_differs(tmp_path):
                 class_tsv=str(class_tsv),
                 out_dir=str(out_dir),
                 max_per_class=2000,
-                max_class_caps={"A": cap_a, "B": cap_b},
+                max_class_caps={"A": cap_a, "B": cap_b},  # explicit override
+                total_budget_per_class=3000,  # still passed but ignored when max_class_caps is set
                 cluster_identity=0.7,
                 cdhit_path="cd-hit",
                 threads=1,
@@ -706,6 +725,7 @@ def test_no_berghia_fasta_falls_back_gracefully(tmp_path):
                 class_tsv=str(class_tsv),
                 out_dir=str(out_dir),
                 max_per_class=2000,
+                total_budget_per_class=3000,
                 cluster_identity=0.7,
                 cdhit_path="cd-hit",
                 threads=1,
@@ -725,3 +745,141 @@ def test_no_berghia_fasta_falls_back_gracefully(tmp_path):
     assert report["berghia_included"]["n_total"] == 0
     for cls in ("A", "B", "C", "F"):
         assert report[f"class_{cls}"]["n_berghia_included"] == 0
+    # Report should show budget was 3000, berghia count was 0 for each class
+    assert report["total_budget_per_class"] == 3000
+    for cls in ("A", "B", "C", "F"):
+        assert report["n_berghia_per_class"][cls] == 0
+
+
+# ---------------------------------------------------------------------------
+# 19. Dynamic per-class max computed from total_budget - berghia_count
+# ---------------------------------------------------------------------------
+
+def test_max_refs_computed_from_total_budget_minus_berghia(tmp_path):
+    """Per-class ref cap is computed as total_budget - berghia_count(class)."""
+    # Setup: Aplysia with 10 Class A seqs, Drosophila with 5 Class A seqs
+    aplysia_fa = tmp_path / "6500_Aplysia_californica.chemo_candidates.fa"
+    drosophila_fa = tmp_path / "7227_Drosophila_melanogaster.chemo_candidates.fa"
+
+    aplysia_seqs = [(f"apl_A{i}", "MSTL" * 30) for i in range(10)]
+    drosophila_seqs = [(f"dm_A{i}", "MKGT" * 30) for i in range(5)]
+
+    _make_fasta(aplysia_fa, aplysia_seqs)
+    _make_fasta(drosophila_fa, drosophila_seqs)
+
+    scan_class_tsv = tmp_path / "scan_classes.tsv"
+    _make_class_tsv(
+        scan_class_tsv,
+        [(sid, "A") for sid, _ in aplysia_seqs + drosophila_seqs]
+    )
+
+    # Berghia with 5 Class A seqs, 2 Class B seqs
+    berghia_fa = tmp_path / "berghia_candidates.fa"
+    berghia_a_seqs = [(f"ber_A{i}", "MKVL" * 30) for i in range(5)]
+    berghia_b_seqs = [(f"ber_B{i}", "MSFT" * 30) for i in range(2)]
+    _make_fasta(berghia_fa, berghia_a_seqs + berghia_b_seqs)
+
+    berghia_class_tsv = tmp_path / "berghia_classes.tsv"
+    _make_class_tsv(
+        berghia_class_tsv,
+        [(sid, "A") for sid, _ in berghia_a_seqs] +
+        [(sid, "B") for sid, _ in berghia_b_seqs]
+    )
+
+    out_dir = tmp_path / "pools"
+    out_dir.mkdir()
+
+    total_budget = 3000
+    # Expected: Class A refs = 3000 - 5 = 2995, Class B refs = 3000 - 2 = 2998
+
+    with patch.object(bpcp, "cdhit_dedup", side_effect=lambda records, **kw: records):
+        with patch.object(bpcp, "get_lineage", side_effect=mock_get_lineage):
+            bpcp.build_all_pools(
+                scan_fasta_glob=str(tmp_path / "*.chemo_candidates.fa"),
+                class_tsv=str(scan_class_tsv),
+                out_dir=str(out_dir),
+                max_per_class=2000,  # should be ignored
+                total_budget_per_class=total_budget,
+                cluster_identity=0.7,
+                cdhit_path="cd-hit",
+                threads=1,
+                must_include_taxids=frozenset(),
+                berghia_taxid=1287507,
+                berghia_fasta=str(berghia_fa),
+                berghia_class_tsv=str(berghia_class_tsv),
+                force=True,
+            )
+
+    report = json.loads((out_dir / "pool_build_report.json").read_text())
+
+    # Verify computed caps are in the report
+    assert report["total_budget_per_class"] == total_budget
+    assert report["n_berghia_per_class"]["A"] == 5
+    assert report["n_berghia_per_class"]["B"] == 2
+    assert report["n_berghia_per_class"]["C"] == 0
+    assert report["n_berghia_per_class"]["F"] == 0
+
+    # Verify the per-class ref targets are correctly computed
+    assert report["class_A"]["n_refs_target"] == 2995, \
+        f"Class A ref target should be 3000 - 5 = 2995, got {report['class_A']['n_refs_target']}"
+    assert report["class_B"]["n_refs_target"] == 2998, \
+        f"Class B ref target should be 3000 - 2 = 2998, got {report['class_B']['n_refs_target']}"
+    assert report["class_C"]["n_refs_target"] == 3000, \
+        f"Class C ref target should be 3000 - 0 = 3000, got {report['class_C']['n_refs_target']}"
+    assert report["class_F"]["n_refs_target"] == 3000, \
+        f"Class F ref target should be 3000 - 0 = 3000, got {report['class_F']['n_refs_target']}"
+
+
+# ---------------------------------------------------------------------------
+# 20. No berghia means full budget available for refs
+# ---------------------------------------------------------------------------
+
+def test_no_berghia_means_full_budget(tmp_path):
+    """When no --berghia-fasta is provided, each class gets the full budget."""
+    fa_path = tmp_path / "7227_Drosophila_melanogaster.chemo_candidates.fa"
+    seqs_a = [(f"dm_A{i}", "MKLF" * 30) for i in range(3)]
+    seqs_b = [(f"dm_B{i}", "MKQP" * 30) for i in range(2)]
+    _make_fasta(fa_path, seqs_a + seqs_b)
+
+    class_tsv = tmp_path / "classes.tsv"
+    _make_class_tsv(
+        class_tsv,
+        [(sid, "A") for sid, _ in seqs_a] +
+        [(sid, "B") for sid, _ in seqs_b]
+    )
+
+    out_dir = tmp_path / "pools"
+    out_dir.mkdir()
+
+    total_budget = 3000
+
+    with patch.object(bpcp, "cdhit_dedup", side_effect=lambda records, **kw: records):
+        with patch.object(bpcp, "get_lineage", side_effect=mock_get_lineage):
+            bpcp.build_all_pools(
+                scan_fasta_glob=str(tmp_path / "*.chemo_candidates.fa"),
+                class_tsv=str(class_tsv),
+                out_dir=str(out_dir),
+                max_per_class=2000,
+                total_budget_per_class=total_budget,
+                cluster_identity=0.7,
+                cdhit_path="cd-hit",
+                threads=1,
+                must_include_taxids=frozenset(),
+                berghia_taxid=1287507,
+                berghia_fasta=None,        # NOT provided
+                berghia_class_tsv=None,    # NOT provided
+                force=True,
+            )
+
+    report = json.loads((out_dir / "pool_build_report.json").read_text())
+
+    # When no Berghia is provided, each class should show berghia_count = 0
+    assert report["n_berghia_per_class"]["A"] == 0
+    assert report["n_berghia_per_class"]["B"] == 0
+    assert report["n_berghia_per_class"]["C"] == 0
+    assert report["n_berghia_per_class"]["F"] == 0
+
+    # All classes should have ref_target = total_budget (since berghia_count = 0)
+    for cls in ("A", "B", "C", "F"):
+        assert report[f"class_{cls}"]["n_refs_target"] == total_budget, \
+            f"Class {cls} ref target should be {total_budget} when no Berghia, got {report[f'class_{cls}']['n_refs_target']}"
