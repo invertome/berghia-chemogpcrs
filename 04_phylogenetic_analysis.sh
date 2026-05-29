@@ -404,7 +404,10 @@ og=$(find "${RESULTS_DIR}/orthogroups" -name "${base}.fa" -type f 2>/dev/null | 
 OG_CLASS_TSV="${RESULTS_DIR}/classification/og_class_majority.tsv"
 if [ -f "${OG_CLASS_TSV}" ]; then
     OG_CLASS=$(awk -F'\t' -v og="${base}" 'NR>1 && $1==og {print $2; exit}' "${OG_CLASS_TSV}")
-    [ -z "${OG_CLASS}" ] && OG_CLASS="unclassified"
+    if [ -z "${OG_CLASS}" ]; then
+        log --level=WARN "OG '${base}' not found in ${OG_CLASS_TSV}; routing to class_unclassified"
+        OG_CLASS="unclassified"
+    fi
 else
     log "WARN: ${OG_CLASS_TSV} not found; routing ${base} to class_A (back-compat)"
     OG_CLASS="A"
