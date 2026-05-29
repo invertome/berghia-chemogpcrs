@@ -134,6 +134,23 @@ class TestResolveProteomePath:
         assert "." not in stem
         assert path.suffix == ".faa"
 
+    def test_returns_absolute_path_when_proteomes_dir_relative(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Verify that relative proteomes_dir is resolved to absolute."""
+        # Change to tmp_path so relative paths are resolvable
+        monkeypatch.chdir(tmp_path)
+        proteomes_dir = Path("proteomes")
+        path = bpm.resolve_proteome_path(
+            taxid=7000,
+            binomial="Test species",
+            proteomes_dir=proteomes_dir,
+        )
+        # Result must be absolute
+        assert path.is_absolute()
+        # And must contain the expected filename
+        assert path.name == "7000_Test_species.faa"
+
 
 # ---------------------------------------------------------------------------
 # build_manifest
@@ -296,3 +313,37 @@ class TestCLIEndToEnd:
         assert rc == 0
         # Header should still be there
         assert out.read_text().startswith("taxid\t")
+
+    def test_manifest_contains_absolute_paths_when_relative_input(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Verify manifest TSV contains absolute paths even with relative --proteomes-dir."""
+        # Setup: change to tmp_path so relative paths resolve correctly
+        monkeypatch.chdir(tmp_path)
+
+        mf = tmp_path / "manifest.tsv"
+        proteomes_dir = tmp_path / "proteomes"
+        out = tmp_path / "out.tsv"
+
+        _write_manifest(mf, [
+            {"taxid": "800", "binomial": "Absolute path test", "accession": "GCA_800"},
+        ])
+        _write_fasta(proteomes_dir / "800_Absolute_path_test.faa")
+
+        # Pass proteomes_dir as a relative path
+        rc = bpm.main([
+            "--manifest", str(mf),
+            "--proteomes-dir", "proteomes",  # relative!
+            "--out", str(out),
+        ])
+        assert rc == 0
+
+        # Read the output and verify the proteome_path is absolute
+        with out.open() as f:
+            reader = csv.DictReader(f, delimiter="\t")
+            rows_list = list(reader)
+        assert len(rows_list) == 1
+        proteome_path = Path(rows_list[0]["proteome_path"])
+        assert proteome_path.is_absolute(), (
+            f"Expected absolute path in manifest, got: {proteome_path}"
+        )

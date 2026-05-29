@@ -92,9 +92,11 @@ def resolve_proteome_path(
     Uses the canonical ``<taxid>_<sanitized_binomial>.faa`` naming scheme
     that matches how Phase 1a proteomes are cached by the NCBI download
     pipeline and referenced by consolidate_proteomes_for_genome_wide_og.py.
+
+    Always returns an absolute path.
     """
     leaf = f"{taxid}_{sanitize_sample_name(binomial)}"
-    return proteomes_dir / f"{leaf}.faa"
+    return (proteomes_dir / f"{leaf}.faa").resolve()
 
 
 def build_manifest(
@@ -131,14 +133,14 @@ def write_manifest_tsv(rows: list[ManifestRow], out_path: Path) -> None:
     """Write the three-column manifest TSV to ``out_path``.
 
     Always writes a header row; body may be empty if no proteomes were
-    found.
+    found. All proteome paths are written as absolute paths.
     """
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", newline="") as fh:
         writer = csv.writer(fh, delimiter="\t")
         writer.writerow(["taxid", "binomial", "proteome_path"])
         for r in rows:
-            writer.writerow([r.taxid, r.binomial, str(r.proteome_path)])
+            writer.writerow([r.taxid, r.binomial, str(r.proteome_path.resolve())])
 
 
 # ---------------------------------------------------------------------------
