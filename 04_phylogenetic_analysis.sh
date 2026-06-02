@@ -313,6 +313,20 @@ for CLASS in ${GPCR_CLASSES:-A B C F}; do
         ${class_iqtree_seed_arg} \
         --prefix "${CLASS_DIR}/class_${CLASS}"
 
+    # --- Root the per-class tree on its swap-map outgroup (bead vo8.3) ---
+    # IQ-TREE leaves the tree unrooted; root here on the sister-class outgroup
+    # taxa (valid for a single-class tree, unlike the old combined tree which
+    # used midpoint). Falls back to midpoint if the outgroup is absent or
+    # non-monophyletic. The raw .treefile is preserved for consumers that want it.
+    if [ -f "${CLASS_DIR}/class_${CLASS}.treefile" ] && [ -s "${OUTGROUP_FA}" ]; then
+        python3 "${SCRIPTS_DIR}/root_tree_on_outgroup.py" \
+            --tree "${CLASS_DIR}/class_${CLASS}.treefile" \
+            --outgroup-ids "${OUTGROUP_FA}" \
+            --out "${CLASS_DIR}/class_${CLASS}.rooted.treefile" \
+            2>>"${LOGS_DIR}/class_${CLASS}_rooting.log" \
+            || log --level=WARN "rooting failed for class ${CLASS} (kept unrooted)"
+    fi
+
     if [ "${USE_MRBAYES:-false}" = true ]; then
         cat <<MBEOF > "${CLASS_DIR}/class_${CLASS}.nex"
 begin mrbayes;
@@ -338,6 +352,10 @@ done
 if [ -f "${RESULTS_DIR}/phylogenies/protein/class_A/class_A.treefile" ]; then
     ln -sf "class_A/class_A.treefile" \
         "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.treefile"
+    if [ -f "${RESULTS_DIR}/phylogenies/protein/class_A/class_A.rooted.treefile" ]; then
+        ln -sf "class_A/class_A.rooted.treefile" \
+            "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.rooted.treefile"
+    fi
     ln -sf "class_A/class_A_aligned.fa" \
         "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs_aligned.fa"
     ln -sf "class_A/class_A_trimmed.fa" \
@@ -351,8 +369,12 @@ if [ -f "${RESULTS_DIR}/phylogenies/protein/class_A/class_A.treefile" ]; then
 fi
 
 # --- Visualizations for Class A (back-compat visualization path) ---
+# Prefer the rooted tree (bead vo8.3) so the visualization reflects the
+# swap-map outgroup rooting; fall back to the raw IQ-TREE tree.
+CLASS_A_VIZ_TREE="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.rooted.treefile"
+[ -f "${CLASS_A_VIZ_TREE}" ] || CLASS_A_VIZ_TREE="${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.treefile"
 python3 "${SCRIPTS_DIR}/visualize_tree.py" \
-    "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.treefile" \
+    "${CLASS_A_VIZ_TREE}" \
     "${RESULTS_DIR}/phylogenies/visualizations/all_berghia_refs"
 
 # --- LSE Trees ---
