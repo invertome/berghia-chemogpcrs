@@ -24,8 +24,7 @@
 #     separate clone — out of scope for this task).
 #
 # This script makes foldseek + TMalign available inside berghia-gpcr
-# via bioconda. Mamba is the user-preferred solver on Unity per global
-# CLAUDE.md.
+# via bioconda. Mamba is the preferred solver on Unity for dev-side env ops.
 #
 # Idempotent: re-running is a no-op when both binaries are present.
 #
@@ -66,7 +65,9 @@ SOLVER=mamba
 command -v "$SOLVER" >/dev/null 2>&1 || SOLVER=conda
 
 echo "[install-struct] Installing ${need_install[*]} via $SOLVER + bioconda..."
-"$SOLVER" install -y -n "$ENV_NAME" -c bioconda -c conda-forge "${need_install[@]}"
+# --freeze-installed: never mutate already-installed packages (protects the
+# tmbed/transformers<5 pin in berghia-gpcr); a conflicting tool fails loudly.
+"$SOLVER" install -y --freeze-installed -n "$ENV_NAME" -c bioconda -c conda-forge "${need_install[@]}"
 
 # Reactivate so PATH picks up the new binaries deterministically.
 conda deactivate
