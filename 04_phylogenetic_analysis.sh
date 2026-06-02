@@ -142,6 +142,27 @@ detect_resources
 # STAGE04_PHASE=ogs (the OG array tasks rely on a prior globals job).
 if [ "${STAGE04_PHASE}" != "ogs" ]; then
 
+# --- Per-OG class table (bead vo8.2) ---
+# Derive results/classification/og_class_majority.tsv (orthogroup<TAB>class) so
+# the OG-array phase routes each orthogroup tree to its real class instead of
+# defaulting every OG to class_A. Majority GPCR class of each OG's classified
+# members (from the per-sequence classifier output). Best-effort: if inputs are
+# missing the producer writes nothing and OG routing falls back to class_A.
+ORTHOGROUPS_TSV=$(find "${RESULTS_DIR}/orthogroups" -name "Orthogroups.tsv" -path "*/Orthogroups/*" 2>/dev/null | head -1)
+CLASSIFY_DIR=$(dirname "${BERGHIA_CLASS_TSV}")
+if [ -n "${ORTHOGROUPS_TSV}" ] && [ -f "${ORTHOGROUPS_TSV}" ]; then
+    python3 "${SCRIPTS_DIR}/build_og_class_majority.py" \
+        --orthogroups "${ORTHOGROUPS_TSV}" \
+        --classes "${CLASSIFY_DIR}/candidate_classes.tsv" \
+        --classes "${BERGHIA_CLASS_TSV}" \
+        --out "${RESULTS_DIR}/classification/og_class_majority.tsv" \
+        --force \
+        2>>"${LOGS_DIR}/og_class_majority.log" \
+        || log --level=WARN "og_class_majority build failed; OG routing falls back to class_A"
+else
+    log "WARN: no Orthogroups.tsv found; per-OG class routing will use class_A default"
+fi
+
 # --- Per-class global trees (A, B, C, F) ---
 # Replaces the former single "all_berghia_refs" tree. Each class gets its own
 # combined FASTA (P2 pool refs + Berghia subset + outgroup), filter stack,
@@ -438,9 +459,9 @@ og=$(find "${RESULTS_DIR}/orthogroups" -name "${base}.fa" -type f 2>/dev/null | 
 # --- Per-OG class tagging ---
 # Route each OG into its class subdirectory so outputs are co-located with
 # the per-class global tree. Reads og_class_majority.tsv when available
-# (produced by a future P3b/stage-03 step); defaults to class A with a
-# warning when the file is absent (back-compat for runs without per-OG
-# class assignment).
+# (produced by the globals phase via build_og_class_majority.py); defaults to
+# class A with a warning when the file is absent (back-compat for runs without
+# per-OG class assignment).
 OG_CLASS_TSV="${RESULTS_DIR}/classification/og_class_majority.tsv"
 if [ -f "${OG_CLASS_TSV}" ]; then
     OG_CLASS=$(awk -F'\t' -v og="${base}" 'NR>1 && $1==og {print $2; exit}' "${OG_CLASS_TSV}")
