@@ -62,7 +62,9 @@ conda activate "${ENV_NAME}"
 echo "[foldtree] env active: $(which python)"
 
 # 3. Pipeline deps + the package itself.
-"$SOLVER" install -y -c bioconda -c conda-forge click snakemake-minimal
+# gemmi: used by scripts/run_foldtree.sh to convert AF3 mmCIF -> .pdb, since
+# fold_tree's structs2fasta.py globs structs/*.pdb only.
+"$SOLVER" install -y -c bioconda -c conda-forge click snakemake-minimal gemmi
 ( cd "${REPO_DIR}" && python -m pip install . --no-deps --no-build-isolation --no-cache-dir )
 
 # 4. Verify.

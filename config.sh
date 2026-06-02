@@ -92,7 +92,12 @@ export ALPHAFOLD3_MODEL_DIR="${ALPHAFOLD3_MODEL_DIR:-/scratch3/workspace/${USER}
 export AF3="${AF3:-af3}"  # AF3 helper CLI (Unity module: alphafold3/latest)
 export STRUCT_RENDERER="${STRUCT_RENDERER:-uv run ${SCRIPTS_DIR}/render_structure_figure.py}"  # PyMOL headless render (pymol skill)
 export APPTAINER_CACHEDIR="${APPTAINER_CACHEDIR:-${BASE_DIR}/.apptainer/cache}"
-export FOLDTREE="foldtree"
+# FOLDTREE: stage 08 calls it as `--input_dir/--output/--method`, but the real
+# DessimozLab/fold_tree CLI is `--folder/--custom-structs`. run_foldtree.sh is a
+# thin adapter (CIF->PDB, structs/ staging, metric-tree selection) that bridges
+# the two and runs foldtree in its dedicated env (FOLDTREE_ENV, default foldtree).
+export FOLDTREE="${FOLDTREE:-${SCRIPTS_DIR}/run_foldtree.sh}"
+export FOLDTREE_ENV="${FOLDTREE_ENV:-foldtree}"
 export TMALIGN="TMalign"
 export FOLDSEEK="${FOLDSEEK:-foldseek}"
 export SEQTK="seqtk"
