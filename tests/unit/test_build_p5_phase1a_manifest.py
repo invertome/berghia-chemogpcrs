@@ -233,6 +233,22 @@ class TestWriteManifestTsv:
         assert data[0]["binomial"] == "Alpha beta"
         assert data[0]["proteome_path"].endswith(".faa")
 
+    def test_output_uses_unix_line_endings(self, tmp_path: Path) -> None:
+        """Manifest must use LF, never CRLF.
+
+        The SLURM scan wrapper reads col3 via `cut -f3`; a trailing CR from
+        Python csv.writer's default '\\r\\n' terminator stays attached to the
+        path, so `[ -f "<path>\\r" ]` fails for every row (the P5 array bug).
+        """
+        out = tmp_path / "out.tsv"
+        faa = tmp_path / "proteomes" / "123_Foo_bar.faa"
+        _write_fasta(faa)
+        rows = [bpm.ManifestRow(taxid=123, binomial="Foo bar", proteome_path=faa)]
+        bpm.write_manifest_tsv(rows, out)
+
+        raw = out.read_bytes()
+        assert b"\r" not in raw, "manifest must use LF line endings, not CRLF"
+
     def test_idempotent_skip_without_force(self, tmp_path: Path) -> None:
         out = tmp_path / "out.tsv"
         out.write_text("taxid\tbinomial\tproteome_path\n999\tFoo bar\t/some/path.faa\n")

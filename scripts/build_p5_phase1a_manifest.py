@@ -137,7 +137,10 @@ def write_manifest_tsv(rows: list[ManifestRow], out_path: Path) -> None:
     """
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", newline="") as fh:
-        writer = csv.writer(fh, delimiter="\t")
+        # lineterminator="\n": csv.writer defaults to CRLF, which leaves a
+        # trailing '\r' on col3 when the SLURM scan wrapper does `cut -f3`,
+        # breaking `[ -f "<path>\r" ]` for every row.
+        writer = csv.writer(fh, delimiter="\t", lineterminator="\n")
         writer.writerow(["taxid", "binomial", "proteome_path"])
         for r in rows:
             writer.writerow([r.taxid, r.binomial, str(r.proteome_path.resolve())])
