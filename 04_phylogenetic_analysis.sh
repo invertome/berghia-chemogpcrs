@@ -150,17 +150,25 @@ if [ "${STAGE04_PHASE}" != "ogs" ]; then
 # missing the producer writes nothing and OG routing falls back to class_A.
 ORTHOGROUPS_TSV=$(find "${RESULTS_DIR}/orthogroups" -name "Orthogroups.tsv" -path "*/Orthogroups/*" 2>/dev/null | head -1)
 CLASSIFY_DIR=$(dirname "${BERGHIA_CLASS_TSV}")
-if [ -n "${ORTHOGROUPS_TSV}" ] && [ -f "${ORTHOGROUPS_TSV}" ]; then
+# Collect every per-sequence class table classify_gpcr_by_class.py writes into
+# the classify dir (class_phase1a.tsv, class_berghia.tsv, and any full-557 P6
+# equivalent) — globbed so the filename convention can't silently drift.
+OG_CLASS_ARGS=()
+shopt -s nullglob
+for _ctsv in "${CLASSIFY_DIR}"/class_*.tsv; do
+    OG_CLASS_ARGS+=( --classes "${_ctsv}" )
+done
+shopt -u nullglob
+if [ -n "${ORTHOGROUPS_TSV}" ] && [ -f "${ORTHOGROUPS_TSV}" ] && [ "${#OG_CLASS_ARGS[@]}" -gt 0 ]; then
     python3 "${SCRIPTS_DIR}/build_og_class_majority.py" \
         --orthogroups "${ORTHOGROUPS_TSV}" \
-        --classes "${CLASSIFY_DIR}/candidate_classes.tsv" \
-        --classes "${BERGHIA_CLASS_TSV}" \
+        "${OG_CLASS_ARGS[@]}" \
         --out "${RESULTS_DIR}/classification/og_class_majority.tsv" \
         --force \
         2>>"${LOGS_DIR}/og_class_majority.log" \
         || log --level=WARN "og_class_majority build failed; OG routing falls back to class_A"
 else
-    log "WARN: no Orthogroups.tsv found; per-OG class routing will use class_A default"
+    log "WARN: no Orthogroups.tsv or no class_*.tsv in ${CLASSIFY_DIR}; per-OG class routing uses class_A default"
 fi
 
 # --- Per-class global trees (A, B, C, F) ---
