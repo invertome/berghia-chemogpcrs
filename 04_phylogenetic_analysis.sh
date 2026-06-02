@@ -31,6 +31,26 @@ check_file "${RESULTS_DIR}/step_completed_lse_classification.txt"
 
 log "Starting phylogenetic analysis."
 
+# --- Phase gating (bead vo8.1) ---
+# Stage 04 builds two kinds of products:
+#   1. "globals": the per-class A/B/C/F trees + LSE-level trees — built ONCE.
+#   2. "ogs":     per-orthogroup trees — one per SLURM array task.
+# The global products are NOT array-safe: their completion markers are checked
+# then written non-atomically, so 50 array tasks starting together would all
+# see "no marker" and race to build the same class_*/ files concurrently.
+# STAGE04_PHASE selects which half runs:
+#   globals -> build globals, then exit (run as a single non-array job)
+#   ogs     -> skip globals, run this array task's OG tree only
+#   all     -> both (default; for non-array / local runs)
+# The production wrapper submits a non-array globals job, then the OG array
+# with --dependency=afterok on it.
+STAGE04_PHASE="${STAGE04_PHASE:-all}"
+case "${STAGE04_PHASE}" in
+    globals|ogs|all) ;;
+    *) log "ERROR: invalid STAGE04_PHASE='${STAGE04_PHASE}' (want globals|ogs|all)"; exit 2 ;;
+esac
+log "STAGE04_PHASE=${STAGE04_PHASE}"
+
 # Bead -m6k: Build IQ-TREE bootstrap-flag string. Use UFBoot + SH-aLRT
 # always; add --tbe (Transfer Bootstrap Expectation, Lemoine 2018) when
 # IQTREE_TBE=1 in config.sh — robust to rogue taxa, important for paralog-
@@ -116,6 +136,11 @@ check_alignment() {
 
 # --- Pre-flight resource check ---
 detect_resources
+
+# ===================== GLOBALS PHASE (globals|all) =====================
+# Per-class global trees + LSE-level trees. Built once; skipped when
+# STAGE04_PHASE=ogs (the OG array tasks rely on a prior globals job).
+if [ "${STAGE04_PHASE}" != "ogs" ]; then
 
 # --- Per-class global trees (A, B, C, F) ---
 # Replaces the former single "all_berghia_refs" tree. Each class gets its own
@@ -353,6 +378,21 @@ for level in "${!lse_taxids[@]}"; do
     fi
 done
 
+# --- End globals phase ---
+if [ "${STAGE04_PHASE}" = "globals" ]; then
+    # Signal globals done so 04b/07/08 can proceed on the Class A tree even
+    # while the OG array is still running.
+    touch "${RESULTS_DIR}/step_completed_04_globals.txt"
+    if [ -f "${RESULTS_DIR}/phylogenies/protein/all_berghia_refs.treefile" ]; then
+        touch "${RESULTS_DIR}/step_completed_04.txt"
+    fi
+    log "STAGE04_PHASE=globals complete — globals built, exiting before OG array"
+    exit 0
+fi
+
+fi  # ===================== END GLOBALS PHASE =====================
+
+# ===================== OG ARRAY PHASE (ogs|all) =====================
 # --- Orthogroup Trees ---
 # Use manifest if available, otherwise fall back to globbing
 MANIFEST_FILE="${RESULTS_DIR}/orthogroup_manifest.tsv"
