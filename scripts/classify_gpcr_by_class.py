@@ -93,8 +93,14 @@ _CLASS_HMM_PREFIXES: tuple[str, ...] = (
     "class-F",
 )
 
-# InterPro HMM download endpoint (gzip-compressed .hmm)
+# InterPro HMM download endpoints (gzip-compressed .hmm). The public /api/
+# endpoint is primary; the internal /wwwapi/ is a fallback. A restrictive
+# `Accept: application/octet-stream` header makes both return HTTP 406, and
+# pfam.xfam.org was retired (SSL failure) — see _download_pfam_hmm.
 _INTERPRO_HMM_URL = (
+    "https://www.ebi.ac.uk/interpro/api/entry/pfam/{accession}?annotation=hmm"
+)
+_INTERPRO_HMM_URL_FALLBACK = (
     "https://www.ebi.ac.uk/interpro/wwwapi/entry/pfam/{accession}?annotation=hmm"
 )
 
@@ -281,15 +287,17 @@ def _download_pfam_hmm(accession: str, out_path: str) -> None:
     Validates magic bytes before writing to prevent poison cache.
     """
     interpro_url = _INTERPRO_HMM_URL.format(accession=accession)
-    pfam_url = f"https://pfam.xfam.org/family/{accession}/hmm"
+    fallback_url = _INTERPRO_HMM_URL_FALLBACK.format(accession=accession)
 
     urls_tried = []
 
-    for attempt, url in enumerate([interpro_url, pfam_url], start=1):
+    for attempt, url in enumerate([interpro_url, fallback_url], start=1):
         try:
             print(f"[classify_gpcr_by_class] Attempt {attempt}: downloading {accession} "
                   f"from {url} ...", file=sys.stderr)
-            req = urllib.request.Request(url, headers={"Accept": "application/octet-stream"})
+            # No `Accept: application/octet-stream` — it makes EBI return HTTP 406.
+            # A browser User-Agent avoids rejection of the default urllib UA.
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
             with urllib.request.urlopen(req, timeout=60) as resp:
                 raw = resp.read()
             urls_tried.append(url)
@@ -321,7 +329,7 @@ def _download_pfam_hmm(accession: str, out_path: str) -> None:
     # Both URLs failed or returned invalid data
     raise RuntimeError(
         f"Failed to download valid HMM for {accession}. "
-        f"Tried: {interpro_url}, {pfam_url}"
+        f"Tried: {interpro_url}, {fallback_url}"
     )
 
 

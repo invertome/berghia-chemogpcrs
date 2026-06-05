@@ -251,6 +251,49 @@ def test_bootstrap_downloads_missing_pfams(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# 12b. Pfam HMM downloader uses a working endpoint (regression for HTTP 406)
+# ---------------------------------------------------------------------------
+
+def test_download_pfam_hmm_uses_working_endpoint(tmp_path, monkeypatch):
+    """Regression: `Accept: application/octet-stream` made EBI return HTTP 406,
+    and pfam.xfam.org is retired (SSL failure). The downloader must hit the
+    public interpro API with no restrictive Accept header, and never touch
+    pfam.xfam.org."""
+    valid_hmm = b"HMMER3/f [3.3]\nNAME  7tm_4\nLENG  300\n//\n"
+    gzipped = gzip.compress(valid_hmm)
+    captured = []
+
+    class FakeResp:
+        def read(self):
+            return gzipped
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        captured.append(req)
+        return FakeResp()
+
+    monkeypatch.setattr(cgc.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(cgc, "_hmmpress", lambda p: None)
+
+    out = tmp_path / "PF02949.hmm"
+    cgc._download_pfam_hmm("PF02949", str(out))
+
+    # a valid HMM was written (gzip transparently decompressed)
+    assert out.read_bytes().startswith(b"HMMER3")
+    # primary endpoint is the public interpro API, for the right accession
+    assert "ebi.ac.uk/interpro/api/" in captured[0].full_url
+    assert "PF02949" in captured[0].full_url
+    # the 406-causing Accept header is gone from every request
+    for req in captured:
+        assert req.get_header("Accept") != "application/octet-stream"
+    # the retired host is never contacted
+    assert all("pfam.xfam.org" not in r.full_url for r in captured)
+
+
+# ---------------------------------------------------------------------------
 # 13. Output TSV column order
 # ---------------------------------------------------------------------------
 
@@ -477,7 +520,8 @@ def test_pf10324_atypical_with_versioned_accession(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_download_retries_on_interpro_failure(tmp_path):
-    """_download_pfam_hmm should retry Pfam direct URL when InterPro fails."""
+    """_download_pfam_hmm should retry the /wwwapi/ fallback when the primary
+    /api/ endpoint fails."""
     accession = "PF00001"
     out_path = tmp_path / "PF00001.hmm"
 
@@ -489,11 +533,11 @@ def test_download_retries_on_interpro_failure(tmp_path):
         call_count[0] += 1
         url = req.full_url
 
-        # First call (InterPro) raises exception
-        if "interpro.ebi.ac.uk" in url:
+        # First call (public /api/) raises exception
+        if "/interpro/api/" in url:
             raise urllib.error.URLError("Connection refused")
-        # Second call (Pfam direct) succeeds
-        elif "pfam.xfam.org" in url:
+        # Second call (/wwwapi/ fallback) succeeds
+        elif "/interpro/wwwapi/" in url:
             return io.BytesIO(valid_hmm_content)
         else:
             raise ValueError(f"Unexpected URL: {url}")
@@ -503,7 +547,7 @@ def test_download_retries_on_interpro_failure(tmp_path):
             cgc._download_pfam_hmm(accession, str(out_path))
 
     # Should have tried both URLs
-    assert call_count[0] == 2, "Should attempt both InterPro and Pfam"
+    assert call_count[0] == 2, "Should attempt both /api/ and /wwwapi/"
     # File should exist and contain the valid content
     assert out_path.exists()
     assert out_path.read_bytes() == valid_hmm_content
@@ -530,8 +574,8 @@ def test_download_rejects_html_body(tmp_path):
 
             error_msg = str(exc_info.value)
             assert "Failed to download valid HMM" in error_msg
-            assert "ebi.ac.uk" in error_msg  # Contains the InterPro URL
-            assert "pfam.xfam.org" in error_msg  # Contains the Pfam fallback URL
+            assert "interpro/api" in error_msg     # primary InterPro URL
+            assert "interpro/wwwapi" in error_msg  # /wwwapi/ fallback URL
 
     # File should NOT exist
     assert not out_path.exists(), "Invalid HMM should not be written to disk"
