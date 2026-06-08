@@ -35,7 +35,6 @@ taxid	binomial	clade	source	accession	assembly_level	annotation_status	est_prote
 6550	Mytilus edulis	bivalvia	RefSeq	GCF_963676685.1	Chromosome	Full annotation	35875		
 6565	Crassostrea virginica	bivalvia	RefSeq	GCF_053477285.1	Chromosome	Full annotation	28649		
 6573	Mizuhopecten yessoensis	bivalvia	RefSeq	GCF_002113885.1	Scaffold	Full annotation	24532		
-6573	Patinopecten yessoensis	bivalvia	RefSeq	GCF_002113885.1	Scaffold	Full annotation	24532		
 6579	Pecten maximus	bivalvia	RefSeq	GCF_902652985.1	Chromosome	Full annotation	26152		
 6596	Mercenaria mercenaria	bivalvia	RefSeq	GCF_021730395.1	Chromosome	Full annotation	38330		
 6604	Mya arenaria	bivalvia	RefSeq	GCF_026914265.1	Chromosome	Full annotation	36031		
@@ -43,7 +42,6 @@ taxid	binomial	clade	source	accession	assembly_level	annotation_status	est_prote
 6625	Watasenia scintillans	cephalopoda							no_proteome_in_ncbi
 6645	Octopus vulgaris	cephalopoda	GenBank	GCA_951406725.2	Chromosome		23436		
 7574	Lingula anatina	other_lophotrochozoan_phyla	RefSeq	GCF_001039355.2	Scaffold	Full annotation	27068		
-7574	Lingula unguis	other_lophotrochozoan_phyla	RefSeq	GCF_001039355.2	Scaffold	Full annotation	27068		
 10212	Bugula neritina	other_lophotrochozoan_phyla	GenBank	GCA_010799875.2	Contig		25318		
 27845	Fasciolopsis buski	platyhelminthes	GenBank	GCA_008360955.1	Scaffold		11837		
 27848	Echinostoma caproni	platyhelminthes	GenBank	GCA_900618425.1	Scaffold		18599		
@@ -86,7 +84,6 @@ taxid	binomial	clade	source	accession	assembly_level	annotation_status	est_prote
 61716	Hapalochlaena maculosa	cephalopoda							no_proteome_in_ncbi
 61718	Japetella diaphana	cephalopoda							no_proteome_in_ncbi
 64606	Sparganum proliferum	platyhelminthes	GenBank	GCA_053814205.1	Chromosome		28993		
-66713	Pinctada fucata martensii	bivalvia	GenBank	GCA_033119305.1	Scaffold		25526		
 66713	Pinctada imbricata	bivalvia	GenBank	GCA_033119305.1	Scaffold		25526		
 66787	Dipylidium caninum	platyhelminthes							no_proteome_in_ncbi
 67896	Cristatella mucedo	other_lophotrochozoan_phyla							no_proteome_in_ncbi
@@ -203,7 +200,6 @@ taxid	binomial	clade	source	accession	assembly_level	annotation_status	est_prote
 1210411	Lepidonotus clava	annelida							no_proteome_in_ncbi
 1210413	Sthenelais limicola	annelida							no_proteome_in_ncbi
 1348078	Hirudinaria manillensis	annelida							no_proteome_in_ncbi
-1348078	Poecilobdella manillensis	annelida							no_proteome_in_ncbi
 1353015	Muusoctopus longibrachus	cephalopoda							no_proteome_in_ncbi
 1423836	Octopus insularis	cephalopoda							no_proteome_in_ncbi
 1491186	Alviniconcha marisindica	gastropoda							no_proteome_in_ncbi
@@ -226,7 +222,6 @@ taxid	binomial	clade	source	accession	assembly_level	annotation_status	est_prote
 2584915	Oreohelix idahoensis	gastropoda							no_proteome_in_ncbi
 2589376	Gari tellinella	bivalvia							no_proteome_in_ncbi
 2607531	Octopus sinensis	cephalopoda	RefSeq	GCF_006345805.1	Chromosome	Full annotation	18886		
-2653900	Crassostrea hongkongensis	bivalvia							no_proteome_in_ncbi
 2653900	Magallana hongkongensis	bivalvia							no_proteome_in_ncbi
 2664684	Dimorphilus gyrociliatus	annelida	GenBank	GCA_904063045.1	Scaffold		14031		
 2682772	Atriophallophorus winterbourni	platyhelminthes							no_proteome_in_ncbi

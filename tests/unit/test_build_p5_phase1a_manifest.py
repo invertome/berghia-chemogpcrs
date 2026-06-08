@@ -202,6 +202,41 @@ class TestBuildManifest:
 
 
 # ---------------------------------------------------------------------------
+# taxid dedup — NCBI name-synonyms put one taxid on two rows (same proteome,
+# two binomials); both files exist on disk, so build_manifest must keep one.
+# ---------------------------------------------------------------------------
+
+class TestDedupeByTaxid:
+    def _two_synonym_rows(self, tmp_path: Path):
+        mf = tmp_path / "manifest.tsv"
+        proteomes_dir = tmp_path / "proteomes"
+        _write_manifest(mf, [
+            {"taxid": "6573", "binomial": "Mizuhopecten yessoensis",
+             "accession": "GCF_002113885.1"},
+            {"taxid": "6573", "binomial": "Patinopecten yessoensis",
+             "accession": "GCF_002113885.1"},
+        ])
+        # Both synonym proteomes present (byte-identical on Unity).
+        _write_fasta(proteomes_dir / "6573_Mizuhopecten_yessoensis.faa")
+        _write_fasta(proteomes_dir / "6573_Patinopecten_yessoensis.faa")
+        return mf, proteomes_dir
+
+    def test_same_taxid_collapses_to_one_row(self, tmp_path: Path) -> None:
+        mf, proteomes_dir = self._two_synonym_rows(tmp_path)
+        rows = bpm.build_manifest(mf, proteomes_dir=proteomes_dir)
+        assert [r.taxid for r in rows] == [6573]      # one row, not two
+
+    def test_keeps_first_existing_and_warns(self, tmp_path: Path, capsys) -> None:
+        mf, proteomes_dir = self._two_synonym_rows(tmp_path)
+        rows = bpm.build_manifest(mf, proteomes_dir=proteomes_dir)
+        assert len(rows) == 1
+        assert rows[0].binomial == "Mizuhopecten yessoensis"   # first in manifest
+        err = capsys.readouterr().err
+        assert "6573" in err
+        assert "Patinopecten" in err          # dropped synonym named
+
+
+# ---------------------------------------------------------------------------
 # write_manifest_tsv + idempotency
 # ---------------------------------------------------------------------------
 

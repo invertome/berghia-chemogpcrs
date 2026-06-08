@@ -59,8 +59,35 @@ def parse_leaf_filename(name: str) -> Optional[tuple[int, str]]:
     return int(m.group(1)), binomial
 
 
+def dedupe_by_taxid(rows: list[ManifestRow]) -> list[ManifestRow]:
+    """Collapse rows sharing a taxid to the first occurrence.
+
+    NCBI organism-name synonyms can yield two proteome files for one taxid
+    (e.g. 6573 Mizuhopecten / Patinopecten yessoensis — byte-identical). Keeping
+    both double-counts the taxon in the scan and gives the species tree a
+    duplicate tip. Callers pass filename-sorted rows, so "keep first" is
+    deterministic; each dropped file is named loudly on stderr so the upstream
+    duplicate is visible, not silently papered over.
+    """
+    seen: dict[int, ManifestRow] = {}
+    deduped: list[ManifestRow] = []
+    for r in rows:
+        kept = seen.get(r.taxid)
+        if kept is not None:
+            print(
+                f"[build_full_scan_manifest] DUPLICATE taxid {r.taxid}: "
+                f"keeping '{kept.binomial}' ({kept.proteome_path.name}), "
+                f"dropping '{r.binomial}' ({r.proteome_path.name})",
+                file=sys.stderr,
+            )
+            continue
+        seen[r.taxid] = r
+        deduped.append(r)
+    return deduped
+
+
 def enumerate_proteomes(proteomes_dir: Path, pattern: str = "*.fa") -> list[ManifestRow]:
-    """Enumerate proteome files → manifest rows (absolute paths)."""
+    """Enumerate proteome files → manifest rows (absolute paths), deduped by taxid."""
     rows: list[ManifestRow] = []
     for p in sorted(proteomes_dir.glob(pattern)):
         if not p.is_file():
@@ -72,7 +99,7 @@ def enumerate_proteomes(proteomes_dir: Path, pattern: str = "*.fa") -> list[Mani
             continue
         taxid, binomial = parsed
         rows.append(ManifestRow(taxid, binomial, p.resolve()))
-    return rows
+    return dedupe_by_taxid(rows)
 
 
 def write_manifest_tsv(rows: list[ManifestRow], out_path: Path) -> None:

@@ -105,3 +105,49 @@ class TestWriteAndCLI:
         rc = bfsm.main(["--proteomes-dir", str(d), "--out", str(out)])
         assert rc == 0
         assert out.read_text().rstrip("\n") == "taxid\tbinomial\tproteome_path"
+
+
+# ---------------------------------------------------------------------------
+# taxid dedup — two proteome files sharing a taxid (NCBI name-synonyms) must
+# collapse to one row, else the species tree / scan double-counts the taxon.
+# ---------------------------------------------------------------------------
+
+class TestDedupeByTaxid:
+    def test_same_taxid_two_binomials_collapses_to_one_row(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        d = tmp_path / "input"
+        # NCBI synonym pair: same taxid 6573, byte-identical proteome.
+        _touch_fasta(d / "6573_Mizuhopecten_yessoensis.fa")
+        _touch_fasta(d / "6573_Patinopecten_yessoensis.fa")
+        rows = bfsm.enumerate_proteomes(d, pattern="*.fa")
+        assert [r.taxid for r in rows] == [6573]      # one row, not two
+
+    def test_dedupe_is_deterministic_keep_first_sorted(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        d = tmp_path / "input"
+        _touch_fasta(d / "6573_Mizuhopecten_yessoensis.fa")
+        _touch_fasta(d / "6573_Patinopecten_yessoensis.fa")
+        rows = bfsm.enumerate_proteomes(d, pattern="*.fa")
+        # sorted filename order → "Mizuhopecten" (M) kept over "Patinopecten" (P)
+        assert len(rows) == 1
+        assert rows[0].binomial == "Mizuhopecten yessoensis"
+
+    def test_dropped_duplicate_is_warned_loudly(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        d = tmp_path / "input"
+        _touch_fasta(d / "6573_Mizuhopecten_yessoensis.fa")
+        _touch_fasta(d / "6573_Patinopecten_yessoensis.fa")
+        bfsm.enumerate_proteomes(d, pattern="*.fa")
+        err = capsys.readouterr().err
+        assert "6573" in err
+        assert "Patinopecten" in err          # the dropped file is named
+
+    def test_distinct_taxids_unaffected(self, tmp_path: Path) -> None:
+        d = tmp_path / "input"
+        _touch_fasta(d / "6182_Schistosoma_japonicum.fa")
+        _touch_fasta(d / "6573_Mizuhopecten_yessoensis.fa")
+        rows = bfsm.enumerate_proteomes(d, pattern="*.fa")
+        assert sorted(r.taxid for r in rows) == [6182, 6573]

@@ -112,6 +112,7 @@ def build_manifest(
     """
     parsed = read_phase1a_manifest(manifest_path)
     result: list[ManifestRow] = []
+    seen: dict[int, ManifestRow] = {}
     for row in parsed:
         path = resolve_proteome_path(row.taxid, row.binomial, proteomes_dir)
         if not path.exists():
@@ -121,11 +122,25 @@ def build_manifest(
                 file=sys.stderr,
             )
             continue
-        result.append(ManifestRow(
+        # NCBI organism-name synonyms put one taxid on two manifest rows
+        # (e.g. 6573 Mizuhopecten / Patinopecten yessoensis — same assembly,
+        # byte-identical proteome). Keep the first row whose file exists so the
+        # taxon isn't double-counted; name the dropped synonym loudly.
+        kept = seen.get(row.taxid)
+        if kept is not None:
+            print(
+                f"[build_p5_phase1a_manifest] DUPLICATE taxid {row.taxid}: "
+                f"keeping '{kept.binomial}', dropping '{row.binomial}'",
+                file=sys.stderr,
+            )
+            continue
+        new_row = ManifestRow(
             taxid=row.taxid,
             binomial=row.binomial,
             proteome_path=path,
-        ))
+        )
+        seen[row.taxid] = new_row
+        result.append(new_row)
     return result
 
 
