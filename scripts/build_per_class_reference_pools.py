@@ -255,18 +255,22 @@ def load_berghia_candidates(
 def load_anchor_set(
     anchor_fasta: str,
     anchor_tsv: str,
+    keep_tiers: Optional[frozenset[str]] = None,
 ) -> dict[str, list[tuple[int, SeqRecord]]]:
     """Load the curated anchor set into per-class (taxid, SeqRecord) bins.
 
     Anchors are characterized GPCR landmarks (build_anchor_set.py). FASTA
-    headers are ``ANCHOR_<class>_<tier>_<accession>``; the class is read from
-    the header and the taxid from the TSV (keyed by accession). Each anchor's
-    SeqRecord.id keeps the full ANCHOR_ header so anchors are traceable in the
-    final tree.
+    headers are ``ANCHOR_<class>_<tier>_<accession>``; the class and tier are
+    read from the header and the taxid from the TSV (keyed by accession). Each
+    anchor's SeqRecord.id keeps the full ANCHOR_ header so anchors are traceable
+    in the final tree.
 
     Args:
         anchor_fasta: path to anchor_set.fasta.
         anchor_tsv: path to anchor_set.tsv (cols incl. accession, taxid).
+        keep_tiers: if given, only anchors of these tiers ('1'/'2'/'3') are
+            loaded. Used by the C3 calibration to build the "without out-group
+            anchors" pool ({'1'}) vs the full pool (None).
 
     Returns:
         dict mapping class label (A/B/C/F) → list of (taxid, SeqRecord).
@@ -287,6 +291,9 @@ def load_anchor_set(
         if len(parts) < 4 or parts[0] != "ANCHOR":
             continue
         klass = parts[1]
+        tier = parts[2]
+        if keep_tiers is not None and tier not in keep_tiers:
+            continue
         accession = "_".join(parts[3:])
         taxid = acc_taxid.get(accession, 0)
         if klass in per_class:
@@ -618,6 +625,7 @@ def build_all_pools(
     berghia_class_tsv: Optional[str] = None,
     anchor_fasta: Optional[str] = None,
     anchor_tsv: Optional[str] = None,
+    anchor_tiers: Optional[frozenset[str]] = None,
     ref_floor_per_species: int = DEFAULT_REF_FLOOR_PER_SPECIES,
     ref_cap_per_taxon: int = DEFAULT_REF_CAP_PER_TAXON,
     selection_seed: int = DEFAULT_SELECTION_SEED,
@@ -688,7 +696,8 @@ def build_all_pools(
     }
     if anchor_fasta and anchor_tsv:
         if os.path.exists(anchor_fasta) and os.path.exists(anchor_tsv):
-            anchor_per_class = load_anchor_set(anchor_fasta, anchor_tsv)
+            anchor_per_class = load_anchor_set(anchor_fasta, anchor_tsv,
+                                               keep_tiers=anchor_tiers)
         else:
             print(
                 f"  WARNING: anchor set not found ({anchor_fasta} / {anchor_tsv}); "
@@ -1005,6 +1014,17 @@ def build_args_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--anchor-tiers",
+        default=os.environ.get("ANCHOR_TIERS"),
+        metavar="T[,T...]",
+        help=(
+            "Comma-separated anchor tiers to inject (1=mollusc in-group, "
+            "2=Platynereis, 3=fly/worm). Omit = all tiers. Use '1' to build the "
+            "'without out-group anchors' pool for the C3 calibration. "
+            "(env: ANCHOR_TIERS)"
+        ),
+    )
+    parser.add_argument(
         "--ref-floor-per-species",
         type=int,
         default=int(os.environ.get("REF_FLOOR_PER_SPECIES", str(DEFAULT_REF_FLOOR_PER_SPECIES))),
@@ -1067,6 +1087,8 @@ def main(argv=None) -> None:
         berghia_class_tsv=args.berghia_class_tsv,
         anchor_fasta=args.anchor_fasta,
         anchor_tsv=args.anchor_tsv,
+        anchor_tiers=(frozenset(t.strip() for t in args.anchor_tiers.split(","))
+                      if args.anchor_tiers else None),
         ref_floor_per_species=args.ref_floor_per_species,
         ref_cap_per_taxon=args.ref_cap_per_taxon,
         selection_seed=args.selection_seed,

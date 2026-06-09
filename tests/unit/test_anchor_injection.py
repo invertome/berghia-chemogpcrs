@@ -89,6 +89,30 @@ def test_survivor_ids_multiple_anchors_all_kept():
 # load_anchor_set: route by class, attach taxid
 # ---------------------------------------------------------------------------
 
+def test_load_anchor_set_keep_tiers_filters_outgroup(tmp_path):
+    # keep_tiers={"1"} drops out-group (tier 2/3) anchors — used to build the
+    # "without out-group anchors" pool for the C3 calibration.
+    fasta = tmp_path / "anchor_set.fasta"
+    fasta.write_text(
+        ">ANCHOR_A_1_P1\nMAAA\n"      # tier 1 in-group
+        ">ANCHOR_A_2_PLAT\nMBBB\n"    # tier 2 out-group
+        ">ANCHOR_A_3_DROS\nMCCC\n"    # tier 3 out-group
+    )
+    tsv = tmp_path / "anchor_set.tsv"
+    with open(tsv, "w", newline="") as fh:
+        w = csv.writer(fh, delimiter="\t")
+        w.writerow(["accession", "tier", "taxid", "species", "family", "class", "evidence"])
+        w.writerow(["P1", "1", "6500", "Aplysia", "aminergic", "A", "reviewed"])
+        w.writerow(["PLAT", "2", "6359", "Platynereis", "peptide", "A", "experimental:26190115"])
+        w.writerow(["DROS", "3", "7227", "Drosophila", "peptide", "A", "reviewed"])
+
+    full = bpcp.load_anchor_set(str(fasta), str(tsv))
+    assert {r.id for _, r in full["A"]} == {"ANCHOR_A_1_P1", "ANCHOR_A_2_PLAT", "ANCHOR_A_3_DROS"}
+
+    tier1_only = bpcp.load_anchor_set(str(fasta), str(tsv), keep_tiers={"1"})
+    assert {r.id for _, r in tier1_only["A"]} == {"ANCHOR_A_1_P1"}
+
+
 def test_load_anchor_set_routes_by_class(tmp_path):
     fasta = tmp_path / "anchor_set.fasta"
     fasta.write_text(
