@@ -349,6 +349,14 @@ export OUTGROUP_SOURCE_CLASS_F="${OUTGROUP_SOURCE_CLASS_F:-A}"
 # Outgroup size per tree (best practice ~10 seqs, override-able).
 export OUTGROUP_BUDGET_PER_CLASS="${OUTGROUP_BUDGET_PER_CLASS:-10}"
 
+# Balanced per-class reference sampling (P2, option 4b): per-species floor + per-taxon
+# cap so all species are represented and no taxon floods the pool (uncapped must-include
+# previously left only ~45/90 species in the Class-A tree, biasing LSE inference).
+# SELECTION_SEED makes reference selection reproducible. Calibrated on the Phase-1a pilot.
+export REF_FLOOR_PER_SPECIES="${REF_FLOOR_PER_SPECIES:-5}"
+export REF_CAP_PER_TAXON="${REF_CAP_PER_TAXON:-150}"
+export SELECTION_SEED="${SELECTION_SEED:-12345}"
+
 # Use mafft --dash structural information for GPCR alignments.
 # DASH adds PDB structural priors to alignment. Required for the per-class
 # architecture per locked decision 2026-05-28. Override to 0 to disable.

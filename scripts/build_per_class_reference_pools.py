@@ -88,6 +88,14 @@ DEFAULT_TOTAL_BUDGET_PER_CLASS = 3000
 # Default outgroup budget per class (reserves slots for outgroup sequences)
 DEFAULT_OUTGROUP_BUDGET_PER_CLASS = 10
 
+# Balanced reference sampling (option 4b). Every species with candidates gets at
+# least FLOOR reps; no taxon exceeds CAP reps; the rest is Berghia-proximity-
+# weighted. Replaces the old uncapped-must-include flooding. Tunable; calibrated
+# on the Phase-1a pilot. SEED makes selection reproducible.
+DEFAULT_REF_FLOOR_PER_SPECIES = 5
+DEFAULT_REF_CAP_PER_TAXON = 150
+DEFAULT_SELECTION_SEED = 12345
+
 GPCR_CLASSES = ("A", "B", "C", "F")
 
 
@@ -318,6 +326,84 @@ def cdhit_dedup(
 # Pool building
 # ---------------------------------------------------------------------------
 
+def balanced_reference_sample(
+    records: list[tuple[int, SeqRecord]],
+    budget: int,
+    *,
+    floor: int,
+    cap: int,
+    must_include_taxids: frozenset[int],
+    lineage_fn,
+    berghia_taxid: int,
+    seed: int,
+) -> list[tuple[int, SeqRecord]]:
+    """Select <= ``budget`` reference records, balanced across taxa.
+
+    Spends a fixed budget so every species is represented and no taxon floods
+    the pool (the uncapped-must-include flooding biased LSE inference):
+      - per-species FLOOR: each taxon gets min(floor, available);
+      - must-include taxa filled to min(cap, available) (kept, but bounded);
+      - per-taxon CAP: no taxon exceeds min(cap, available);
+      - remaining budget filled by Berghia-proximity-weighted draw, capped.
+
+    Deterministic given ``seed`` — replaces the old unseeded proximity sampling,
+    so reference pools are reproducible (and the anchor with-vs-without eval
+    compares against a stable base pool).
+    """
+    rng = random.Random(seed)
+    by_taxid: dict[int, list[SeqRecord]] = {}
+    for taxid, rec in records:
+        by_taxid.setdefault(taxid, []).append(rec)
+    if not by_taxid or budget <= 0:
+        return []
+
+    ceil = {t: min(cap, len(recs)) for t, recs in by_taxid.items()}
+    alloc = {t: min(floor, ceil[t]) for t in by_taxid}            # per-species floor
+    for t in by_taxid:                                            # must-include -> cap
+        if t in must_include_taxids:
+            alloc[t] = ceil[t]
+
+    total = sum(alloc.values())
+    if total > budget:
+        # Floor + must-include already exceed the budget (more species than the
+        # budget can floor). Trim the largest allocations down until within budget.
+        order = sorted(by_taxid, key=lambda t: (alloc[t], t))
+        i = len(order) - 1
+        while total > budget:
+            t = order[i]
+            if alloc[t] > 0:
+                alloc[t] -= 1
+                total -= 1
+            i = i - 1 if i > 0 else len(order) - 1
+    else:
+        # Berghia-proximity-weighted fill of the remaining budget (proximity is
+        # constant per taxon → memoise). Each pick respects the per-taxon cap.
+        prox = {t: max(proximity_score(t, lineage_fn, berghia_taxid), 0)
+                for t in by_taxid}
+        remaining = budget - total
+        growable = [t for t in by_taxid if alloc[t] < ceil[t]]
+        while remaining > 0 and growable:
+            weights = [prox[t] for t in growable]
+            if sum(weights) == 0:
+                weights = [1] * len(growable)
+            t = rng.choices(growable, weights=weights, k=1)[0]
+            alloc[t] += 1
+            remaining -= 1
+            if alloc[t] >= ceil[t]:
+                growable.remove(t)
+
+    selected: list[tuple[int, SeqRecord]] = []
+    for t in sorted(by_taxid):                                    # sorted → deterministic
+        recs = by_taxid[t]
+        n = alloc[t]
+        if n >= len(recs):
+            idx = list(range(len(recs)))
+        else:
+            idx = sorted(rng.sample(range(len(recs)), n))
+        selected.extend((t, recs[i]) for i in idx)
+    return selected
+
+
 def build_pool_for_class(
     records: list[tuple[int, SeqRecord]],
     must_include_taxids: frozenset[int],
@@ -325,112 +411,73 @@ def build_pool_for_class(
     max_size: int,
     lineage_fn,
     berghia_records: Optional[list[SeqRecord]] = None,
+    *,
+    floor: int = DEFAULT_REF_FLOOR_PER_SPECIES,
+    cap: int = DEFAULT_REF_CAP_PER_TAXON,
+    seed: int = DEFAULT_SELECTION_SEED,
 ) -> tuple[list[tuple[int, SeqRecord]], dict]:
-    """Build a single per-class reference pool.
+    """Build a single per-class reference pool (balanced — option 4b).
 
-    Steps:
-    1. Prepend Berghia class-specific records as MUST_INCLUDE (always kept).
-    2. Separate must-include taxid records from ordinary candidates.
-    3. Fill Berghia + must-include sequences first (MUST_INCLUDE always retained,
-       even if it exceeds max_size).
-    4. Fill remaining slots with Berghia-proximity-weighted sampling
-       from the ordinary candidates.
+    1. All Berghia class-specific records are kept (guaranteed, on top of the
+       refs budget ``max_size``).
+    2. References are chosen by :func:`balanced_reference_sample`: every species
+       with candidates gets a FLOOR, must-include model species are filled to
+       CAP, no taxon exceeds CAP, and the remainder is Berghia-proximity-
+       weighted — so all species are represented and no taxon floods the pool.
+       Deterministic via ``seed`` (supersedes the old uncapped-must-include +
+       unseeded proximity fill, which under-represented most species and gave
+       non-reproducible pools).
 
     Args:
         records: (taxid, SeqRecord) pairs for this class (already CD-HIT'd).
-        must_include_taxids: taxids whose sequences are always kept.
+        must_include_taxids: model-species taxa filled to CAP (kept, but bounded).
         berghia_taxid: focal taxid — used for proximity scoring.
-        max_size: per-class sequence cap (refs only; Berghia seqs are guaranteed).
+        max_size: refs-only budget; Berghia seqs are guaranteed on top.
         lineage_fn: callable(taxid) → list[int].
-        berghia_records: SeqRecord list for Berghia sequences of this class;
-            prepended and never subsampled away (guaranteed inclusion).
+        berghia_records: Berghia SeqRecords for this class (always kept).
+        floor: minimum reps per species (default DEFAULT_REF_FLOOR_PER_SPECIES).
+        cap: maximum reps per taxon (default DEFAULT_REF_CAP_PER_TAXON).
+        seed: selection seed for reproducibility.
 
     Returns:
         (selected_pairs, stats_dict)
     """
-    # Berghia seqs are stored as (berghia_taxid, rec) to unify the pair format
     berghia_pairs: list[tuple[int, SeqRecord]] = [
         (berghia_taxid, rec) for rec in (berghia_records or [])
     ]
-
-    must_records: list[tuple[int, SeqRecord]] = []
-    ordinary_records: list[tuple[int, SeqRecord]] = []
-
-    must_taxids_with_hits: set[int] = set()
-
-    for taxid, rec in records:
-        if taxid in must_include_taxids:
-            must_records.append((taxid, rec))
-            must_taxids_with_hits.add(taxid)
-        else:
-            ordinary_records.append((taxid, rec))
-
-    missing_must = sorted(must_include_taxids - must_taxids_with_hits)
-
-    # Berghia seqs (class-specific) are always retained first, then must-include
     n_berghia = len(berghia_pairs)
-    selected_berghia = berghia_pairs  # all Berghia seqs for this class are kept
 
-    # MUST_INCLUDE taxid sequences: always retained even if they exceed max_size
-    selected_must = must_records
-    # max_size is the refs-only budget; Berghia (selected_berghia) is guaranteed
-    # ON TOP of it and must NOT be subtracted here — the caller already excluded
-    # Berghia when computing cap = total_budget - n_berghia - outgroup. Subtracting
-    # n_berghia again double-charged Berghia and shrank every budget-bound pool.
-    remaining_slots = max(0, max_size - len(selected_must))
+    present_taxids = {taxid for taxid, _ in records}
+    must_taxids_with_hits = sorted(must_include_taxids & present_taxids)
+    missing_must = sorted(must_include_taxids - present_taxids)
 
-    selected_ordinary: list[tuple[int, SeqRecord]] = []
-    if remaining_slots > 0 and ordinary_records:
-        if len(ordinary_records) <= remaining_slots:
-            selected_ordinary = ordinary_records
-        else:
-            # Berghia-proximity weighted sampling
-            weights = [
-                proximity_score(taxid, lineage_fn, berghia_taxid)
-                for taxid, _ in ordinary_records
-            ]
-            # Normalise; default to 1 if all zero
-            total_w = sum(weights)
-            if total_w == 0:
-                weights = [1.0] * len(ordinary_records)
-                total_w = float(len(ordinary_records))
-            norm_weights = [w / total_w for w in weights]
+    selected_refs = balanced_reference_sample(
+        records,
+        budget=max_size,
+        floor=floor,
+        cap=cap,
+        must_include_taxids=must_include_taxids,
+        lineage_fn=lineage_fn,
+        berghia_taxid=berghia_taxid,
+        seed=seed,
+    )
+    selected = berghia_pairs + selected_refs
 
-            indices = list(range(len(ordinary_records)))
-            chosen_indices = random.choices(
-                indices,
-                weights=norm_weights,
-                k=remaining_slots * 4,  # over-sample then deduplicate
-            )
-            seen: set[int] = set()
-            selected_indices: list[int] = []
-            for idx in chosen_indices:
-                if idx not in seen:
-                    seen.add(idx)
-                    selected_indices.append(idx)
-                if len(selected_indices) == remaining_slots:
-                    break
-            # If weighted sampling came up short, pad sequentially
-            if len(selected_indices) < remaining_slots:
-                for idx in range(len(ordinary_records)):
-                    if idx not in seen:
-                        selected_indices.append(idx)
-                    if len(selected_indices) == remaining_slots:
-                        break
-            selected_ordinary = [ordinary_records[i] for i in selected_indices]
-
-    selected = selected_berghia + selected_must + selected_ordinary
+    # n_must_include / n_subsampled retained for report back-compat: refs drawn
+    # from must-include taxa vs the rest.
+    n_must = sum(1 for taxid, _ in selected_refs if taxid in must_include_taxids)
+    n_other = len(selected_refs) - n_must
     species_contributing = len({taxid for taxid, _ in selected})
 
     stats = {
         "n_total_candidates": len(records),
         "n_after_cdhit": len(records),   # caller may update this field
         "n_berghia_included": n_berghia,
-        "n_must_include": len(selected_must),
-        "n_subsampled": len(selected_ordinary),
+        "n_must_include": n_must,
+        "n_subsampled": n_other,
         "n_output": len(selected),
         "species_contributing": species_contributing,
-        "must_include_taxids_with_hits": sorted(must_taxids_with_hits),
+        "must_include_taxids_with_hits": must_taxids_with_hits,
         "must_include_taxids_missing": missing_must,
     }
     return selected, stats
@@ -453,6 +500,9 @@ def build_all_pools(
     berghia_taxid: int = BERGHIA_TAXID_DEFAULT,
     berghia_fasta: Optional[str] = None,
     berghia_class_tsv: Optional[str] = None,
+    ref_floor_per_species: int = DEFAULT_REF_FLOOR_PER_SPECIES,
+    ref_cap_per_taxon: int = DEFAULT_REF_CAP_PER_TAXON,
+    selection_seed: int = DEFAULT_SELECTION_SEED,
     force: bool = False,
 ) -> None:
     """Build four per-class reference pools.
@@ -599,6 +649,9 @@ def build_all_pools(
             max_size=cap,
             lineage_fn=lineage_fn,
             berghia_records=berghia_per_class.get(cls),
+            floor=ref_floor_per_species,
+            cap=ref_cap_per_taxon,
+            seed=selection_seed,
         )
         stats["n_total_candidates"] = n_total
         stats["n_after_cdhit"] = n_after
@@ -753,6 +806,30 @@ def build_args_parser() -> argparse.ArgumentParser:
         help="P1 class TSV for Berghia candidates (required when --berghia-fasta is used).",
     )
     parser.add_argument(
+        "--ref-floor-per-species",
+        type=int,
+        default=int(os.environ.get("REF_FLOOR_PER_SPECIES", str(DEFAULT_REF_FLOOR_PER_SPECIES))),
+        metavar="N",
+        help=("Balanced sampling: minimum reference reps per species "
+              f"(default: {DEFAULT_REF_FLOOR_PER_SPECIES}; env: REF_FLOOR_PER_SPECIES)"),
+    )
+    parser.add_argument(
+        "--ref-cap-per-taxon",
+        type=int,
+        default=int(os.environ.get("REF_CAP_PER_TAXON", str(DEFAULT_REF_CAP_PER_TAXON))),
+        metavar="N",
+        help=("Balanced sampling: maximum reference reps per taxon "
+              f"(default: {DEFAULT_REF_CAP_PER_TAXON}; env: REF_CAP_PER_TAXON)"),
+    )
+    parser.add_argument(
+        "--selection-seed",
+        type=int,
+        default=int(os.environ.get("SELECTION_SEED", str(DEFAULT_SELECTION_SEED))),
+        metavar="N",
+        help=("Seed for reproducible reference selection "
+              f"(default: {DEFAULT_SELECTION_SEED}; env: SELECTION_SEED)"),
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         default=False,
@@ -789,6 +866,9 @@ def main(argv=None) -> None:
         berghia_taxid=args.berghia_taxid,
         berghia_fasta=args.berghia_fasta,
         berghia_class_tsv=args.berghia_class_tsv,
+        ref_floor_per_species=args.ref_floor_per_species,
+        ref_cap_per_taxon=args.ref_cap_per_taxon,
+        selection_seed=args.selection_seed,
         force=args.force,
     )
 

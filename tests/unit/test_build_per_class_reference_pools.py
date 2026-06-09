@@ -179,9 +179,13 @@ def test_berghia_scan_seqs_routed_normally(tmp_path):
 # 4. MUST_INCLUDE retention: must-include taxid sequences always kept
 # ---------------------------------------------------------------------------
 
-def test_must_include_always_retained(tmp_path):
-    """Sequences from must-include taxids survive subsampling even at small cap."""
-    # Two species: must-include (6500) and ordinary (999999)
+def test_must_include_capped_not_uncapped(tmp_path):
+    """Option 4b: must-include model species are kept up to CAP, NOT uncapped.
+
+    Aplysia (10 seqs, must-include) with cap=8 yields exactly 8 — the old
+    behavior retained all 10 regardless of cap. The other species is still
+    represented (per-species floor), i.e. the budget is balanced, not flooded.
+    """
     aplysia_fa = tmp_path / "6500_Aplysia_californica.chemo_candidates.fa"
     other_fa   = tmp_path / "999999_Unknown_species.chemo_candidates.fa"
 
@@ -198,30 +202,30 @@ def test_must_include_always_retained(tmp_path):
     out_dir = tmp_path / "pools"
     out_dir.mkdir()
 
-    # Cap at 15, outgroup reserve 10 → effective refs cap = 15 - 10 = 5
-    # Aplysia has 10 seqs (MUST_INCLUDE, always retained even if exceeds cap) + up to 5 subsampled others
     with patch.object(bpcp, "cdhit_dedup", side_effect=lambda records, **kw: records):
         with patch.object(bpcp, "get_lineage", side_effect=mock_get_lineage):
             bpcp.build_all_pools(
                 scan_fasta_glob=str(tmp_path / "*.chemo_candidates.fa"),
                 class_tsv=str(class_tsv),
                 out_dir=str(out_dir),
-                total_budget_per_class=15,
+                total_budget_per_class=200,      # ample refs budget (190)
                 outgroup_budget_per_class=10,
                 cluster_identity=0.7,
                 cdhit_path="cd-hit",
                 threads=1,
                 must_include_taxids=frozenset({6500}),
                 berghia_taxid=1287507,
+                ref_floor_per_species=2,
+                ref_cap_per_taxon=8,
                 force=True,
             )
 
     pool_a = list(SeqIO.parse(str(out_dir / "refs_class_A.fa"), "fasta"))
-    ids_out = {r.id for r in pool_a}
+    aplysia_in = [r for r in pool_a if r.id.startswith("apl_")]
+    other_in = [r for r in pool_a if r.id.startswith("oth_")]
 
-    # All Aplysia sequences must be present (MUST_INCLUDE always retained)
-    for sid, _ in aplysia_seqs:
-        assert sid in ids_out, f"{sid} missing from pool despite must-include taxid"
+    assert len(aplysia_in) == 8, "must-include taxon should be capped at CAP (8), not all 10"
+    assert len(other_in) >= 2, "ordinary species must still get its floor (balanced, not flooded)"
 
 
 # ---------------------------------------------------------------------------
@@ -754,12 +758,15 @@ def test_no_berghia_fasta_falls_back_gracefully(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 18. MUST_INCLUDE retained even when Berghia exceeds budget
+# 18. MUST_INCLUDE bounded by refs budget (option 4b — no uncapped override)
 # ---------------------------------------------------------------------------
 
-def test_must_include_retained_when_berghia_exceeds_budget(tmp_path):
-    """MUST_INCLUDE sequences are always retained even if they push total over max_size."""
-    # Setup: One large must-include taxid with many seqs that exceed the cap
+def test_must_include_bounded_by_refs_budget(tmp_path):
+    """Option 4b: must-include no longer overrides the refs budget.
+
+    The old behavior kept all 100 must-include seqs even past the cap. Now a
+    100-seq must-include taxon fills only up to the refs budget (40).
+    """
     aplysia_fa = tmp_path / "6500_Aplysia_californica.chemo_candidates.fa"
     aplysia_seqs = [(f"apl_A{i}", "MSTL" * 30) for i in range(100)]
     _make_fasta(aplysia_fa, aplysia_seqs)
@@ -770,9 +777,7 @@ def test_must_include_retained_when_berghia_exceeds_budget(tmp_path):
     out_dir = tmp_path / "pools"
     out_dir.mkdir()
 
-    # Set a very small cap: total_budget=50, outgroup=10 => refs_cap = 40
-    # Aplysia has 100 seqs (MUST_INCLUDE), which exceeds 40
-    # All Aplysia sequences should still be in the pool
+    # total_budget=50, outgroup=10 => refs_cap = 40; Aplysia has 100 (must-include).
     with patch.object(bpcp, "cdhit_dedup", side_effect=lambda records, **kw: records):
         with patch.object(bpcp, "get_lineage", side_effect=mock_get_lineage):
             bpcp.build_all_pools(
@@ -790,15 +795,8 @@ def test_must_include_retained_when_berghia_exceeds_budget(tmp_path):
             )
 
     pool_a = list(SeqIO.parse(str(out_dir / "refs_class_A.fa"), "fasta"))
-    ids_out = {r.id for r in pool_a}
-
-    # All Aplysia sequences must be present (MUST_INCLUDE always retained)
-    for sid, _ in aplysia_seqs:
-        assert sid in ids_out, f"{sid} missing from pool despite must-include taxid"
-
-    # Verify that the count exceeds the ref_cap (because MUST_INCLUDE is guaranteed)
-    ref_cap = 50 - 10
-    assert len(pool_a) >= 100, f"Pool should contain all {len(aplysia_seqs)} must-include seqs"
+    assert len(pool_a) == 40, "must-include taxon is bounded by the refs budget (40), not all 100"
+    assert all(r.id.startswith("apl_A") for r in pool_a), "only the present (must-include) taxon contributes"
 
 
 # ---------------------------------------------------------------------------
@@ -917,6 +915,88 @@ def test_berghia_not_double_charged_against_refs_budget():
     assert n_refs == 10, f"refs must fill the full refs-only budget (10), got {n_refs}"
     assert stats["n_output"] == 15, f"5 Berghia + 10 refs on top, got {stats['n_output']}"
     assert stats["n_berghia_included"] == 5
+
+
+# ---------------------------------------------------------------------------
+# 19c. C1 balanced_reference_sample: per-species floor + must-include-to-cap +
+#      per-taxon cap + Berghia-proximity fill, deterministic via seed.
+# ---------------------------------------------------------------------------
+
+def _recs(taxid: int, n: int, prefix: str) -> list[tuple[int, SeqRecord]]:
+    return [(taxid, SeqRecord(Seq("M" * 40), id=f"{prefix}{i}", description=""))
+            for i in range(n)]
+
+
+def _counts(selected: list[tuple[int, SeqRecord]]) -> dict[int, int]:
+    by: dict[int, int] = {}
+    for taxid, _ in selected:
+        by[taxid] = by.get(taxid, 0) + 1
+    return by
+
+
+def test_balanced_floor_represents_every_species():
+    records = _recs(6500, 10, "ap") + _recs(7227, 10, "dm") + _recs(9606, 10, "hs")
+    sel = bpcp.balanced_reference_sample(
+        records, budget=30, floor=3, cap=100,
+        must_include_taxids=frozenset(), lineage_fn=mock_get_lineage,
+        berghia_taxid=1287507, seed=1)
+    by = _counts(sel)
+    assert set(by) == {6500, 7227, 9606}        # no species absent
+    assert all(c >= 3 for c in by.values())     # floor honored
+    assert len(sel) <= 30
+
+
+def test_balanced_cap_enforced():
+    records = _recs(6500, 50, "ap") + _recs(7227, 5, "dm")
+    sel = bpcp.balanced_reference_sample(
+        records, budget=100, floor=1, cap=10,
+        must_include_taxids=frozenset(), lineage_fn=mock_get_lineage,
+        berghia_taxid=1287507, seed=1)
+    by = _counts(sel)
+    assert by[6500] <= 10           # capped (had 50 available)
+    assert by[7227] == 5            # all 5 (below cap)
+
+
+def test_balanced_must_include_filled_to_cap():
+    # 9606 (human) is distant from Berghia, but must-include => filled to cap.
+    records = _recs(9606, 20, "hs") + _recs(6500, 20, "ap")
+    sel = bpcp.balanced_reference_sample(
+        records, budget=15, floor=1, cap=10,
+        must_include_taxids=frozenset({9606}), lineage_fn=mock_get_lineage,
+        berghia_taxid=1287507, seed=1)
+    by = _counts(sel)
+    assert by[9606] == 10           # must-include reaches cap despite low proximity
+    assert len(sel) <= 15
+
+
+def test_balanced_budget_respected():
+    records = (_recs(6500, 100, "ap") + _recs(7227, 100, "dm") + _recs(9606, 100, "hs"))
+    sel = bpcp.balanced_reference_sample(
+        records, budget=50, floor=2, cap=40,
+        must_include_taxids=frozenset(), lineage_fn=mock_get_lineage,
+        berghia_taxid=1287507, seed=1)
+    assert len(sel) <= 50
+
+
+def test_balanced_deterministic_with_seed():
+    records = _recs(6500, 30, "ap") + _recs(7227, 30, "dm")
+    kw = dict(budget=20, floor=2, cap=15, must_include_taxids=frozenset(),
+              lineage_fn=mock_get_lineage, berghia_taxid=1287507)
+    a = bpcp.balanced_reference_sample(records, seed=42, **kw)
+    b = bpcp.balanced_reference_sample(records, seed=42, **kw)
+    assert [(t, r.id) for t, r in a] == [(t, r.id) for t, r in b]
+
+
+def test_balanced_proximity_prefers_closer_taxon():
+    # After the floor, the remaining budget should favour the closer taxon
+    # (6500 Aplysia, gastropod) over the distant one (9606 human).
+    records = _recs(6500, 50, "ap") + _recs(9606, 50, "hs")
+    sel = bpcp.balanced_reference_sample(
+        records, budget=40, floor=2, cap=50,
+        must_include_taxids=frozenset(), lineage_fn=mock_get_lineage,
+        berghia_taxid=1287507, seed=7)
+    by = _counts(sel)
+    assert by[6500] > by[9606]
 
 
 # ---------------------------------------------------------------------------
