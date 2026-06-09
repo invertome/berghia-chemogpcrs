@@ -57,12 +57,13 @@ fi
 
 # --- Calibration knobs (override the repo defaults for this run) ------------
 export REF_CLUSTER_IDENTITY=0.9                     # C4 value, independent of config.sh
-# Light pilot defaults → Class-A tree ~600 tips (anchors ~177 + focal ~150 +
-# thinned refs ~270): a fast LBA read per spec §8. Raise for a denser run; the
-# final P7 build uses the full pool (all focal-species paralogs, full ref budget).
+# Moderate pilot defaults → Class-A tree ~1000 tips (anchors ~177 + focal ~400 +
+# refs ~450): a sensitive-enough LBA read per spec §8 without the full-run cost.
+# The final P7 build uses the full pool (all focal-species paralogs, full ref
+# budget); the full pre-P7 confirmation re-checks any clean verdict on all tips.
 export REF_FLOOR_PER_SPECIES="${PILOT_FLOOR:-1}"
-export REF_CAP_PER_TAXON="${PILOT_CAP:-3}"
-PILOT_BERGHIA_MAX="${PILOT_BERGHIA_MAX:-150}"       # 0 = keep all focal-species tips
+export REF_CAP_PER_TAXON="${PILOT_CAP:-5}"
+PILOT_BERGHIA_MAX="${PILOT_BERGHIA_MAX:-400}"       # 0 = keep all focal-species tips
 CPUS="${CPUS:-${SLURM_CPUS_PER_TASK:-16}}"
 
 # --- Reuse Phase-1a P5 scan + classify outputs ------------------------------
