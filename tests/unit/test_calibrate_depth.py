@@ -38,4 +38,11 @@ def test_higher_birth_rate_compresses_depths():
 def test_seed_reproducibility():
     d1 = simulate_null_depths(n_taxa=20, n_sims=3, seed=99)
     d2 = simulate_null_depths(n_taxa=20, n_sims=3, seed=99)
-    assert d1["per_tree_max"] == d2["per_tree_max"]
+    # dendropy's birth_death_tree isn't bit-reproducible across calls even with an
+    # identical seeded rng: the draw COUNT is deterministic but draw-to-lineage order
+    # is object-identity (memory-address) based, giving ULP-level (~1e-15) depth
+    # differences (not fixed by PYTHONHASHSEED — it's id-based, not str-hash). The
+    # percentile thresholds this module computes are robust to that, so assert
+    # numerical, not bit-exact, reproducibility; a real break (e.g. a different seed)
+    # differs by O(0.1) and still fails this.
+    assert d1["per_tree_max"] == pytest.approx(d2["per_tree_max"], rel=1e-9)
