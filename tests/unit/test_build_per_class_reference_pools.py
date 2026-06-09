@@ -498,17 +498,38 @@ def test_idempotent_skip(tmp_path):
 # 11. CLI argparse smoke-test
 # ---------------------------------------------------------------------------
 
-def test_cli_argparse_defaults(tmp_path):
-    """build_args_parser produces correct defaults."""
+def test_cli_argparse_defaults(tmp_path, monkeypatch):
+    """build_args_parser produces correct defaults.
+
+    Default CD-HIT identity is 0.9 (not 0.7): at 0.7 a relative's own
+    paralog expansion (80-95% identity) collapses to one representative,
+    inflating apparent Berghia-specificity of shared/ancestral expansions.
+    0.9 preserves the cross-lineage-informative (older, <90%) paralog
+    structure while collapsing only lineage-private near-identical recent
+    duplicates. Budget is enforced by balanced sampling, not CD-HIT.
+    """
+    monkeypatch.delenv("REF_CLUSTER_IDENTITY", raising=False)
     parser = bpcp.build_args_parser()
     args = parser.parse_args([
         "--scan-fasta-glob", "scan_output/*.fa",
         "--class-tsv", "classes.tsv",
         "--out-dir", str(tmp_path),
     ])
-    assert args.cluster_identity == 0.7
+    assert args.cluster_identity == 0.9
     assert args.berghia_taxid == 1287507
     assert args.threads >= 1
+
+
+def test_cli_cluster_identity_env_override(tmp_path, monkeypatch):
+    """REF_CLUSTER_IDENTITY env var controls the CD-HIT identity default."""
+    monkeypatch.setenv("REF_CLUSTER_IDENTITY", "0.95")
+    parser = bpcp.build_args_parser()
+    args = parser.parse_args([
+        "--scan-fasta-glob", "scan_output/*.fa",
+        "--class-tsv", "classes.tsv",
+        "--out-dir", str(tmp_path),
+    ])
+    assert args.cluster_identity == 0.95
 
 
 # ---------------------------------------------------------------------------

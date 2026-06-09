@@ -329,7 +329,12 @@ export CDHIT_MEMORY=16000        # Memory limit in MB
 # DEPRECATED for global tree: use TOTAL_BUDGET_PER_CLASS (in P2) + OUTGROUP_BUDGET_PER_CLASS
 # instead. MAX_PHYLO_REFS kept exported for back-compat (old resume jobs + per-OG subsampling).
 export MAX_PHYLO_REFS=2000                 # Max reference sequences in phylogenetic tree (back-compat; see P2 TOTAL_BUDGET_PER_CLASS)
-export REF_CLUSTER_IDENTITY=0.7            # CD-HIT clustering identity threshold
+# CD-HIT identity for reference dedup in per-class pools. 0.9 (not 0.7):
+# preserves the older, cross-lineage-informative paralog structure that
+# polarizes shared vs Berghia-specific expansions; only lineage-private
+# near-identical recent dups collapse. Berghia/anchors never deduped;
+# balanced sampling (not CD-HIT) enforces the budget.
+export REF_CLUSTER_IDENTITY=0.9            # CD-HIT clustering identity threshold
 export REF_LSE_WEIGHT=1.5                  # Multiplier for LSE vs one-to-one orthologs
 export REF_TAXONOMY_WEIGHTS="gastropoda:3.0,cephalopoda:1.5,bivalvia:1.5,other_molluscan_classes:1.2,annelida:1.0,platyhelminthes:1.0,other_lophotrochozoan_phyla:1.0"
 

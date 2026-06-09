@@ -27,7 +27,11 @@ Design constraints (locked, 2026-05-28):
   - MUST_INCLUDE taxids are always retained (their candidates fill first).
   - Remaining slots are filled by Berghia-proximity-weighted sampling
     of the non-must-include candidates.
-  - CD-HIT 0.7 deduplication before subsampling.
+  - CD-HIT 0.9 deduplication before subsampling (0.9, not 0.7: preserves the
+    cross-lineage-informative older paralog structure that polarizes shared vs
+    Berghia-specific expansions; only lineage-private near-identical recent
+    duplicates collapse. Berghia/anchors are never deduped; balanced sampling,
+    not CD-HIT, enforces the budget).
   - Class A budget reduced (~2000) to account for ~800 Berghia Class A seqs.
   - Class B/C/F budget at ~2900 (no Berghia tax for those classes).
 
@@ -248,15 +252,117 @@ def load_berghia_candidates(
     return per_class
 
 
+def load_anchor_set(
+    anchor_fasta: str,
+    anchor_tsv: str,
+) -> dict[str, list[tuple[int, SeqRecord]]]:
+    """Load the curated anchor set into per-class (taxid, SeqRecord) bins.
+
+    Anchors are characterized GPCR landmarks (build_anchor_set.py). FASTA
+    headers are ``ANCHOR_<class>_<tier>_<accession>``; the class is read from
+    the header and the taxid from the TSV (keyed by accession). Each anchor's
+    SeqRecord.id keeps the full ANCHOR_ header so anchors are traceable in the
+    final tree.
+
+    Args:
+        anchor_fasta: path to anchor_set.fasta.
+        anchor_tsv: path to anchor_set.tsv (cols incl. accession, taxid).
+
+    Returns:
+        dict mapping class label (A/B/C/F) → list of (taxid, SeqRecord).
+    """
+    acc_taxid: dict[str, int] = {}
+    with open(anchor_tsv, newline="") as fh:
+        for row in csv.DictReader(fh, delimiter="\t"):
+            try:
+                acc_taxid[row["accession"]] = int(row["taxid"])
+            except (KeyError, ValueError):
+                pass
+
+    per_class: dict[str, list[tuple[int, SeqRecord]]] = {
+        cls: [] for cls in GPCR_CLASSES
+    }
+    for rec in SeqIO.parse(anchor_fasta, "fasta"):
+        parts = rec.id.split("_")
+        if len(parts) < 4 or parts[0] != "ANCHOR":
+            continue
+        klass = parts[1]
+        accession = "_".join(parts[3:])
+        taxid = acc_taxid.get(accession, 0)
+        if klass in per_class:
+            per_class[klass].append((taxid, rec))
+
+    total = sum(len(v) for v in per_class.values())
+    print(
+        f"[build_per_class_reference_pools] Loaded {total} anchors from "
+        f"{anchor_fasta} (per-class: "
+        f"{ {c: len(per_class[c]) for c in GPCR_CLASSES} })",
+        file=sys.stderr,
+    )
+    return per_class
+
+
 # ---------------------------------------------------------------------------
 # CD-HIT deduplication
 # ---------------------------------------------------------------------------
 
+def _parse_clstr(clstr_path: str) -> list[dict]:
+    """Parse a CD-HIT .clstr file into a list of clusters.
+
+    Returns one dict per cluster: {"rep": <representative id or None>,
+    "members": [<member ids>]}.
+    """
+    clusters: list[dict] = []
+    cur: Optional[dict] = None
+    with open(clstr_path) as fh:
+        for line in fh:
+            if line.startswith(">"):
+                if cur is not None:
+                    clusters.append(cur)
+                cur = {"rep": None, "members": []}
+            elif ">" in line and "..." in line:
+                start = line.index(">") + 1
+                end = line.index("...", start)
+                mid = line[start:end]
+                if cur is None:
+                    cur = {"rep": None, "members": []}
+                cur["members"].append(mid)
+                if line.rstrip().endswith("*"):
+                    cur["rep"] = mid
+    if cur is not None:
+        clusters.append(cur)
+    return clusters
+
+
+def _cdhit_survivor_ids(clusters: list[dict],
+                        must_keep_ids: frozenset[str]) -> set[str]:
+    """Choose surviving ids per cluster.
+
+    A cluster that contains one or more must-keep ids (anchors) keeps ALL of
+    them and drops every other member — so a scanned candidate never displaces
+    an annotated anchor (keep-annotated-on-collision). A cluster with no
+    must-keep id keeps its CD-HIT representative, as usual.
+    """
+    survivors: set[str] = set()
+    for c in clusters:
+        keep = [m for m in c["members"] if m in must_keep_ids]
+        if keep:
+            survivors.update(keep)
+        else:
+            rep = c["rep"]
+            if rep is None and c["members"]:
+                rep = c["members"][0]
+            if rep is not None:
+                survivors.add(rep)
+    return survivors
+
+
 def cdhit_dedup(
     records: list[tuple[int, SeqRecord]],
-    identity: float = 0.7,
+    identity: float = 0.9,
     threads: int = 4,
     cdhit_path: str = "cd-hit",
+    must_keep_ids: frozenset[str] = frozenset(),
 ) -> list[tuple[int, SeqRecord]]:
     """Run CD-HIT on *records* and return representatives.
 
@@ -265,9 +371,12 @@ def cdhit_dedup(
         identity: clustering threshold.
         threads: CPU threads for CD-HIT.
         cdhit_path: path to cd-hit binary.
+        must_keep_ids: record ids (anchors) that win any cluster they fall in —
+            kept as the survivor while colliding candidates are dropped.
 
     Returns:
-        Filtered list of (taxid, SeqRecord) — one representative per cluster.
+        Filtered list of (taxid, SeqRecord) — one representative per cluster,
+        except clusters touching a must-keep id, which keep the anchor(s).
     """
     if not records:
         return []
@@ -304,20 +413,15 @@ def cdhit_dedup(
             )
             return records
 
-        # Parse .clstr to find representative IDs
-        representatives: set[str] = set()
+        # Parse .clstr → clusters → survivors (anchors win their clusters)
         clstr_file = output_fa + ".clstr"
         if os.path.exists(clstr_file):
-            with open(clstr_file) as fh:
-                for line in fh:
-                    if line.strip().endswith("*"):
-                        start = line.index(">") + 1
-                        end = line.index("...", start)
-                        representatives.add(line[start:end])
+            clusters = _parse_clstr(clstr_file)
+            representatives = _cdhit_survivor_ids(clusters, must_keep_ids)
         else:
-            # Fallback: parse output FASTA directly
-            for rec in SeqIO.parse(output_fa, "fasta"):
-                representatives.add(rec.id)
+            # Fallback: parse output FASTA directly; anchors always kept.
+            representatives = {rec.id for rec in SeqIO.parse(output_fa, "fasta")}
+            representatives |= {rid for rid in id_to_pair if rid in must_keep_ids}
 
     return [pair for rec_id, pair in id_to_pair.items() if rec_id in representatives]
 
@@ -415,29 +519,34 @@ def build_pool_for_class(
     floor: int = DEFAULT_REF_FLOOR_PER_SPECIES,
     cap: int = DEFAULT_REF_CAP_PER_TAXON,
     seed: int = DEFAULT_SELECTION_SEED,
+    anchor_records: Optional[list[tuple[int, SeqRecord]]] = None,
 ) -> tuple[list[tuple[int, SeqRecord]], dict]:
     """Build a single per-class reference pool (balanced — option 4b).
 
     1. All Berghia class-specific records are kept (guaranteed, on top of the
        refs budget ``max_size``).
-    2. References are chosen by :func:`balanced_reference_sample`: every species
-       with candidates gets a FLOOR, must-include model species are filled to
-       CAP, no taxon exceeds CAP, and the remainder is Berghia-proximity-
-       weighted — so all species are represented and no taxon floods the pool.
-       Deterministic via ``seed`` (supersedes the old uncapped-must-include +
-       unseeded proximity fill, which under-represented most species and gave
-       non-reproducible pools).
+    2. Anchors are kept (must-keep, functional landmarks) and charged to the
+       refs budget — so they come out of ``max_size`` rather than on top, the
+       balanced reference draw being shrunk by the anchor count.
+    3. The remaining references are chosen by :func:`balanced_reference_sample`:
+       every species with candidates gets a FLOOR, must-include model species
+       are filled to CAP, no taxon exceeds CAP, and the remainder is Berghia-
+       proximity-weighted — so all species are represented and no taxon floods
+       the pool. Deterministic via ``seed``.
 
     Args:
         records: (taxid, SeqRecord) pairs for this class (already CD-HIT'd).
         must_include_taxids: model-species taxa filled to CAP (kept, but bounded).
         berghia_taxid: focal taxid — used for proximity scoring.
-        max_size: refs-only budget; Berghia seqs are guaranteed on top.
+        max_size: refs-only budget; Berghia seqs are guaranteed on top, anchors
+            are charged against it.
         lineage_fn: callable(taxid) → list[int].
         berghia_records: Berghia SeqRecords for this class (always kept).
         floor: minimum reps per species (default DEFAULT_REF_FLOOR_PER_SPECIES).
         cap: maximum reps per taxon (default DEFAULT_REF_CAP_PER_TAXON).
         seed: selection seed for reproducibility.
+        anchor_records: (taxid, SeqRecord) anchor pairs for this class — kept
+            (must-keep) and charged to the refs budget.
 
     Returns:
         (selected_pairs, stats_dict)
@@ -447,13 +556,19 @@ def build_pool_for_class(
     ]
     n_berghia = len(berghia_pairs)
 
+    anchor_pairs: list[tuple[int, SeqRecord]] = list(anchor_records or [])
+    n_anchors = len(anchor_pairs)
+
     present_taxids = {taxid for taxid, _ in records}
     must_taxids_with_hits = sorted(must_include_taxids & present_taxids)
     missing_must = sorted(must_include_taxids - present_taxids)
 
+    # Anchors are charged to the refs budget: shrink the balanced-draw budget by
+    # the anchor count (anchors themselves are always kept on top of the draw).
+    refs_budget = max(0, max_size - n_anchors)
     selected_refs = balanced_reference_sample(
         records,
-        budget=max_size,
+        budget=refs_budget,
         floor=floor,
         cap=cap,
         must_include_taxids=must_include_taxids,
@@ -461,7 +576,7 @@ def build_pool_for_class(
         berghia_taxid=berghia_taxid,
         seed=seed,
     )
-    selected = berghia_pairs + selected_refs
+    selected = berghia_pairs + anchor_pairs + selected_refs
 
     # n_must_include / n_subsampled retained for report back-compat: refs drawn
     # from must-include taxa vs the rest.
@@ -473,6 +588,7 @@ def build_pool_for_class(
         "n_total_candidates": len(records),
         "n_after_cdhit": len(records),   # caller may update this field
         "n_berghia_included": n_berghia,
+        "n_anchors": n_anchors,
         "n_must_include": n_must,
         "n_subsampled": n_other,
         "n_output": len(selected),
@@ -493,13 +609,15 @@ def build_all_pools(
     out_dir: str,
     total_budget_per_class: int = DEFAULT_TOTAL_BUDGET_PER_CLASS,
     outgroup_budget_per_class: int = DEFAULT_OUTGROUP_BUDGET_PER_CLASS,
-    cluster_identity: float = 0.7,
+    cluster_identity: float = 0.9,
     cdhit_path: str = "cd-hit",
     threads: int = 4,
     must_include_taxids: frozenset[int] = DEFAULT_MUST_INCLUDE_TAXIDS,
     berghia_taxid: int = BERGHIA_TAXID_DEFAULT,
     berghia_fasta: Optional[str] = None,
     berghia_class_tsv: Optional[str] = None,
+    anchor_fasta: Optional[str] = None,
+    anchor_tsv: Optional[str] = None,
     ref_floor_per_species: int = DEFAULT_REF_FLOOR_PER_SPECIES,
     ref_cap_per_taxon: int = DEFAULT_REF_CAP_PER_TAXON,
     selection_seed: int = DEFAULT_SELECTION_SEED,
@@ -514,7 +632,7 @@ def build_all_pools(
         total_budget_per_class: per-class total budget (refs + Berghia + outgroup count). Default 3000.
             Per-class ref cap is computed as: total_budget_per_class - count_of_berghia_in_class - outgroup_budget_per_class.
         outgroup_budget_per_class: reserved slots for outgroup sequences per class. Default 10.
-        cluster_identity: CD-HIT identity threshold (default 0.7).
+        cluster_identity: CD-HIT identity threshold (default 0.9).
         cdhit_path: path to cd-hit binary.
         threads: threads for CD-HIT.
         must_include_taxids: taxids whose candidates are always kept.
@@ -522,6 +640,11 @@ def build_all_pools(
         berghia_fasta: optional path to Berghia candidate FASTA.
         berghia_class_tsv: optional path to Berghia P1 class TSV.
             Required when berghia_fasta is provided.
+        anchor_fasta: optional path to anchor_set.fasta (characterized GPCR
+            landmarks). When provided with anchor_tsv, anchors of each class are
+            injected must-keep, through CD-HIT (keep-annotated-on-collision),
+            charged to that class's refs budget.
+        anchor_tsv: optional path to anchor_set.tsv (required with anchor_fasta).
         force: re-run even if outputs already exist.
     """
     out_path = Path(out_dir)
@@ -556,6 +679,26 @@ def build_all_pools(
         print(
             "  WARNING: --berghia-fasta provided but --berghia-class-tsv missing; "
             "Berghia candidates will not be added to pools.",
+            file=sys.stderr,
+        )
+
+    # --- 2b. Load anchor set (optional) -----------------------------------
+    anchor_per_class: dict[str, list[tuple[int, SeqRecord]]] = {
+        cls: [] for cls in GPCR_CLASSES
+    }
+    if anchor_fasta and anchor_tsv:
+        if os.path.exists(anchor_fasta) and os.path.exists(anchor_tsv):
+            anchor_per_class = load_anchor_set(anchor_fasta, anchor_tsv)
+        else:
+            print(
+                f"  WARNING: anchor set not found ({anchor_fasta} / {anchor_tsv}); "
+                "anchors will not be injected. Run build_anchor_set.py first.",
+                file=sys.stderr,
+            )
+    elif anchor_fasta:
+        print(
+            "  WARNING: --anchor-fasta provided but --anchor-tsv missing; "
+            "anchors will not be injected.",
             file=sys.stderr,
         )
 
@@ -624,26 +767,37 @@ def build_all_pools(
         candidates = per_class[cls]
         n_total = len(candidates)
         cap = class_caps_computed[cls]
+        anchor_pairs = anchor_per_class.get(cls, [])
+        anchor_ids = frozenset(rec.id for _, rec in anchor_pairs)
         print(
             f"  Class {cls}: {n_total} candidates before CD-HIT (ref_cap={cap}, "
-            f"total_budget={total_budget_per_class}, berghia={n_berghia_per_class[cls]})",
+            f"total_budget={total_budget_per_class}, berghia={n_berghia_per_class[cls]}, "
+            f"anchors={len(anchor_pairs)})",
             file=sys.stderr,
         )
 
+        # Anchors go THROUGH CD-HIT with the candidates and win any collision
+        # (must-keep): a scanned candidate redundant with an annotated anchor is
+        # dropped, the anchor is kept. Berghia is never in this set, so it is
+        # never absorbed.
         after_cdhit = cdhit_dedup(
-            candidates,
+            candidates + anchor_pairs,
             identity=cluster_identity,
             threads=threads,
             cdhit_path=cdhit_path,
+            must_keep_ids=anchor_ids,
         )
-        n_after = len(after_cdhit)
+        anchor_survivors = [(t, r) for t, r in after_cdhit if r.id in anchor_ids]
+        candidate_survivors = [(t, r) for t, r in after_cdhit if r.id not in anchor_ids]
+        n_after = len(candidate_survivors)
         print(
-            f"  Class {cls}: {n_after} representatives after CD-HIT",
+            f"  Class {cls}: {n_after} candidate representatives after CD-HIT "
+            f"(+{len(anchor_survivors)} anchors kept)",
             file=sys.stderr,
         )
 
         selected, stats = build_pool_for_class(
-            records=after_cdhit,
+            records=candidate_survivors,
             must_include_taxids=must_include_taxids,
             berghia_taxid=berghia_taxid,
             max_size=cap,
@@ -652,6 +806,7 @@ def build_all_pools(
             floor=ref_floor_per_species,
             cap=ref_cap_per_taxon,
             seed=selection_seed,
+            anchor_records=anchor_survivors,
         )
         stats["n_total_candidates"] = n_total
         stats["n_after_cdhit"] = n_after
@@ -756,9 +911,15 @@ def build_args_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--cluster-identity",
         type=float,
-        default=0.7,
+        default=float(os.environ.get("REF_CLUSTER_IDENTITY", "0.9")),
         metavar="FLOAT",
-        help="CD-HIT identity threshold for deduplication (default: 0.7)",
+        help=("CD-HIT identity threshold for reference deduplication "
+              "(default: 0.9; env: REF_CLUSTER_IDENTITY). 0.9 preserves the "
+              "cross-lineage-informative (older, <90%) paralog structure that "
+              "polarizes shared vs Berghia-specific expansions, collapsing only "
+              "lineage-private near-identical recent duplicates. Berghia and "
+              "anchors are never deduped; budget is enforced by balanced "
+              "sampling, so CD-HIT need not thin aggressively."),
     )
     parser.add_argument(
         "--cdhit-path",
@@ -804,6 +965,27 @@ def build_args_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="TSV",
         help="P1 class TSV for Berghia candidates (required when --berghia-fasta is used).",
+    )
+    parser.add_argument(
+        "--anchor-fasta",
+        default=os.environ.get("ANCHOR_FASTA", "references/anchors/anchor_set.fasta"),
+        metavar="FASTA",
+        help=(
+            "anchor_set.fasta of characterized GPCR landmarks (build_anchor_set.py). "
+            "Anchors of each class are injected must-keep, through CD-HIT "
+            "(keep-annotated-on-collision), charged to the refs budget. Skipped if "
+            "the file is absent. (default: references/anchors/anchor_set.fasta; "
+            "env: ANCHOR_FASTA)"
+        ),
+    )
+    parser.add_argument(
+        "--anchor-tsv",
+        default=os.environ.get("ANCHOR_TSV", "references/anchors/anchor_set.tsv"),
+        metavar="TSV",
+        help=(
+            "anchor_set.tsv provenance (required with --anchor-fasta). "
+            "(default: references/anchors/anchor_set.tsv; env: ANCHOR_TSV)"
+        ),
     )
     parser.add_argument(
         "--ref-floor-per-species",
@@ -866,6 +1048,8 @@ def main(argv=None) -> None:
         berghia_taxid=args.berghia_taxid,
         berghia_fasta=args.berghia_fasta,
         berghia_class_tsv=args.berghia_class_tsv,
+        anchor_fasta=args.anchor_fasta,
+        anchor_tsv=args.anchor_tsv,
         ref_floor_per_species=args.ref_floor_per_species,
         ref_cap_per_taxon=args.ref_cap_per_taxon,
         selection_seed=args.selection_seed,
