@@ -30,12 +30,27 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import statistics
 import sys
 from pathlib import Path
 from typing import Optional
 
 from ete3 import Tree
+
+# IQ-TREE writes internal-node support as "SH-aLRT/UFBoot" (e.g. 83.6/100), which
+# ete3 cannot parse. Keep the UFBoot (second) value — that is the §7 gate metric
+# (with --tbe it is TBE-based, 0-100).
+_SLASH_SUPPORT = re.compile(r"\)(\d+(?:\.\d+)?)/(\d+(?:\.\d+)?)")
+
+
+def load_tree(path: str) -> Tree:
+    """Load a Newick tree, normalizing IQ-TREE 'SH-aLRT/UFBoot' supports to the
+    single UFBoot value so ete3 can read node.support."""
+    with open(path) as fh:
+        text = fh.read()
+    text = _SLASH_SUPPORT.sub(r")\2", text)
+    return Tree(text, format=0)
 
 DEFAULT_SUPPORT_THRESHOLD = 80.0   # UFBoot >=80 (use 0.80 for TBE-scaled trees)
 DEFAULT_RF_THRESHOLD = 0.10
@@ -140,6 +155,36 @@ def anchor_infiltrations(tree: Tree, ingroup_labels: set,
     return sorted(set(flagged))
 
 
+def anchor_placements(tree: Tree, ingroup_labels: set, berghia_labels: set,
+                      support_threshold: float = DEFAULT_SUPPORT_THRESHOLD) -> list:
+    """Per out-group anchor, describe its smallest-clade placement for review:
+    parent support, sister-clade size and composition, and whether it is nested
+    in a supported Berghia clade (the infiltration condition)."""
+    out: list[dict] = []
+    for leaf in tree.get_leaves():
+        if not is_outgroup_anchor(leaf.name):
+            continue
+        parent = leaf.up
+        sisters = [n for n in parent.get_leaf_names() if n != leaf.name] if parent else []
+        n_berg = sum(1 for s in sisters if s in berghia_labels)
+        n_mollusc = sum(1 for s in sisters if s in ingroup_labels and s not in berghia_labels)
+        n_anchor = sum(1 for s in sisters if is_outgroup_anchor(s))
+        support = parent.support if parent else 0.0
+        in_berg = bool(sisters and support >= support_threshold
+                       and all(s in berghia_labels for s in sisters))
+        out.append({
+            "anchor": leaf.name,
+            "parent_support": support,
+            "sister_size": len(sisters),
+            "sister_berghia": n_berg,
+            "sister_mollusc_ref": n_mollusc,
+            "sister_anchor": n_anchor,
+            "sister_other": len(sisters) - n_berg - n_mollusc - n_anchor,
+            "in_berghia_clade": in_berg,
+        })
+    return sorted(out, key=lambda d: d["anchor"])
+
+
 def _prune_copy(tree: Tree, labels: set) -> Optional[Tree]:
     """Return a copy of *tree* pruned to the leaves in *labels* present in it."""
     present = [l for l in tree.get_leaf_names() if l in labels]
@@ -213,6 +258,8 @@ def evaluate_class(tree_without: Tree, tree_with: Tree, ingroup_labels: set, *,
     if berghia_labels is None:
         berghia_labels = ingroup_labels
     infiltrations = anchor_infiltrations(tree_with, berghia_labels, support_threshold)
+    placements = anchor_placements(tree_with, ingroup_labels, berghia_labels,
+                                   support_threshold)
     rf = restricted_rf(tree_without, tree_with, ingroup_labels)
     drop = ingroup_support_drop(tree_without, tree_with, ingroup_labels)
 
@@ -229,6 +276,7 @@ def evaluate_class(tree_without: Tree, tree_with: Tree, ingroup_labels: set, *,
         "reasons": reasons,
         "n_infiltrations": len(infiltrations),
         "infiltrating_anchors": infiltrations,
+        "anchor_placements": placements,
         "rf": rf,
         "support_drop": drop,
         "thresholds": {
@@ -271,8 +319,8 @@ def build_args_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> None:
     args = build_args_parser().parse_args(argv)
-    without = Tree(args.tree_without, format=0)
-    with_anchor = Tree(args.tree_with, format=0)
+    without = load_tree(args.tree_without)
+    with_anchor = load_tree(args.tree_with)
     if args.pool_members:
         ingroup, berghia = load_pool_labels(args.pool_members)
     else:

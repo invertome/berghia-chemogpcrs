@@ -28,6 +28,45 @@ import evaluate_anchor_divergence as ead  # noqa: E402
 # anchor label parsing
 # ---------------------------------------------------------------------------
 
+def test_load_tree_parses_iqtree_slash_support(tmp_path):
+    # IQ-TREE writes node support as SH-aLRT/UFBoot (e.g. 57.1/73); ete3 cannot
+    # parse that directly. load_tree must keep the UFBoot (second) value.
+    p = tmp_path / "t.treefile"
+    p.write_text("((a:0.1,b:0.1)57.1/73:0.05,(c:0.1,d:0.1)83.6/100:0.04);")
+    t = ead.load_tree(str(p))
+    sup = sorted(n.support for n in t.traverse() if not n.is_leaf() and not n.is_root())
+    assert sup == [73.0, 100.0]
+
+
+def test_load_tree_single_number_support(tmp_path):
+    p = tmp_path / "t.nwk"
+    p.write_text("((a,b)95,(c,d)88);")
+    t = ead.load_tree(str(p))
+    sup = sorted(n.support for n in t.traverse() if not n.is_leaf() and not n.is_root())
+    assert sup == [88.0, 95.0]
+
+
+def test_anchor_placements_reports_context():
+    t = Tree("((berg1,(berg2,ANCHOR_A_3_Y)95)90,ref1);", format=0)
+    berghia = {"berg1", "berg2"}
+    ingroup = {"berg1", "berg2", "ref1"}
+    placements = {p["anchor"]: p for p in
+                  ead.anchor_placements(t, ingroup, berghia, support_threshold=80)}
+    p = placements["ANCHOR_A_3_Y"]
+    assert p["parent_support"] == 95
+    assert p["sister_berghia"] == 1          # berg2 is the sister
+    assert p["sister_size"] == 1
+    assert p["in_berghia_clade"] is True
+
+
+def test_evaluate_class_includes_placements():
+    t = Tree("((berg1,berg2)95,(ANCHOR_A_2_X,ANCHOR_A_3_Y)88);", format=0)
+    ingroup = {"berg1", "berg2"}
+    res = ead.evaluate_class(t, t, ingroup, berghia_labels=ingroup)
+    assert "anchor_placements" in res
+    assert {p["anchor"] for p in res["anchor_placements"]} == {"ANCHOR_A_2_X", "ANCHOR_A_3_Y"}
+
+
 @pytest.mark.parametrize("label,tier", [
     ("ANCHOR_A_1_P31356", "1"),
     ("ANCHOR_A_2_PLAT1", "2"),

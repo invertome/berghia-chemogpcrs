@@ -59,6 +59,21 @@ def render_markdown(report: dict) -> str:
             f"{v.get('n_infiltrations','?')} | {v.get('rf',0):.3f} | "
             f"{v.get('support_drop',0):.1f} | {reasons} |"
         )
+    # Flagged placements — out-group anchors nested in a supported focal clade.
+    flagged = []
+    for v in report["per_class"]:
+        for p in v.get("anchor_placements", []):
+            if p.get("in_berghia_clade"):
+                flagged.append((v.get("class", "?"), p))
+    if flagged:
+        lines += ["", "## Flagged placements (anchor nested in a supported focal clade)", ""]
+        for cls, p in flagged:
+            lines.append(
+                f"- **{cls}** `{p['anchor']}` — sister to {p['sister_berghia']} "
+                f"focal tip(s) (clade size {p['sister_size']}), support "
+                f"{p['parent_support']:.0f}"
+            )
+
     lines += [
         "",
         f"**Keep out-group anchors:** {', '.join(report['keep_outgroup_anchors']) or '(none)'}",
