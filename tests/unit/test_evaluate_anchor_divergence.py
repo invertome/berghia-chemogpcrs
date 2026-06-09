@@ -143,3 +143,37 @@ def test_evaluate_class_excludes_on_support_drop():
     res = ead.evaluate_class(without, with_anchor, ingroup, support_drop_threshold=5)
     assert res["verdict"] == "exclude"
     assert res["support_drop"] > 5
+
+
+# ---------------------------------------------------------------------------
+# in-group classification from the pool-membership manifest
+# ---------------------------------------------------------------------------
+
+def _mock_is_mollusc(taxid):
+    # Aplysia (6500) and Berghia (1287507) are molluscs; Platynereis (6359) is not.
+    return taxid in {6447, 6500, 1287507}
+
+
+def test_load_pool_labels(tmp_path):
+    m = tmp_path / "pool_members_class_A.tsv"
+    m.write_text(
+        "seq_id\ttaxid\tsource\n"
+        "berghia_A1\t1287507\tberghia\n"
+        "ref_aplysia\t6500\tref\n"          # mollusc ref -> in-group
+        "ref_platy\t6359\tref\n"            # non-mollusc ref -> NOT in-group
+        "ANCHOR_A_1_P1\t6500\tanchor\n"     # anchor -> never in-group set
+    )
+    ingroup, berghia = ead.load_pool_labels(str(m), is_mollusc_fn=_mock_is_mollusc)
+    assert berghia == {"berghia_A1"}
+    assert ingroup == {"berghia_A1", "ref_aplysia"}
+
+
+def test_infiltration_uses_berghia_labels_not_mollusc_refs():
+    # An out-group anchor nested among MOLLUSC REFS (not Berghia) is NOT a
+    # Berghia-clade infiltration (spec gate is Berghia clades specifically).
+    t = Tree("((berg1,(ref_apl,ANCHOR_A_3_Y)95)90,berg2);", format=0)
+    ingroup = {"berg1", "berg2", "ref_apl"}
+    berghia = {"berg1", "berg2"}
+    assert ead.anchor_infiltrations(t, berghia, support_threshold=80) == []
+    res = ead.evaluate_class(t, t, ingroup, berghia_labels=berghia)
+    assert res["n_infiltrations"] == 0

@@ -28,6 +28,7 @@ Author: Jorge L. Perez-Moreno, Ph.D., Katz Lab, University of Massachusetts
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import statistics
 import sys
@@ -39,6 +40,63 @@ from ete3 import Tree
 DEFAULT_SUPPORT_THRESHOLD = 80.0   # UFBoot >=80 (use 0.80 for TBE-scaled trees)
 DEFAULT_RF_THRESHOLD = 0.10
 DEFAULT_SUPPORT_DROP_THRESHOLD = 5.0
+
+BERGHIA_TAXID = 1287507
+MOLLUSCA_TAXID = 6447
+
+
+# ---------------------------------------------------------------------------
+# taxonomy + pool-membership manifest
+# ---------------------------------------------------------------------------
+
+_NCBI_TAXA = None
+
+
+def get_lineage(taxid: int) -> list:
+    """NCBI lineage (root→leaf) via ete3.NCBITaxa (lazy-init). Replaced in tests."""
+    global _NCBI_TAXA
+    if _NCBI_TAXA is None:
+        try:
+            from ete3 import NCBITaxa
+            _NCBI_TAXA = NCBITaxa()
+        except Exception:
+            _NCBI_TAXA = False
+    if not _NCBI_TAXA:
+        return [taxid]
+    try:
+        return _NCBI_TAXA.get_lineage(taxid) or [taxid]
+    except Exception:
+        return [taxid]
+
+
+def is_mollusc(taxid: int, lineage_fn=get_lineage) -> bool:
+    """True if *taxid* is within Mollusca (6447)."""
+    return MOLLUSCA_TAXID in set(lineage_fn(taxid))
+
+
+def load_pool_labels(members_tsv: str, *, is_mollusc_fn=is_mollusc,
+                     berghia_taxid: int = BERGHIA_TAXID) -> tuple[set, set]:
+    """Read a pool-membership manifest (seq_id, taxid, source) and return
+    (ingroup_labels, berghia_labels):
+      - berghia_labels = leaves whose source is 'berghia',
+      - ingroup_labels = Berghia + mollusc-reference leaves (anchors excluded).
+    """
+    ingroup: set[str] = set()
+    berghia: set[str] = set()
+    with open(members_tsv, newline="") as fh:
+        for row in csv.DictReader(fh, delimiter="\t"):
+            seq_id = row["seq_id"]
+            source = row.get("source", "")
+            try:
+                taxid = int(row["taxid"])
+            except (KeyError, ValueError):
+                taxid = 0
+            if source == "berghia":
+                berghia.add(seq_id)
+                ingroup.add(seq_id)
+            elif source == "ref" and is_mollusc_fn(taxid):
+                ingroup.add(seq_id)
+    return ingroup, berghia
 
 
 # ---------------------------------------------------------------------------
@@ -139,13 +197,22 @@ def ingroup_support_drop(tree_without: Tree, tree_with: Tree,
 # ---------------------------------------------------------------------------
 
 def evaluate_class(tree_without: Tree, tree_with: Tree, ingroup_labels: set, *,
+                   berghia_labels: set = None,
                    support_threshold: float = DEFAULT_SUPPORT_THRESHOLD,
                    rf_threshold: float = DEFAULT_RF_THRESHOLD,
                    support_drop_threshold: float = DEFAULT_SUPPORT_DROP_THRESHOLD,
                    ) -> dict:
     """Decide whether out-group anchors are safe for this class. Returns a metrics
-    dict with an include/exclude verdict. Tier-1 anchors are never gated."""
-    infiltrations = anchor_infiltrations(tree_with, ingroup_labels, support_threshold)
+    dict with an include/exclude verdict. Tier-1 anchors are never gated.
+
+    Placement infiltration is checked against *berghia_labels* (the gate is about
+    out-group anchors nesting in Berghia clades, spec §7); RF and support use
+    *ingroup_labels* (Berghia + mollusc, spec §6). berghia_labels defaults to
+    ingroup_labels when not supplied.
+    """
+    if berghia_labels is None:
+        berghia_labels = ingroup_labels
+    infiltrations = anchor_infiltrations(tree_with, berghia_labels, support_threshold)
     rf = restricted_rf(tree_without, tree_with, ingroup_labels)
     drop = ingroup_support_drop(tree_without, tree_with, ingroup_labels)
 
@@ -188,8 +255,13 @@ def build_args_parser() -> argparse.ArgumentParser:
     p.add_argument("--class", dest="klass", required=True, help="GPCR class label (A/B/C/F)")
     p.add_argument("--tree-without", required=True, help="Newick tree built WITHOUT out-group anchors")
     p.add_argument("--tree-with", required=True, help="Newick tree built WITH out-group anchors")
-    p.add_argument("--ingroup-labels", required=True,
-                   help="File of in-group (Berghia + mollusc) leaf labels, one per line")
+    src = p.add_mutually_exclusive_group(required=True)
+    src.add_argument("--pool-members",
+                     help="pool_members_class_<X>.tsv manifest — derives in-group "
+                          "(Berghia + mollusc) and Berghia leaf sets by taxid")
+    src.add_argument("--ingroup-labels",
+                     help="File of in-group leaf labels, one per line "
+                          "(Berghia labels default to the same set)")
     p.add_argument("--out", required=True, help="Output verdict+metrics JSON path")
     p.add_argument("--support-threshold", type=float, default=DEFAULT_SUPPORT_THRESHOLD)
     p.add_argument("--rf-threshold", type=float, default=DEFAULT_RF_THRESHOLD)
@@ -201,9 +273,14 @@ def main(argv=None) -> None:
     args = build_args_parser().parse_args(argv)
     without = Tree(args.tree_without, format=0)
     with_anchor = Tree(args.tree_with, format=0)
-    ingroup = _load_labels(args.ingroup_labels)
+    if args.pool_members:
+        ingroup, berghia = load_pool_labels(args.pool_members)
+    else:
+        ingroup = _load_labels(args.ingroup_labels)
+        berghia = None
     res = evaluate_class(
         without, with_anchor, ingroup,
+        berghia_labels=berghia,
         support_threshold=args.support_threshold,
         rf_threshold=args.rf_threshold,
         support_drop_threshold=args.support_drop_threshold,

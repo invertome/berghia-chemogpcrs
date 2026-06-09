@@ -222,3 +222,15 @@ def test_build_all_pools_injects_anchors(tmp_path):
     report = json.loads((out_dir / "pool_build_report.json").read_text())
     assert report["class_A"]["n_anchors"] == 1
     assert report["class_B"]["n_anchors"] == 1
+
+    # Pool-membership manifest maps each leaf -> taxid + source (provenance;
+    # lets the C3 eval classify in-group Berghia/mollusc tips from leaf labels).
+    import csv as _csv
+    with open(out_dir / "pool_members_class_A.tsv") as fh:
+        rows = {r["seq_id"]: r for r in _csv.DictReader(fh, delimiter="\t")}
+    assert rows["ANCHOR_A_1_P1"]["source"] == "anchor"
+    assert rows["ANCHOR_A_1_P1"]["taxid"] == "6500"
+    assert rows["berghia_A1"]["source"] == "berghia"
+    assert rows["berghia_A1"]["taxid"] == "1287507"
+    assert rows["cand_A1"]["source"] == "ref"
+    assert rows["cand_A1"]["taxid"] == "6500"

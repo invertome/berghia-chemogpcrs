@@ -820,6 +820,23 @@ def build_all_pools(
             for _, rec in selected:
                 fh.write(f">{rec.id}\n{str(rec.seq)}\n")
 
+        # Write pool-membership manifest (seq_id, taxid, source). Provenance for
+        # downstream consumers (the C3 anchor-divergence eval classifies in-group
+        # Berghia/mollusc tips by taxid, since leaf labels don't carry it).
+        berghia_ids = {rec.id for rec in berghia_per_class.get(cls, [])}
+        members_path = out_path / f"pool_members_class_{cls}.tsv"
+        with open(members_path, "w", newline="") as fh:
+            mw = csv.writer(fh, delimiter="\t")
+            mw.writerow(["seq_id", "taxid", "source"])
+            for taxid, rec in selected:
+                if rec.id.startswith("ANCHOR_"):
+                    source = "anchor"
+                elif rec.id in berghia_ids:
+                    source = "berghia"
+                else:
+                    source = "ref"
+                mw.writerow([rec.id, taxid, source])
+
         report[f"class_{cls}"] = stats
         print(
             f"  Class {cls}: wrote {stats['n_output']} sequences to {out_fa} "
