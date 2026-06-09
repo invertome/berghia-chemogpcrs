@@ -883,6 +883,43 @@ def test_max_refs_computed_from_total_budget_minus_berghia(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# 19b. Budget double-subtraction regression: Berghia must not be charged
+#      against the refs-only budget a second time inside build_pool_for_class.
+# ---------------------------------------------------------------------------
+
+def test_berghia_not_double_charged_against_refs_budget():
+    """max_size is the REFS-only cap; Berghia is guaranteed on top of it.
+
+    build_pool_for_class previously did `remaining = max_size - n_berghia - must`,
+    but max_size already had Berghia removed upstream (cap = total - n_berghia -
+    outgroup). That double-subtraction shrank every budget-bound pool by n_berghia
+    (Class A came out 2230 instead of the intended ~2990). When the refs budget
+    binds, must+ordinary must fill the *full* refs-only budget; Berghia adds on top.
+    """
+    berghia_records = [
+        SeqRecord(Seq("MKVL" * 20), id=f"ber{i}", description="")
+        for i in range(5)
+    ]
+    # 50 ordinary (non-must) candidates — far more than the refs budget of 10.
+    ordinary = [
+        (29159, SeqRecord(Seq("MSTL" * 20), id=f"ord{i}", description=""))
+        for i in range(50)
+    ]
+    selected, stats = bpcp.build_pool_for_class(
+        records=ordinary,
+        must_include_taxids=frozenset(),
+        berghia_taxid=1287507,
+        max_size=10,                      # refs-only budget
+        lineage_fn=mock_get_lineage,
+        berghia_records=berghia_records,
+    )
+    n_refs = stats["n_must_include"] + stats["n_subsampled"]
+    assert n_refs == 10, f"refs must fill the full refs-only budget (10), got {n_refs}"
+    assert stats["n_output"] == 15, f"5 Berghia + 10 refs on top, got {stats['n_output']}"
+    assert stats["n_berghia_included"] == 5
+
+
+# ---------------------------------------------------------------------------
 # 20. No berghia means budget minus outgroup_budget available for refs
 # ---------------------------------------------------------------------------
 

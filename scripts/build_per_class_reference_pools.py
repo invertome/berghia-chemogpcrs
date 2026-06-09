@@ -373,7 +373,11 @@ def build_pool_for_class(
 
     # MUST_INCLUDE taxid sequences: always retained even if they exceed max_size
     selected_must = must_records
-    remaining_slots = max(0, max_size - n_berghia - len(selected_must))
+    # max_size is the refs-only budget; Berghia (selected_berghia) is guaranteed
+    # ON TOP of it and must NOT be subtracted here — the caller already excluded
+    # Berghia when computing cap = total_budget - n_berghia - outgroup. Subtracting
+    # n_berghia again double-charged Berghia and shrank every budget-bound pool.
+    remaining_slots = max(0, max_size - len(selected_must))
 
     selected_ordinary: list[tuple[int, SeqRecord]] = []
     if remaining_slots > 0 and ordinary_records:
