@@ -79,7 +79,9 @@ for family_dir in "${family_dirs[@]}"; do
     # --genafpair = E-INS-i strategy (designed for sequences with shared
     # core domains separated by variable regions; matches GPCR
     # architecture).
-    if ! mafft --dash --maxiterate 1000 --genafpair --thread "$CPUS" \
+    # --originalseqonly: DASH structural homologs guide the alignment but are
+    # excluded from output, so the HMM models only the curated references.
+    if ! mafft --dash --originalseqonly --maxiterate 1000 --genafpair --thread "$CPUS" \
             "$seqs" > "$aligned" 2>"$out_family_dir/${family}_mafft.log"; then
         echo "[$family] DASH failed; falling back to plain E-INS-i" >&2
         mafft --maxiterate 1000 --genafpair --thread "$CPUS" \
