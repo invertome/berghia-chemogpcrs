@@ -142,10 +142,13 @@ fi
 
 # --- mafft --dash: structural prior flag (locked decision 2026-05-28) ---
 # When MAFFT_DASH=1 (default), prepend --dash to all MAFFT invocations.
+# --originalseqonly is REQUIRED alongside --dash: DASH structural homologs guide
+# the alignment but are EXCLUDED from output (else MAFFT injects 'DASH|<pdb>...'
+# rows that pollute the canonical alignment fed to the downstream tree).
 # FAMSA does not support --dash and is left unchanged.
 MAFFT_DASH_ARGS=""
 if [[ "${MAFFT_DASH:-1}" == "1" ]]; then
-    MAFFT_DASH_ARGS="--dash"
+    MAFFT_DASH_ARGS="--dash --originalseqonly"
 fi
 
 # Run the chosen aligner

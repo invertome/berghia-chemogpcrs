@@ -97,10 +97,15 @@ mkdir -p "$OUTPUT_DIR"
 # --- mafft --dash: structural prior flag (locked decision 2026-05-28) ---
 # When MAFFT_DASH=1 (default), prepend --dash to all MAFFT invocations.
 # --dash uses PDB structural priors to guide alignment of GPCR TM helices.
+# --originalseqonly is REQUIRED alongside --dash: it lets the DASH structural
+# homologs GUIDE the alignment but EXCLUDES them from the output. Without it,
+# MAFFT injects 'DASH|<pdb>_<chain>||...' homolog rows that pollute the per-class
+# pool and tree (they broke the class-A IQ-TREE run: ~239 leaked DASH rows ->
+# seed-tree/alignment name mismatch + OOM).
 # FAMSA calls are not affected (FAMSA does not support --dash).
 MAFFT_DASH_ARGS=""
 if [[ "${MAFFT_DASH:-1}" == "1" ]]; then
-    MAFFT_DASH_ARGS="--dash"
+    MAFFT_DASH_ARGS="--dash --originalseqonly"
 fi
 
 # --- Canonical alignment (regime-based via run_aligner.sh, OR a chosen mode) ---
