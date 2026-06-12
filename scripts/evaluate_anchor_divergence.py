@@ -38,10 +38,11 @@ from typing import Optional
 
 from ete3 import Tree
 
-# IQ-TREE writes internal-node support as "SH-aLRT/UFBoot" (e.g. 83.6/100), which
-# ete3 cannot parse. Keep the UFBoot (second) value — that is the §7 gate metric
-# (with --tbe it is TBE-based, 0-100).
-_SLASH_SUPPORT = re.compile(r"\)(\d+(?:\.\d+)?)/(\d+(?:\.\d+)?)")
+# IQ-TREE writes internal-node support as a slash-joined run of measures —
+# "SH-aLRT/UFBoot" (e.g. 83.6/100) or, with -abayes, "aBayes/SH-aLRT/UFBoot"
+# (e.g. 0.072/0/86) — which ete3 cannot parse. Keep the LAST (UFBoot) value, the
+# §7 gate metric (with --tbe it is TBE-based, 0-100).
+_SLASH_SUPPORT = re.compile(r"\)(?:\d+(?:\.\d+)?/)+(\d+(?:\.\d+)?)")
 
 
 def load_tree(path: str) -> Tree:
@@ -49,7 +50,7 @@ def load_tree(path: str) -> Tree:
     single UFBoot value so ete3 can read node.support."""
     with open(path) as fh:
         text = fh.read()
-    text = _SLASH_SUPPORT.sub(r")\2", text)
+    text = _SLASH_SUPPORT.sub(r")\1", text)
     return Tree(text, format=0)
 
 DEFAULT_SUPPORT_THRESHOLD = 80.0   # UFBoot >=80 (use 0.80 for TBE-scaled trees)

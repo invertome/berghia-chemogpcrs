@@ -38,6 +38,17 @@ def test_load_tree_parses_iqtree_slash_support(tmp_path):
     assert sup == [73.0, 100.0]
 
 
+def test_load_tree_parses_iqtree_three_part_support(tmp_path):
+    # With -abayes added to -alrt + -B, IQ-TREE writes a THREE-part support
+    # aBayes/SH-aLRT/UFBoot (e.g. 0.072/0/86). load_tree must keep the UFBoot
+    # (last) value, not the middle one.
+    p = tmp_path / "t3.treefile"
+    p.write_text("((a:0.1,b:0.1)0.072/0/86:0.05,(c:0.1,d:0.1)0.965/82.4/98:0.04);")
+    t = ead.load_tree(str(p))
+    sup = sorted(n.support for n in t.traverse() if not n.is_leaf() and not n.is_root())
+    assert sup == [86.0, 98.0]
+
+
 def test_load_tree_single_number_support(tmp_path):
     p = tmp_path / "t.nwk"
     p.write_text("((a,b)95,(c,d)88);")
