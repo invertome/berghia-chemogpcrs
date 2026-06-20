@@ -1,0 +1,18 @@
+clade_name	policy_class	min_assembly_level	max_count
+Heterobranchia	heterobranchia		
+Polyplacophora	rare_basal		
+Scaphopoda	rare_basal		
+Caudofoveata	rare_basal		
+Monoplacophora	rare_basal		
+Bivalvia	other_mollusca	Chromosome	
+Cephalopoda	other_mollusca	Chromosome	
+Caenogastropoda	other_mollusca	Chromosome	
+Vetigastropoda	other_mollusca	Chromosome	
+Neritimorpha	other_mollusca	Chromosome	
+Patellogastropoda	other_mollusca	Chromosome	
+Annelida	outgroup_annelida	Chromosome	2
+Platyhelminthes	outgroup_platyhelminthes	Chromosome	2
+Nemertea	outgroup_nemertea	Chromosome	2
+Brachiopoda	outgroup_brachiopoda	Chromosome	2
+Phoronida	outgroup_phoronida	Scaffold	2
+Bryozoa	outgroup_bryozoa	Chromosome	2
