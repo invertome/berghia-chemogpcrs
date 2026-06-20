@@ -28,7 +28,8 @@ def _write_m2(path: Path) -> None:
 
 def test_superset_header_and_provenance(tmp_path: Path) -> None:
     m1, m2, out = tmp_path / "m1.tsv", tmp_path / "m2.tsv", tmp_path / "u.tsv"
-    _write_m1(m1); _write_m2(m2)
+    _write_m1(m1)
+    _write_m2(m2)
     mig.write_unified(out, mig.merge_manifests(m1, m2))
     lines = out.read_text().splitlines()
     assert lines[0].split("\t") == list(mig.UNIFIED_COLUMNS)
@@ -45,7 +46,8 @@ def test_superset_header_and_provenance(tmp_path: Path) -> None:
 
 def test_sorted_by_taxid(tmp_path: Path) -> None:
     m1, m2, out = tmp_path / "m1.tsv", tmp_path / "m2.tsv", tmp_path / "u.tsv"
-    _write_m1(m1); _write_m2(m2)
+    _write_m1(m1)
+    _write_m2(m2)
     mig.write_unified(out, mig.merge_manifests(m1, m2))
     taxids = [int(r.split("\t")[0]) for r in out.read_text().splitlines()[1:]]
     assert taxids == sorted(taxids)
@@ -54,8 +56,30 @@ def test_sorted_by_taxid(tmp_path: Path) -> None:
 def test_lossless_vs_two_manifest_build(tmp_path: Path) -> None:
     """The unified manifest must yield the identical SpeciesTarget set."""
     m1, m2, out = tmp_path / "m1.tsv", tmp_path / "m2.tsv", tmp_path / "u.tsv"
-    _write_m1(m1); _write_m2(m2)
+    _write_m1(m1)
+    _write_m2(m2)
     mig.write_unified(out, mig.merge_manifests(m1, m2))
     two = [(t.taxid, t.binomial, t.clade, t.accession) for t in read_targets(m1, m2)]
     one = [(t.taxid, t.binomial, t.clade, t.accession) for t in read_targets(out)]
     assert two == one
+
+
+def test_lossless_with_taxid_in_both_manifests(tmp_path: Path) -> None:
+    """Even when a taxid appears in BOTH manifests, the unified build matches
+    the two-manifest build (first-wins dedup stays consistent: M1 wins)."""
+    m1, m2, out = tmp_path / "m1.tsv", tmp_path / "m2.tsv", tmp_path / "u.tsv"
+    _write_m1(m1)
+    m2.write_text(
+        "taxid\tbinomial\tpolicy_class\tclade_name\tsource\taccession\t"
+        "assembly_level\tannotation_status\test_protein_count\tsubmission_date\t"
+        "contig_n50\ttotal_length_bp\n"
+        "100\tFoo bar\tother_mollusca\tBivalvia\tGenBank\tGCA_100b\t"
+        "Chromosome\t\t0\t2021-02-02\t90000\t2000000\n"
+        "200\tBaz qux\theterobranchia\tHeterobranchia\tGenBank\tGCA_200\t"
+        "Chromosome\t\t0\t2021-02-02\t90000\t2000000\n"
+    )
+    mig.write_unified(out, mig.merge_manifests(m1, m2))
+    two = [(t.taxid, t.binomial, t.clade, t.accession) for t in read_targets(m1, m2)]
+    one = [(t.taxid, t.binomial, t.clade, t.accession) for t in read_targets(out)]
+    assert two == one
+    assert (100, "Foo bar", "gastropoda", "GCA_100") in one

@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import csv
 from pathlib import Path
-from typing import Union
 
 UNIFIED_COLUMNS = (
     "taxid", "binomial", "clade", "policy_class", "source", "accession",
@@ -36,22 +35,24 @@ def _row_to_unified(row: dict, source_batch: str) -> dict:
     return out
 
 
-def read_manifest_rows(path: Union[str, Path], source_batch: str) -> list[dict]:
+def read_manifest_rows(path: str | Path, source_batch: str) -> list[dict]:
     with Path(path).open() as f:
-        return [
-            _row_to_unified(row, source_batch)
-            for row in csv.DictReader(f, delimiter="\t")
-        ]
+        rows: list[dict] = []
+        for row in csv.DictReader(f, delimiter="\t"):
+            if not (row.get("taxid") or "").strip():
+                continue  # skip blank lines / taxid-less rows (read_targets skips them too)
+            rows.append(_row_to_unified(row, source_batch))
+        return rows
 
 
-def merge_manifests(m1_path: Union[str, Path], m2_path: Union[str, Path]) -> list[dict]:
+def merge_manifests(m1_path: str | Path, m2_path: str | Path) -> list[dict]:
     rows = read_manifest_rows(m1_path, "nath_phase1e")
     rows += read_manifest_rows(m2_path, "extension_phase1d")
     rows.sort(key=lambda r: int(r["taxid"]))
     return rows
 
 
-def write_unified(path: Union[str, Path], rows: list[dict]) -> None:
+def write_unified(path: str | Path, rows: list[dict]) -> None:
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w", newline="") as f:
