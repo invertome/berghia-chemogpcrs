@@ -234,6 +234,10 @@ def load_sources(args) -> tuple[list[ProteomeSource], list[ConsolidationStatus]]
         phase1a_manifest  (Path or None)
         phase1d_manifest  (Path or None)
         phase1e_manifest  (Path or None)
+        manifest          (Path or None) — unified genome inventory TSV
+                          (default: references/species_tree/genome_inventory.tsv).
+                          Read as phase "1f" when neither phase1d_manifest nor
+                          phase1e_manifest is supplied; ignored otherwise.
         phase1g_manifest  (Path or None)
         berghia_proteome  (Path or None)
         base_dir          (Path) — project root for relative path resolution

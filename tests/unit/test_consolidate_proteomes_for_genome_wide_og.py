@@ -287,6 +287,13 @@ _PHASE1E_COLS = (
     "assembly_level", "annotation_status", "est_protein_count",
     "submission_date", "drop_reason", "contig_n50", "total_length_bp",
 )
+# 14-column superset written by build_genome_inventory.py / migrate_genome_inventory.py
+_UNIFIED_COLS = (
+    "taxid", "binomial", "clade", "policy_class", "source", "accession",
+    "assembly_level", "annotation_status", "est_protein_count",
+    "submission_date", "contig_n50", "total_length_bp", "drop_reason",
+    "source_batch",
+)
 
 
 def _write_tsv(path: Path, cols: tuple, rows: list[dict]) -> None:
@@ -495,3 +502,49 @@ class TestLoadSources:
         assert dup.status == "duplicate_taxid"
         assert dup.phase == "1a"
         assert dup.message == "already seen in phase berghia"
+
+    def test_unified_manifest_read_as_phase1f_when_legacy_absent(
+        self, tmp_path: Path
+    ) -> None:
+        """When phase1d_manifest and phase1e_manifest are both None, the unified
+        genome_inventory.tsv (--manifest) is read as phase '1f'.  Exercises the
+        `elif _unified` branch in load_sources."""
+        unified_m = tmp_path / "genome_inventory.tsv"
+        # Place the proteome where _locate_proteome expects it for phase "1f":
+        # <base_dir>/references/species_tree/cache/proteomes_braker4/<leaf>.faa
+        proteome_dir = tmp_path / "references" / "species_tree" / "cache" / "proteomes_braker4"
+        proteome_dir.mkdir(parents=True)
+        (proteome_dir / "500_Unified_mollusca.faa").write_text(">prot1\nMAA\n")
+
+        _write_tsv(unified_m, _UNIFIED_COLS, [
+            {
+                "taxid": "500",
+                "binomial": "Unified mollusca",
+                "clade": "Gastropoda",
+                "policy_class": "gastropoda",
+                "source": "GenBank",
+                "accession": "GCA_000099.1",
+                "assembly_level": "Chromosome",
+                "source_batch": "datasets_20260620",
+            },
+        ])
+
+        import argparse
+        args = argparse.Namespace(
+            phase1a_manifest=None,
+            phase1d_manifest=None,
+            phase1e_manifest=None,
+            manifest=unified_m,
+            phase1g_manifest=None,
+            berghia_proteome=None,
+            base_dir=tmp_path,
+            braker4_output_dir=tmp_path / "braker4_output",
+        )
+        sources, duplicates = cons.load_sources(args)
+
+        assert len(sources) == 1
+        assert len(duplicates) == 0
+        assert sources[0].taxid == 500
+        assert sources[0].binomial == "Unified mollusca"
+        # The unified manifest is loaded as phase "1f" (BRAKER4-annotated)
+        assert sources[0].phase == "1f"
