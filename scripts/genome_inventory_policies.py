@@ -10,7 +10,11 @@ from pathlib import Path
 
 from build_species_tree_phase1d_extension_inventory import ClaadePolicy
 
-DEFAULT_POLICY_CONFIG = Path("references/species_tree/clade_policies.tsv")
+# Anchor to the repo (scripts/ → repo root) so the default resolves regardless
+# of the caller's working directory (this constant is imported by other modules).
+DEFAULT_POLICY_CONFIG = (
+    Path(__file__).resolve().parent.parent / "references/species_tree/clade_policies.tsv"
+)
 
 
 def load_clade_policies(path: str | Path = DEFAULT_POLICY_CONFIG) -> list[ClaadePolicy]:

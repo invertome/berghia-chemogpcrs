@@ -26,6 +26,5 @@ def test_loads_fields(tmp_path: Path) -> None:
 
 def test_config_matches_legacy_hardcoded_policies() -> None:
     """The shipped clade_policies.tsv must reproduce the legacy POLICIES list."""
-    cfg = Path("references/species_tree/clade_policies.tsv")
-    loaded = gip.load_clade_policies(cfg)
+    loaded = gip.load_clade_policies(gip.DEFAULT_POLICY_CONFIG)
     assert loaded == list(POLICIES)
