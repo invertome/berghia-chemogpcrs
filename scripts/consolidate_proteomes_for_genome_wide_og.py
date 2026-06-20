@@ -275,15 +275,26 @@ def load_sources(args) -> tuple[list[ProteomeSource], list[ConsolidationStatus]]
             Path(args.phase1a_manifest), "1a", base_dir, braker4_output_dir,
         ))
 
-    # Phase 1d uses "1f" phase label (BRAKER4 annotates both 1d + 1e)
-    if getattr(args, "phase1d_manifest", None):
-        _add(_read_manifest(
-            Path(args.phase1d_manifest), "1f", base_dir, braker4_output_dir,
-        ))
+    # Phase 1d/1e: prefer legacy per-phase manifests when explicitly supplied;
+    # fall back to the unified genome_inventory.tsv when neither is given.
+    _phase1d = getattr(args, "phase1d_manifest", None)
+    _phase1e = getattr(args, "phase1e_manifest", None)
+    _unified = getattr(args, "manifest", None)
 
-    if getattr(args, "phase1e_manifest", None):
+    if _phase1d or _phase1e:
+        # Legacy explicit paths — honour them as before.
+        if _phase1d:
+            _add(_read_manifest(
+                Path(_phase1d), "1f", base_dir, braker4_output_dir,
+            ))
+        if _phase1e:
+            _add(_read_manifest(
+                Path(_phase1e), "1f", base_dir, braker4_output_dir,
+            ))
+    elif _unified:
+        # Unified manifest covers both 1d and 1e species (BRAKER4-annotated).
         _add(_read_manifest(
-            Path(args.phase1e_manifest), "1f", base_dir, braker4_output_dir,
+            Path(_unified), "1f", base_dir, braker4_output_dir,
         ))
 
     if getattr(args, "phase1g_manifest", None):
@@ -349,12 +360,29 @@ def _build_argparser() -> argparse.ArgumentParser:
         help="references/species_tree/proteome_manifest.tsv",
     )
     p.add_argument(
+        "--manifest", type=Path,
+        default=Path("references/species_tree/genome_inventory.tsv"),
+        help=(
+            "Unified genome inventory TSV (default: references/species_tree/"
+            "genome_inventory.tsv). Covers species previously split across "
+            "extension_inventory.tsv (Phase 1d) and genome_inventory_unannotated.tsv "
+            "(Phase 1e). Ignored when --phase1d-manifest or --phase1e-manifest "
+            "are supplied explicitly."
+        ),
+    )
+    p.add_argument(
         "--phase1d-manifest", type=Path, default=None,
-        help="references/species_tree/extension_inventory.tsv",
+        help=(
+            "Legacy Phase 1d manifest (extension_inventory.tsv). "
+            "When supplied, overrides --manifest for Phase 1d species."
+        ),
     )
     p.add_argument(
         "--phase1e-manifest", type=Path, default=None,
-        help="references/species_tree/genome_inventory_unannotated.tsv",
+        help=(
+            "Legacy Phase 1e manifest (genome_inventory_unannotated.tsv). "
+            "When supplied, overrides --manifest for Phase 1e species."
+        ),
     )
     p.add_argument(
         "--phase1g-manifest", type=Path, default=None,

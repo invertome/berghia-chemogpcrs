@@ -516,6 +516,28 @@ class TestArgparser:
         assert args.cache_dir == Path("out")
         assert args.datasets_bin == "datasets"
 
+    def test_default_manifest_is_unified_genome_inventory(self) -> None:
+        parser = dl._build_argparser()
+        args = parser.parse_args(["--cache-dir", "out"])
+        # Default should point at the unified manifest, not the old split files.
+        assert args.manifest == [Path("references/species_tree/genome_inventory.tsv")]
+
+
+# ----------------------------------------------------------------------
+# Unified genome_inventory.tsv schema (14-col superset)
+# ----------------------------------------------------------------------
+
+def test_reads_single_unified_manifest(tmp_path: Path) -> None:
+    m = tmp_path / "genome_inventory.tsv"
+    m.write_text(
+        "taxid\tbinomial\tclade\tpolicy_class\tsource\taccession\t"
+        "assembly_level\tannotation_status\test_protein_count\tsubmission_date\t"
+        "contig_n50\ttotal_length_bp\tdrop_reason\tsource_batch\n"
+        "100\tFoo bar\tgastropoda\t\tGenBank\tGCA_100\tScaffold\t\t0\t2020\t5000\t1000000\t\tnath_phase1e\n"
+    )
+    targets = dl.read_download_targets(m)
+    assert [(t.taxid, t.accession) for t in targets] == [(100, "GCA_100")]
+
 
 class TestSubprocessSmoke:
     def test_script_runs_without_name_error_on_empty_manifest(

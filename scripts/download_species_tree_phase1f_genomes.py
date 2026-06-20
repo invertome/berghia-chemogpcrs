@@ -365,12 +365,14 @@ def _build_argparser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
-        "--manifest", type=Path, required=True, nargs="+",
+        "--manifest", type=Path, nargs="+",
+        default=[Path("references/species_tree/genome_inventory.tsv")],
         help=(
-            "One or more inventory TSVs. Accepts Phase 1e "
-            "(genome_inventory_unannotated.tsv) and/or Phase 1d "
-            "(extension_inventory.tsv). When passing both, list "
-            "Phase 1e first so its entries win per-taxid dedup."
+            "One or more inventory TSVs (default: references/species_tree/"
+            "genome_inventory.tsv). Accepts the unified schema or the older "
+            "Phase 1e (genome_inventory_unannotated.tsv) and/or Phase 1d "
+            "(extension_inventory.tsv) schemas. When passing multiple files, "
+            "list the higher-priority one first so its entries win per-taxid dedup."
         ),
     )
     p.add_argument(
