@@ -164,7 +164,7 @@ for aln in "${trimmed_alns[@]}"; do
     run_command "tree_busco_${base}" ${IQTREE} \
         -s "$aln" \
         -st AA \
-        -m "${IQTREE_MODEL_FIND}" -mset "${IQTREE_MODEL_SET}" \
+        -m "${IQTREE_MODEL_FIND}" -msub "${IQTREE_MSUB}" -mset "${IQTREE_MODEL_SET}" \
         -B "${IQTREE_BOOTSTRAP}" -alrt 1000 \
         -seed "${IQTREE_SEED}" \
         -T "${CPUS}" \

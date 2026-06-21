@@ -293,9 +293,16 @@ export IQTREE_MODEL_FIND="MFP"
 # it is recommended for the global tree. Profile mixtures (LG+C20, LG+C60,
 # LG4X) often beat single-matrix on paralog-rich data.
 # Add LG+C20+R10 / LG+C60+R10 / LG4X+R10 via -madd in the HPC retest script.
-export IQTREE_MODEL_SET="LG,VT,WAG,JTT,Dayhoff,mtREV,cpREV"
+# Restrict ModelFinder to NUCLEAR-encoded AA models pipeline-wide: chemoreceptor
+# GPCRs are nuclear genes, so organellar (mtREV/cpREV) and viral matrices are
+# biologically inappropriate and are never selected. -msub nuclear is IQ-TREE's
+# source classifier; -mset bounds the matrix search to the common nuclear winners
+# (LG/WAG/JTT dominate; Q.pfam = modern general matrix) so large per-class trees
+# stay tractable. Both overridable via env.
+export IQTREE_MSUB="${IQTREE_MSUB:-nuclear}"
+export IQTREE_MODEL_SET="${IQTREE_MODEL_SET:-LG,WAG,JTT,VT,Dayhoff,Q.pfam}"
 # Legacy combined form (deprecated; kept so older invocations don't break)
-export IQTREE_MODEL="${IQTREE_MODEL_FIND} -mset ${IQTREE_MODEL_SET}"
+export IQTREE_MODEL="${IQTREE_MODEL_FIND} -msub ${IQTREE_MSUB} -mset ${IQTREE_MODEL_SET}"
 # Bead -ryr: deterministic seeds for reproducibility (the 312h tree must be
 # re-derivable). Override per-run if needed; log to provenance.
 export IQTREE_SEED="${IQTREE_SEED:-12345}"

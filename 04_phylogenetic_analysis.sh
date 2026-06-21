@@ -314,7 +314,7 @@ for CLASS in ${GPCR_CLASSES:-A B C F}; do
         ${IQTREE} \
         -s "${CLASS_DIR}/class_${CLASS}_trimmed.fa" \
         -st AA \
-        -m "${IQTREE_MODEL_FIND}" -mset "${IQTREE_MODEL_SET}" \
+        -m "${IQTREE_MODEL_FIND}" -msub "${IQTREE_MSUB}" -mset "${IQTREE_MODEL_SET}" \
         ${IQTREE_BOOT_FLAGS} \
         -seed "${IQTREE_SEED}" \
         -T "${CPUS}" \
@@ -423,7 +423,7 @@ for level in "${!lse_taxids[@]}"; do
             lse_iqtree_seed_arg="-t ${RESULTS_DIR}/phylogenies/protein/lse_${level}/fasttree.tre"
         fi
         # shellcheck disable=SC2086
-        run_command "lse_${level}_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/lse_${level}/trimmed.fa" -st AA -m "${IQTREE_MODEL_FIND}" -mset "${IQTREE_MODEL_SET}" ${IQTREE_BOOT_FLAGS} -seed "${IQTREE_SEED}" -T "${CPUS}" ${lse_iqtree_seed_arg} --prefix "${RESULTS_DIR}/phylogenies/protein/lse_${level}"
+        run_command "lse_${level}_iqtree" ${IQTREE} -s "${RESULTS_DIR}/phylogenies/protein/lse_${level}/trimmed.fa" -st AA -m "${IQTREE_MODEL_FIND}" -msub "${IQTREE_MSUB}" -mset "${IQTREE_MODEL_SET}" ${IQTREE_BOOT_FLAGS} -seed "${IQTREE_SEED}" -T "${CPUS}" ${lse_iqtree_seed_arg} --prefix "${RESULTS_DIR}/phylogenies/protein/lse_${level}"
 
         python3 "${SCRIPTS_DIR}/visualize_tree.py" "${RESULTS_DIR}/phylogenies/protein/lse_${level}.treefile" "${RESULTS_DIR}/phylogenies/visualizations/lse_${level}"
     fi
@@ -546,7 +546,7 @@ if [ ! -f "${RESULTS_DIR}/step_completed_${base}_iqtree.txt" ]; then
         ${IQTREE} \
         -s "${OG_OUT_DIR}/${base}_trimmed.fa" \
         -st AA \
-        -m "${IQTREE_MODEL_FIND}" -mset "${IQTREE_MODEL_SET}" \
+        -m "${IQTREE_MODEL_FIND}" -msub "${IQTREE_MSUB}" -mset "${IQTREE_MODEL_SET}" \
         ${IQTREE_BOOT_FLAGS} \
         -seed "${IQTREE_SEED}" \
         -T "${CPUS}" \
