@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """aggregate_anchor_verdicts.py — combine the per-class C3 anchor-divergence
 verdicts (evaluate_anchor_divergence.py output) into a single, report-only
-summary for human review.
+summary for the user to review.
 
 Deliberately does NOT mutate config: the per-class keep/exclude recommendation
 is surfaced (markdown + JSON) so the trees can be eyeballed before the operator

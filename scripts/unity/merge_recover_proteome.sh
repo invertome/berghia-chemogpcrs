@@ -18,7 +18,7 @@
 #                 candidate's ALL-TRANSCRIPT proteome (+CDS) into proteomes_braker4/
 #                 as the standardized recovery endpoint. Unset = stop at the report.
 #
-# Default flow STOPS at the report so a human picks the winner from the BUSCO
+# Default flow STOPS at the report so the user picks the winner from the BUSCO
 # table; re-run with CACHE_WINNER=<candidate> to cache (feeds the all-557 run).
 #
 # Nautilus test invocation:

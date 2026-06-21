@@ -14,7 +14,7 @@
 # AF3 weights workflow (per https://github.com/google-deepmind/alphafold3
 # and the WEIGHTS_TERMS_OF_USE):
 #
-#   1. A human (you) must request access by filling out the form at
+#   1. You (the user) must request access by filling out the form at
 #      https://forms.gle/svvpY4u2jsHEwWYS6 and accepting the terms at
 #      https://github.com/google-deepmind/alphafold3/blob/main/WEIGHTS_TERMS_OF_USE.md.
 #      Google approves manually, typically within 1-3 business days.
