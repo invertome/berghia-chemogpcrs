@@ -46,10 +46,16 @@ if [ "${IQTREE_TBE:-1}" = "1" ]; then
 fi
 CPUS="${CPUS:-${SLURM_CPUS_PER_TASK:-16}}"
 
+# Nuclear-encoded GPCRs -> ModelFinder restricted to nuclear AA models via IQ-TREE's
+# source classifier (-msub nuclear), bounded to the common nuclear matrices that
+# actually win for these data (-mset LG,WAG,JTT,VT,Dayhoff,Q.pfam) to keep the
+# class-A search tractable; organellar/viral families excluded. -m MFP still selects
+# the best model + rate heterogeneity. Override: IQTREE_MSUB / IQTREE_CAL_MSET.
+
 CAL="${RESULTS_DIR}/p5_phase1a_validation/anchor_calibration"
-TREES_DIR="${CAL}/trees_clean"
-VERD_DIR="${CAL}/verdicts_clean"
-export LOGS_DIR="${CAL}/logs_clean"     # isolate filter-stack tool stderr
+TREES_DIR="${CAL}/trees_${CAL_SUBDIR:-clean}"
+VERD_DIR="${CAL}/verdicts_${CAL_SUBDIR:-clean}"
+export LOGS_DIR="${CAL}/logs_${CAL_SUBDIR:-clean}"     # isolate filter-stack tool stderr
 mkdir -p "${TREES_DIR}" "${VERD_DIR}" "${LOGS_DIR}"
 
 with_fa="${CAL}/pools/refs_class_${CLS}.fa"
@@ -77,7 +83,7 @@ build_tree() {                       # $1=input_fa  $2=prefix(no ext)
     [ -s "${prefix}_fasttree.tre" ] && seed_arg="-t ${prefix}_fasttree.tre"
     # shellcheck disable=SC2086
     ${IQTREE} -s "${prefix}_trimmed.fa" -st AA \
-        -m "${IQTREE_MODEL_FIND}" -mset "${IQTREE_MODEL_SET}" \
+        -m "${IQTREE_MODEL_FIND}" -msub "${IQTREE_MSUB:-nuclear}" -mset "${IQTREE_CAL_MSET:-LG,WAG,JTT,VT,Dayhoff,Q.pfam}" \
         ${IQTREE_BOOT_FLAGS} -seed "${IQTREE_SEED}" -T "${CPUS}" \
         ${seed_arg} --prefix "${prefix}"
 }

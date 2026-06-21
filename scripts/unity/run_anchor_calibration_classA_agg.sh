@@ -34,8 +34,12 @@ cd "${REPO_ROOT}"
 source "${REPO_ROOT}/config.sh"
 
 CAL="${RESULTS_DIR}/p5_phase1a_validation/anchor_calibration"
-TREES_DIR="${CAL}/trees_clean"
-VERD_DIR="${CAL}/verdicts_clean"
+TREES_DIR="${CAL}/trees_${CAL_SUBDIR:-clean}"
+VERD_DIR="${CAL}/verdicts_${CAL_SUBDIR:-clean}"
+# Report basename: keep the default name for the canonical 'clean' run; suffix it
+# for alternate runs (e.g. CAL_SUBDIR=nocloak -> anchor_calibration_report_nocloak).
+REPORT_BASE="${CAL}/anchor_calibration_report"
+[ "${CAL_SUBDIR:-clean}" != "clean" ] && REPORT_BASE="${REPORT_BASE}_${CAL_SUBDIR}"
 
 # --- Class A verdict (needs BOTH split trees) ------------------------------
 with_tree="${TREES_DIR}/with_class_A.treefile"
@@ -54,10 +58,10 @@ fi
 
 # --- Re-aggregate all verdicts into the 4-class report ---------------------
 n=$(find "${VERD_DIR}" -name 'verdict_class_*.json' 2>/dev/null | wc -l)
-echo "[classA_agg] aggregating ${n} verdict(s) from verdicts_clean/"
+echo "[classA_agg] aggregating ${n} verdict(s) from $(basename "${VERD_DIR}")/"
 python3 scripts/aggregate_anchor_verdicts.py \
     --in-dir "${VERD_DIR}" \
-    --out-json "${CAL}/anchor_calibration_report.json" \
-    --out-md "${CAL}/anchor_calibration_report.md"
-echo "===== anchor_calibration_report.md (4-class) ====="
-cat "${CAL}/anchor_calibration_report.md"
+    --out-json "${REPORT_BASE}.json" \
+    --out-md "${REPORT_BASE}.md"
+echo "===== $(basename "${REPORT_BASE}").md (4-class) ====="
+cat "${REPORT_BASE}.md"

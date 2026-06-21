@@ -12,10 +12,11 @@
 #   easily, so they stay on the 48h array. Class A is split here: task 1 = with,
 #   task 2 = without, each --time=14d --mem=384G.
 #
-#   METHOD IS IDENTICAL to B/C/F: same -m MFP -mset (full 308-model search),
-#   same UFBoot 1000 + SH-aLRT 1000 + TBE, same FastTree seed, same filter
-#   stack. The only change is job partitioning + resources — no model, sampling,
-#   or threshold change.
+#   METHOD IS IDENTICAL to B/C/F (clean array): same -m MFP -msub nuclear with
+#   -mset LG,WAG,JTT,VT,Dayhoff,Q.pfam (nuclear-source common matrices), same
+#   nocloak filter stack (submit with RUN_CLOAK=0), same UFBoot 1000 + SH-aLRT
+#   1000 + TBE, same FastTree seed. The only difference is job partitioning +
+#   resources (class A gets a 14d/384G wall per tree). No sampling/threshold change.
 #
 #   RESUME: the with-tree's DASH-free alignment (with_class_A_trimmed.fa) and
 #   ModelFinder checkpoint (with_class_A.model.gz) already exist from the failed
@@ -60,10 +61,16 @@ if [ "${IQTREE_TBE:-1}" = "1" ]; then
 fi
 CPUS="${CPUS:-${SLURM_CPUS_PER_TASK:-16}}"
 
+# Nuclear-encoded GPCRs -> ModelFinder restricted to nuclear AA models via IQ-TREE's
+# source classifier (-msub nuclear), bounded to the common nuclear matrices that
+# actually win for these data (-mset LG,WAG,JTT,VT,Dayhoff,Q.pfam) to keep the
+# class-A search tractable; organellar/viral families excluded. -m MFP still selects
+# the best model + rate heterogeneity. Override: IQTREE_MSUB / IQTREE_CAL_MSET.
+
 CAL="${RESULTS_DIR}/p5_phase1a_validation/anchor_calibration"
-TREES_DIR="${CAL}/trees_clean"
-VERD_DIR="${CAL}/verdicts_clean"
-export LOGS_DIR="${CAL}/logs_clean"     # isolate filter-stack tool stderr
+TREES_DIR="${CAL}/trees_${CAL_SUBDIR:-clean}"
+VERD_DIR="${CAL}/verdicts_${CAL_SUBDIR:-clean}"
+export LOGS_DIR="${CAL}/logs_${CAL_SUBDIR:-clean}"     # isolate filter-stack tool stderr
 mkdir -p "${TREES_DIR}" "${VERD_DIR}" "${LOGS_DIR}"
 
 # --- Array task -> which tree (1=with, 2=without) --------------------------
@@ -107,7 +114,7 @@ build_tree() {                       # $1=input_fa  $2=prefix(no ext)
     # NO -redo: IQ-TREE resumes from ${prefix}.model.gz / .ckp.gz if present.
     # shellcheck disable=SC2086
     ${IQTREE} -s "${prefix}_trimmed.fa" -st AA \
-        -m "${IQTREE_MODEL_FIND}" -mset "${IQTREE_MODEL_SET}" \
+        -m "${IQTREE_MODEL_FIND}" -msub "${IQTREE_MSUB:-nuclear}" -mset "${IQTREE_CAL_MSET:-LG,WAG,JTT,VT,Dayhoff,Q.pfam}" \
         ${IQTREE_BOOT_FLAGS} -seed "${IQTREE_SEED}" -T "${CPUS}" \
         ${seed_arg} --prefix "${prefix}"
 }
