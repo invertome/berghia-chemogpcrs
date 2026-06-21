@@ -175,7 +175,7 @@ cat "${REPORT}"
 # proteome cache as ${SAMPLE}.{aa,cds}.fna — matching the braker.aa convention
 # (all isoforms, no MAX_AA drop) used by every other cached species, so the
 # recovered sample is not the lone deflated proteome in the all-557 orthology run.
-# Leave CACHE_WINNER unset to stop at the report so a human picks the winner from
+# Leave CACHE_WINNER unset to stop at the report so the user picks the winner from
 # the BUSCO table first.
 if [ -n "${CACHE_WINNER:-}" ]; then
     case "${CACHE_WINNER}" in
