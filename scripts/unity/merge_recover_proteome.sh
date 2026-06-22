@@ -84,8 +84,12 @@ for run in "$ES_DIR" "$EP_DIR"; do
     sc="$(dirname "$(dirname "$run")")/samples.csv"
     if [ -f "$sc" ]; then
         g=$(awk -F, -v s="$SAMPLE" '$1==s{print $2}' "$sc" | head -1)
-        [ -z "$g" ] || [ "$g" = "$GENOME" ] || \
-            { echo "ERROR: $run samples.csv genome ($g) != GENOME ($GENOME)" >&2; exit 1; }
+        # Compare RESOLVED paths so equivalent spellings that differ only in
+        # representation (e.g. .../braker4_run/../braker4_genomes vs the canonical
+        # .../braker4_genomes) don't trip the guard.
+        if [ -n "$g" ] && [ "$(readlink -f "$g" 2>/dev/null)" != "$(readlink -f "$GENOME" 2>/dev/null)" ]; then
+            echo "ERROR: $run samples.csv genome ($g) != GENOME ($GENOME)" >&2; exit 1
+        fi
     fi
 done
 mkdir -p "${OUTDIR}" logs
