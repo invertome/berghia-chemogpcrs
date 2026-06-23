@@ -46,15 +46,20 @@ MINID="${MINID:-0.9}"
 COV="${COV:-0.8}"
 OUTDIR="${OUTDIR:-${REPO_ROOT}/species_tree_data/orthodb}"
 TAG="${TAG:-odb12_metazoa_plus_mollusca_aa.linclust${MINID}}"
-TMP="${TMP:-${OUTDIR}/mmseqs_tmp_${SLURM_JOB_ID:-derep}}"
+# Temp dir for mmseqs scratch. Use a script-local name rooted under OUTDIR and do
+# NOT honor the environment's $TMP: on Unity compute nodes $TMP=/tmp, which both
+# puts mmseqs scratch on the small shared node disk AND turned the cleanup below
+# into `rm -rf /tmp` (it only failed thanks to root-owned /tmp permissions).
+MMTMP="${OUTDIR}/mmseqs_tmp_${SLURM_JOB_ID:-derep}"
 CPUS="${SLURM_CPUS_PER_TASK:-32}"
 
 [ -s "$IN" ] || { echo "ERROR: input DB missing: $IN" >&2; exit 1; }
-mkdir -p "$OUTDIR" "$TMP" logs
+[ -n "$OUTDIR" ] || { echo "ERROR: OUTDIR is empty — refusing (would root mmseqs temp at /)" >&2; exit 1; }
+mkdir -p "$OUTDIR" "$MMTMP" logs
 
 echo "[$(date +%T)] linclust: $IN"
 echo "  -> ${OUTDIR}/${TAG}  (min-seq-id=$MINID cov=$COV cov-mode=1 cpus=$CPUS)"
-mmseqs easy-linclust "$IN" "${OUTDIR}/${TAG}" "$TMP" \
+mmseqs easy-linclust "$IN" "${OUTDIR}/${TAG}" "$MMTMP" \
     --min-seq-id "$MINID" -c "$COV" --cov-mode 1 \
     --split-memory-limit 200G --threads "$CPUS"
 
@@ -63,4 +68,8 @@ REP="${OUTDIR}/${TAG}_rep_seq.fasta"
 n_out=$(grep -c '^>' "$REP")
 echo "[$(date +%T)] DONE. representatives=${n_out}  -> ${REP}"
 echo "Set as ProtHint DB:  PROTEIN_DB_ABS=${REP}"
-rm -rf "$TMP"
+# Clean up scratch, but never rm outside OUTDIR (guards against the env-$TMP bug).
+case "${MMTMP}" in
+    "${OUTDIR}"/*) rm -rf -- "${MMTMP}" ;;
+    *) echo "WARN: refusing to remove unexpected temp dir '${MMTMP}'" >&2 ;;
+esac
