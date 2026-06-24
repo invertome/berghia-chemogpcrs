@@ -150,3 +150,43 @@ def test_axis1_vs_classifier_blank_evidence_is_unknown(tmp_path):
     res = vlp.axis1_vs_classifier(rows, str(tsv))
     assert res["n_agree"] == 0
     assert any(d["candidate"] == "Berg4" and d["classifier"] == "?unknown?" for d in res["discordant"])
+
+
+# ---- Task 4: axis-2 placement vs in-inference position (directional) -------
+
+
+def test_axis2_directional_infiltration_vs_clean():
+    # WITH tree: LM_A nests with the all-Berghia (Berg3,Berg4) clade @100 -> infiltrating;
+    #            LM_F sits with RefM1 (not Berghia) -> not infiltrating, no Berghia neighbor.
+    with_t = Tree("(Out:2,(((Berg3:1,Berg4:1)100:1,LM_A:1)100:1,"
+                  "((RefM1:1,LM_F:1)90:1,(Berg1:1,Berg2:1)100:1)50:1)70:1);", format=0)
+    berghia = ["Berg1", "Berg2", "Berg3", "Berg4"]
+    # clean-tree placements: both land among refs (no Berghia in the pendant subtree)
+    placements = {"LM_A": {"edge": 1, "lwr": 0.9}, "LM_F": {"edge": 1, "lwr": 0.9}}
+    edge_to_leaves = {1: ["RefM1", "RefM2"]}
+    out = vlp.axis2_position_concordance(with_t, placements, edge_to_leaves,
+                                         ["LM_A", "LM_F"], berghia, jaccard_min=0.5)
+    by = {r["landmark"]: r for r in out}
+    assert by["LM_A"]["infiltrating_in_with_tree"] is True
+    assert by["LM_A"]["with_berghia"] == ["Berg3", "Berg4"]
+    assert by["LM_A"]["placed_berghia"] == []
+    assert by["LM_A"]["reproduced"] is False              # infiltration NOT reproduced -> desired
+    assert by["LM_F"]["infiltrating_in_with_tree"] is False
+    assert by["LM_F"]["with_berghia"] == []
+    assert by["LM_F"]["reproduced"] is True               # consistently outside Berghia
+
+
+def test_axis2_reproduced_with_berghia_overlap():
+    # LM_X sister to (Berg1,Berg2) in with-tree AND placed on an edge whose pendant
+    # subtree IS {Berg1,Berg2} -> jaccard 1.0, reproduced True (real Berghia overlap path).
+    with_t = Tree("(Out:2,(Berg1:1,Berg2:1,LM_X:1)100:1);", format=0)
+    placements = {"LM_X": {"edge": 2, "lwr": 0.9}}
+    edge_to_leaves = {2: ["Berg1", "Berg2"]}
+    out = vlp.axis2_position_concordance(with_t, placements, edge_to_leaves,
+                                         ["LM_X"], ["Berg1", "Berg2"], jaccard_min=0.5)
+    r = out[0]
+    assert r["with_berghia"] == ["Berg1", "Berg2"]
+    assert r["placed_berghia"] == ["Berg1", "Berg2"]
+    assert r["jaccard"] == 1.0
+    assert r["reproduced"] is True
+    assert r["infiltrating_in_with_tree"] is True

@@ -170,6 +170,54 @@ def axis1_vs_classifier(per_candidate_rows, class_berghia_tsv):
             "confusion": dict(conf), "discordant": disc}
 
 
+def _jaccard(a, b):
+    sa, sb = set(a), set(b)
+    union = sa | sb
+    if not union:
+        return 1.0
+    return len(sa & sb) / len(union)
+
+
+def axis2_position_concordance(with_tree, placements, edge_to_leaves,
+                               landmark_ids, berghia_ids,
+                               jaccard_min=0.5, supp_min=80):
+    """Directional axis-2 comparison. For each tier-2/3 landmark, compare its
+    Berghia neighborhood in the WITH tree (sisters of the landmark leaf) vs the
+    Berghia in its placement edge's pendant subtree on the clean tree
+    (edge_to_leaves). infiltrating_in_with_tree mirrors C3's anchor_infiltrations.
+    No clean_tree arg: edge_to_leaves already encodes the clean-tree adjacency,
+    and placed_berghia is that pendant-subtree proxy."""
+    bset = set(berghia_ids)
+    with_leaves = set(with_tree.get_leaf_names())
+    out = []
+    for lid in landmark_ids:
+        with_berghia = set()
+        infiltrating = False
+        if lid in with_leaves:
+            parent = with_tree.search_nodes(name=lid)[0].up
+            if parent is not None:
+                sisters = [n for n in parent.get_leaf_names() if n != lid]
+                with_berghia = set(sisters) & bset
+                infiltrating = bool(sisters and parent.support >= supp_min
+                                    and all(s in bset for s in sisters))
+        placed_berghia = set()
+        # Limitation: placed_berghia is the pendant (descendant-only) subtree of the
+        # placement edge; for edges near internal nodes with many Berghia on the
+        # other side this undercounts Berghia adjacency and biases Jaccard downward
+        # (can show reproduced=False for a landmark that truly lands in the Berghia region).
+        if lid in placements:
+            edge = placements[lid]["edge"]
+            placed_berghia = set(edge_to_leaves.get(edge, [])) & bset
+        jac = _jaccard(with_berghia, placed_berghia)
+        out.append({"landmark": lid,
+                    "with_berghia": sorted(with_berghia),
+                    "placed_berghia": sorted(placed_berghia),
+                    "jaccard": jac,
+                    "reproduced": jac >= jaccard_min,
+                    "infiltrating_in_with_tree": infiltrating})
+    return out
+
+
 def clade_consensus(tree, per_candidate_rows, berghia_ids, supp_min=80):
     """Consensus family for each supported all-Berghia internal clade.
 
