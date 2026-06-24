@@ -1,5 +1,6 @@
 """Unit tests for validate_landmark_placement.py — Task 0: landmark loading
 and family-vocab normalizer."""
+import json
 import os
 import sys
 
@@ -38,3 +39,26 @@ def test_normalize_family_identity_and_unknown():
     assert vlp.normalize_family(" Opsin ") == "opsin"
     assert vlp.normalize_family("") == "?unknown?"
     assert vlp.normalize_family(None) == "?unknown?"
+
+
+# ---- Task 1: placement runner -------------------------------------------
+
+JPLACE = json.dumps({
+    "version": 3,
+    "tree": "((Berg1:0.1{0},Berg2:0.1{1}):0.1{2},(RefM1:0.2{3},LandX:0.2{4}):0.1{5}):0{6};",
+    "fields": ["edge_num", "like_weight_ratio"],
+    "placements": [{"n": ["ANCHOR_A_2_Q2"], "p": [[3, 0.95], [4, 0.05]]}],
+})
+
+
+def test_place_landmarks_parses_edge_and_leaves(tmp_path, monkeypatch):
+    jp = tmp_path / "p.jplace"
+    jp.write_text(JPLACE)
+    monkeypatch.setattr(vlp, "run_epang_placement", lambda *a, **k: str(jp))
+    placements, edge_to_leaves = vlp.place_landmarks(
+        ref_msa="ignored", ref_tree="ignored",
+        landmarks=[{"id": "ANCHOR_A_2_Q2", "family": "aminergic", "seq": "MK"}],
+        outdir=str(tmp_path))
+    assert placements["ANCHOR_A_2_Q2"]["edge"] == 3          # best LWR (0.95 > 0.05)
+    assert abs(placements["ANCHOR_A_2_Q2"]["lwr"] - 0.95) < 1e-9
+    assert edge_to_leaves[3] == ["RefM1"]                    # edge 3 -> its leaf
