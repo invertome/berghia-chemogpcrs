@@ -281,3 +281,13 @@ def test_main_missing_input_exits_2(tmp_path, capsys):
                   "--class-berghia-tsv", str(tmp_path / "c.tsv"),
                   "--out", str(tmp_path / "o")])
     assert e.value.code == 2
+
+
+def test_axis1_coarse_collapses_classifier_medium_token(tmp_path):
+    tsv = tmp_path / "c.tsv"
+    tsv.write_text("seq_id\tclass\tevidence_pfam\tevidence_family_hmm\ttop_evalue\n"
+                   "Berg1\tA\tPF1\taminergic_5HT\t1e-9\n")
+    rows = [{"candidate": "Berg1", "family": "aminergic", "landmark": "L1", "distance": 1, "lwr": 0.9}]
+    res = vlp.axis1_vs_classifier(rows, str(tsv))
+    assert res["n_agree"] == 1            # aminergic_5HT -> aminergic -> agrees with placement aminergic
+    assert res["concordance"] == 1.0

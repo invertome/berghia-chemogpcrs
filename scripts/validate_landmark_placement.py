@@ -19,6 +19,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import classify_via_placement as cvp
 import evaluate_anchor_divergence as ead
+from _classification_labels import label_for_hmm
 
 
 def normalize_family(f) -> str:
@@ -144,7 +145,13 @@ def axis1_vs_classifier(per_candidate_rows, class_berghia_tsv):
     """Per-candidate placement family vs classifier evidence_family_hmm.
     Candidates absent from the baseline are scored against '?unknown?'.
     confusion keys are (placement_family, classifier_family) TUPLES; callers
-    must flatten (e.g. 'plc|clf') before JSON."""
+    must flatten (e.g. 'plc|clf') before JSON.
+
+    Both sides are coarse-collapsed via label_for_hmm before normalize_family:
+    medium HMM tokens such as 'aminergic_5HT' are reduced to their coarse
+    family 'aminergic' (split on first underscore) before comparison.
+    Anchor families never contain underscores so label_for_hmm is a no-op
+    on the placement side; applying it to both keeps the comparison symmetric."""
     base = {}
     with open(class_berghia_tsv, newline="") as fh:
         reader = csv.DictReader(fh, delimiter="\t")
@@ -153,13 +160,13 @@ def axis1_vs_classifier(per_candidate_rows, class_berghia_tsv):
                 f"axis1_vs_classifier: expected 'seq_id' column in "
                 f"{class_berghia_tsv!r}; got {reader.fieldnames}")
         for row in reader:
-            base[row["seq_id"]] = normalize_family(row.get("evidence_family_hmm", ""))
+            base[row["seq_id"]] = normalize_family(label_for_hmm(row.get("evidence_family_hmm", ""))[0])
     n = 0
     n_agree = 0
     conf = Counter()
     disc = []
     for r in per_candidate_rows:
-        plc = normalize_family(r["family"])
+        plc = normalize_family(label_for_hmm(r["family"])[0])
         clf = base.get(r["candidate"], "?unknown?")
         n += 1
         conf[(plc, clf)] += 1
