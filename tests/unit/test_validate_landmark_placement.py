@@ -5,6 +5,7 @@ import os
 import sys
 
 import pytest
+from ete3 import Tree
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts"))
 import validate_landmark_placement as vlp  # noqa: E402
@@ -62,3 +63,49 @@ def test_place_landmarks_parses_edge_and_leaves(tmp_path, monkeypatch):
     assert placements["ANCHOR_A_2_Q2"]["edge"] == 3          # best LWR (0.95 > 0.05)
     assert abs(placements["ANCHOR_A_2_Q2"]["lwr"] - 0.95) < 1e-9
     assert edge_to_leaves[3] == ["RefM1"]                    # edge 3 -> its leaf
+
+
+# ---- Task 2: per-candidate + clade-consensus functional reads ---------------
+
+
+def test_nearest_landmark_assigns_family_and_gates_lwr():
+    # clean reference tree: NO landmark leaf — the landmark is *placed* on an edge.
+    t = Tree("((Berg1:1,Berg2:1)100:1,(RefM1:1,RefM2:1)90:1);", format=0)
+    # landmark LM1 placed on edge 7 == the branch above the (Berg1,Berg2) clade,
+    # so its placement node is MRCA(Berg1,Berg2). edge_to_leaves comes from place_landmarks().
+    edge_to_leaves = {7: ["Berg1", "Berg2"]}
+    fam = {"LM1": "aminergic"}
+    low = vlp.nearest_landmark_per_candidate(
+        t, {"LM1": {"edge": 7, "lwr": 0.5}}, fam, ["Berg1", "Berg2"],
+        lwr_min=0.80, edge_to_leaves=edge_to_leaves)
+    assert low == []                                   # gated out by lwr
+    rows = vlp.nearest_landmark_per_candidate(
+        t, {"LM1": {"edge": 7, "lwr": 0.95}}, fam, ["Berg1", "Berg2"],
+        lwr_min=0.80, edge_to_leaves=edge_to_leaves)
+    assert {r["candidate"] for r in rows} == {"Berg1", "Berg2"}
+    assert all(r["family"] == "aminergic" for r in rows)
+
+
+def test_clade_consensus_majority_over_supported_berghia_clade():
+    # (Berg1,Berg2,Berg3) form a supported all-Berghia clade; RefM1 outside.
+    t = Tree("(((Berg1:1,Berg2:1):1,Berg3:1)95:1,RefM1:1);", format=0)
+    rows = [
+        {"candidate": "Berg1", "family": "aminergic", "landmark": "L1", "distance": 1, "lwr": 0.9},
+        {"candidate": "Berg2", "family": "aminergic", "landmark": "L1", "distance": 1, "lwr": 0.9},
+        {"candidate": "Berg3", "family": "peptide",   "landmark": "L2", "distance": 2, "lwr": 0.9},
+    ]
+    out = vlp.clade_consensus(t, rows, ["Berg1", "Berg2", "Berg3"], supp_min=80)
+    # the supported all-Berghia clade -> majority aminergic (2 vs 1)
+    top = [c for c in out if set(c["clade_leaves"]) == {"Berg1", "Berg2", "Berg3"}]
+    assert top and top[0]["consensus_family"] == "aminergic" and top[0]["n_called"] == 3
+
+
+def test_nearest_landmark_tiebreak_is_alphabetical():
+    t = Tree("((Berg1:1,Berg2:1)100:1,(RefM1:1,RefM2:1)90:1);", format=0)
+    edge_to_leaves = {7: ["Berg1", "Berg2"]}          # both landmarks on the same edge
+    placements = {"ZZZ": {"edge": 7, "lwr": 0.95}, "AAA": {"edge": 7, "lwr": 0.95}}
+    fam = {"ZZZ": "peptide", "AAA": "aminergic"}
+    rows = vlp.nearest_landmark_per_candidate(t, placements, fam, ["Berg1"], edge_to_leaves=edge_to_leaves)
+    assert len(rows) == 1
+    assert rows[0]["landmark"] == "AAA"               # alphabetically-first wins the tie
+    assert rows[0]["family"] == "aminergic"

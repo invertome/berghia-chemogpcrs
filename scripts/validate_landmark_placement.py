@@ -12,6 +12,7 @@ import json
 import os
 import sys
 import warnings
+from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -91,3 +92,77 @@ def place_landmarks(ref_msa: str, ref_tree: str, landmarks: list,
         tree = json.load(fh)["tree"]
     edge_to_leaves = cvp._parse_newick_with_edge_labels(tree)
     return placements, edge_to_leaves
+
+
+def _placement_node(tree, edge_to_leaves, edge):
+    """The reference-tree node a landmark sits on: MRCA of the leaves under its
+    EPA-ng placement edge (or the single leaf if the edge subtends one)."""
+    leaves = edge_to_leaves.get(edge, [])
+    present = [leaf for leaf in leaves if leaf in set(tree.get_leaf_names())]
+    present = list(dict.fromkeys(present))
+    if not present:
+        return None
+    if len(present) == 1:
+        return tree.search_nodes(name=present[0])[0]
+    return tree.get_common_ancestor(present)
+
+
+def nearest_landmark_per_candidate(tree, placements, landmark_family, berghia_ids,
+                                   lwr_min=0.80, edge_to_leaves=None):
+    """For each Berghia candidate, find the nearest LWR-qualifying landmark.
+
+    Returns a list of {candidate, family, landmark, distance, lwr}, one per
+    Berghia id that has at least one reachable qualifying landmark.
+    Ties (equidistant landmarks) broken by landmark id (alphabetical), for
+    reproducibility.
+    """
+    edge_to_leaves = edge_to_leaves or {}
+    nodes = {lid: _placement_node(tree, edge_to_leaves, p["edge"])
+             for lid, p in placements.items() if p["lwr"] >= lwr_min}
+    nodes = {k: v for k, v in nodes.items() if v is not None}
+    rows = []
+    leafset = set(tree.get_leaf_names())
+    for bid in berghia_ids:
+        if bid not in leafset:
+            continue
+        bleaf = tree.search_nodes(name=bid)[0]
+        best = min(((lid, tree.get_distance(bleaf, n, topology_only=True))
+                    for lid, n in nodes.items()), key=lambda x: (x[1], x[0]), default=None)
+        if best is None:
+            continue
+        lid, dist = best
+        rows.append({"candidate": bid,
+                     "family": normalize_family(landmark_family.get(lid, "")),
+                     "landmark": lid, "distance": dist,
+                     "lwr": placements[lid]["lwr"]})
+    return rows
+
+
+def clade_consensus(tree, per_candidate_rows, berghia_ids, supp_min=80):
+    """Consensus family for each supported all-Berghia internal clade.
+
+    An LSE clade is an internal node with support >= supp_min whose leaf set
+    is a subset of berghia_ids only (no reference taxa) and has >= 2 tips.
+    Consensus = majority family among clade members present in per_candidate_rows;
+    ties broken by lowest-sorted family name (deterministic).
+
+    Returns a list of {clade_leaves, consensus_family, n_called}.
+    Clades with no called members are skipped.
+    """
+    fam_by_cand = {r["candidate"]: normalize_family(r["family"]) for r in per_candidate_rows}
+    bset = set(berghia_ids)
+    out = []
+    for node in tree.traverse():
+        if node.is_leaf():
+            continue
+        leaves = set(node.get_leaf_names())
+        berg = leaves & bset
+        if len(berg) < 2 or leaves != berg or node.support < supp_min:
+            continue
+        fams = [fam_by_cand[b] for b in berg if b in fam_by_cand]
+        if not fams:
+            continue
+        cnt = Counter(fams)
+        top = sorted(cnt.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+        out.append({"clade_leaves": sorted(berg), "consensus_family": top, "n_called": len(fams)})
+    return out
