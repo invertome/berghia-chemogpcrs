@@ -71,7 +71,7 @@ def select_annotated_extension(extension_tsv: str, datasets_jsonl: str) -> list:
 def write_download_manifest(targets: list, out_tsv: str) -> None:
     Path(out_tsv).parent.mkdir(parents=True, exist_ok=True)
     with open(out_tsv, "w", newline="") as fh:
-        w = csv.writer(fh, delimiter="\t")
+        w = csv.writer(fh, delimiter="\t", lineterminator="\n")
         w.writerow(DOWNLOAD_MANIFEST_COLUMNS)
         for t in targets:
             w.writerow([t["taxid"], t["binomial"], t["clade"], t["accession"]])
@@ -81,7 +81,47 @@ def write_staged_manifest(targets: list, out_tsv: str) -> None:
     """The 10-col proteome_manifest rows for the harvested subset (drop_reason='')."""
     Path(out_tsv).parent.mkdir(parents=True, exist_ok=True)
     with open(out_tsv, "w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=list(PROTEOME_MANIFEST_COLUMNS), delimiter="\t")
+        w = csv.DictWriter(fh, fieldnames=list(PROTEOME_MANIFEST_COLUMNS),
+                           delimiter="\t", lineterminator="\n")
         w.writeheader()
         for t in targets:
             w.writerow({c: t.get(c, "") for c in PROTEOME_MANIFEST_COLUMNS})
+
+
+def _read_status(download_results_tsv: str) -> dict:
+    if not Path(download_results_tsv).exists():
+        raise FileNotFoundError(f"download_results_tsv not found: {download_results_tsv!r}")
+    out = {}
+    with open(download_results_tsv, newline="") as fh:
+        for row in csv.DictReader(fh, delimiter="\t"):
+            out[(row.get("taxid") or "").strip()] = (row.get("status") or "").strip()
+    return out
+
+
+def append_to_proteome_manifest(staged_tsv: str, download_results_tsv: str,
+                                proteome_manifest_tsv: str) -> int:
+    """Append ok/ok_no_cds staged species to proteome_manifest.tsv (idempotent)."""
+    if not Path(proteome_manifest_tsv).exists():
+        raise FileNotFoundError(
+            f"proteome_manifest_tsv not found: {proteome_manifest_tsv!r} (run Phase 1a before harvest)")
+    status = _read_status(download_results_tsv)
+    existing = set()
+    with open(proteome_manifest_tsv, newline="") as fh:
+        for row in csv.DictReader(fh, delimiter="\t"):
+            existing.add((row.get("taxid") or "").strip())
+    to_add = []
+    with open(staged_tsv, newline="") as fh:
+        for row in csv.DictReader(fh, delimiter="\t"):
+            tx = (row.get("taxid") or "").strip()
+            if tx in existing:
+                continue
+            if status.get(tx) not in ("ok", "ok_no_cds"):
+                continue
+            to_add.append({c: row.get(c, "") for c in PROTEOME_MANIFEST_COLUMNS})
+    if to_add:
+        with open(proteome_manifest_tsv, "a", newline="") as fh:
+            w = csv.DictWriter(fh, fieldnames=list(PROTEOME_MANIFEST_COLUMNS),
+                               delimiter="\t", lineterminator="\n")
+            for r in to_add:
+                w.writerow(r)
+    return len(to_add)
