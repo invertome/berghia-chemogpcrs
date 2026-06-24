@@ -218,6 +218,55 @@ def axis2_position_concordance(with_tree, placements, edge_to_leaves,
     return out
 
 
+def _prune_to(tree, labels):
+    present = [leaf for leaf in tree.get_leaf_names() if leaf in labels]
+    if len(present) < 3:
+        return None
+    t = tree.copy()
+    t.prune(present, preserve_branch_length=True)
+    return t
+
+
+def _supported_clades(tree, supp_min):
+    all_leaves = frozenset(tree.get_leaf_names())
+    out = set()
+    for node in tree.traverse():
+        if node.is_leaf() or node.is_root():
+            continue
+        clade = frozenset(node.get_leaf_names())
+        if 2 <= len(clade) < len(all_leaves) and node.support >= supp_min:
+            out.add(clade)
+    return out
+
+
+def axis3_lse_robustness(with_tree, clean_tree, berghia_ids, supp_min=80):
+    """Berghia-restricted RF + shared supported-clade fraction between the
+    with-anchor and clean trees. Low rf = anchors didn't perturb the LSE
+    structure (drop harmless); high rf = they did (clean tree is LBA-free, so
+    that supports the drop). Clean tree is the shared-fraction denominator."""
+    neutral = {"rf": 0.0, "max_rf": 0, "n_shared_clades": 0,
+               "n_clean_clades": 0, "shared_fraction": 1.0}
+    bset = set(berghia_ids)
+    a = _prune_to(with_tree, bset)
+    b = _prune_to(clean_tree, bset)
+    if a is None or b is None:
+        return neutral
+    shared = set(a.get_leaf_names()) & set(b.get_leaf_names())
+    a = _prune_to(a, shared)
+    b = _prune_to(b, shared)
+    if a is None or b is None:
+        return neutral
+    rf, max_rf = a.robinson_foulds(b, unrooted_trees=True)[:2]
+    norm_rf = (rf / max_rf) if max_rf else 0.0
+    with_clades = _supported_clades(a, supp_min)
+    clean_clades = _supported_clades(b, supp_min)
+    n_shared = len(with_clades & clean_clades)
+    n_clean = len(clean_clades)
+    return {"rf": norm_rf, "max_rf": max_rf, "n_shared_clades": n_shared,
+            "n_clean_clades": n_clean,
+            "shared_fraction": (n_shared / n_clean) if n_clean else 1.0}
+
+
 def clade_consensus(tree, per_candidate_rows, berghia_ids, supp_min=80):
     """Consensus family for each supported all-Berghia internal clade.
 

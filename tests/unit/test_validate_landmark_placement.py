@@ -190,3 +190,41 @@ def test_axis2_reproduced_with_berghia_overlap():
     assert r["jaccard"] == 1.0
     assert r["reproduced"] is True
     assert r["infiltrating_in_with_tree"] is True
+
+
+# ---- Task 5: axis-3 Berghia-restricted LSE robustness ----------------------
+
+
+def test_axis3_identical_berghia_topology_rf_zero():
+    with_t = Tree("((((Berg1:1,Berg2:1)100:1,Berg3:1)95:1,Berg4:1)90:1,(RefM1:1,RefM2:1)50:1);", format=0)
+    clean_t = Tree("((((Berg1:1,Berg2:1)100:1,Berg3:1)95:1,Berg4:1)90:1,RefX:1);", format=0)
+    res = vlp.axis3_lse_robustness(with_t, clean_t, ["Berg1","Berg2","Berg3","Berg4"], supp_min=80)
+    assert res["rf"] == 0.0
+    assert res["shared_fraction"] == 1.0
+    assert res["n_clean_clades"] >= 1
+
+
+def test_axis3_moved_tip_increases_rf():
+    with_t = Tree("((((Berg1:1,Berg2:1)100:1,Berg3:1)95:1,Berg4:1)90:1,RefX:1);", format=0)
+    # Berg2 and Berg3 swapped -> different Berghia topology
+    clean_t = Tree("((((Berg1:1,Berg3:1)100:1,Berg2:1)95:1,Berg4:1)90:1,RefX:1);", format=0)
+    res = vlp.axis3_lse_robustness(with_t, clean_t, ["Berg1","Berg2","Berg3","Berg4"], supp_min=80)
+    assert res["rf"] > 0.0
+    assert res["shared_fraction"] < 1.0
+
+
+def test_axis3_topology_preserved_but_support_degraded():
+    # identical Berghia topology, but (Berg1,Berg2) is supported in clean (100)
+    # and unsupported in with (10) -> rf 0 (same topology) but shared_fraction < 1.
+    with_t = Tree("((((Berg1:1,Berg2:1)10:1,Berg3:1)95:1,Berg4:1)90:1,RefX:1);", format=0)
+    clean_t = Tree("((((Berg1:1,Berg2:1)100:1,Berg3:1)95:1,Berg4:1)90:1,RefX:1);", format=0)
+    res = vlp.axis3_lse_robustness(with_t, clean_t, ["Berg1", "Berg2", "Berg3", "Berg4"], supp_min=80)
+    assert res["rf"] == 0.0
+    assert res["shared_fraction"] == 0.5
+
+
+def test_axis3_too_few_shared_berghia_is_neutral():
+    with_t = Tree("((Berg1:1,Berg2:1)100:1,RefM1:1);", format=0)
+    clean_t = Tree("((Berg1:1,Berg2:1)100:1,RefX:1);", format=0)
+    res = vlp.axis3_lse_robustness(with_t, clean_t, ["Berg1","Berg2"], supp_min=80)  # only 2 Berghia
+    assert res == {"rf": 0.0, "max_rf": 0, "n_shared_clades": 0, "n_clean_clades": 0, "shared_fraction": 1.0}
