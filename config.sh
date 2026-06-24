@@ -361,6 +361,39 @@ export OUTGROUP_SOURCE_CLASS_F="${OUTGROUP_SOURCE_CLASS_F:-A}"
 # Outgroup size per tree (best practice ~10 seqs, override-able).
 export OUTGROUP_BUDGET_PER_CLASS="${OUTGROUP_BUDGET_PER_CLASS:-10}"
 
+# Anchor out-group tiers — which GPCR classes keep tier-2/3 (out-group:
+# Platynereis + fly/worm) LANDMARK anchors in the per-class TREE INFERENCE.
+# Empty = none: every per-class tree is built from in-group sequences + tier-1
+# (reviewed mollusc) landmark anchors only. Comma-separated class letters opt a
+# class back in (e.g. "F").
+#
+# This is the anchor-INJECTION control (a functional reference frame inside the
+# tree). It is NOT tree rooting: each per-class tree is rooted by SISTER-CLASS
+# sequences via OUTGROUP_SOURCE_CLASS_* above (04_phylogenetic_analysis.sh
+# L228-244), a separate FASTA from a different ref pool — so dropping out-group
+# anchors here does NOT unroot anything.
+#
+# Decision (2026-06-24, user): exclude out-group anchors from ALL four classes
+# (uniform in-group + tier-1 method). The C3 calibration (CLOAK-free nuclear;
+# report results/p5_phase1a_validation/anchor_calibration/
+# anchor_calibration_report_nocloak.md) found tier-2/3 anchors corrupt the
+# in-group topology in 3/4 classes — A exclude (5 anchors nest INSIDE 100-support
+# Berghia clades [LBA] + in-group RF 0.475), B exclude (RF 0.294), C exclude
+# (RF 0.104, borderline) — with F the lone safe class (RF 0.040). Rather than
+# keep them in F alone (building the four trees by different rules), we drop them
+# everywhere: the calibration is a safety screen the distant landmarks largely
+# failed, not a per-class optimizer. Family/function assignment of Berghia clades
+# is done by the SEPARATE non-chemoreceptor classifier (HMM + OG-vote + EPA-ng
+# placement on dedicated reference trees), so the per-class trees need only
+# in-group structure; injecting distant landmarks into the INFERENCE would add
+# LBA risk for a role already served elsewhere by placement.
+#
+# Consumed at production per-class pool build (bead 521.6, NOT yet wired into a
+# numbered stage):
+#   build_per_class_reference_pools.py --anchor-tiers 1      (classes NOT listed)
+#   build_per_class_reference_pools.py --anchor-tiers 1,2,3  (classes listed here)
+export ANCHOR_OUTGROUP_CLASSES="${ANCHOR_OUTGROUP_CLASSES:-}"
+
 # Balanced per-class reference sampling (P2, option 4b): per-species floor + per-taxon
 # cap so all species are represented and no taxon floods the pool (uncapped must-include
 # previously left only ~45/90 species in the Class-A tree, biasing LSE inference).
