@@ -228,3 +228,56 @@ def test_axis3_too_few_shared_berghia_is_neutral():
     clean_t = Tree("((Berg1:1,Berg2:1)100:1,RefX:1);", format=0)
     res = vlp.axis3_lse_robustness(with_t, clean_t, ["Berg1","Berg2"], supp_min=80)  # only 2 Berghia
     assert res == {"rf": 0.0, "max_rf": 0, "n_shared_clades": 0, "n_clean_clades": 0, "shared_fraction": 1.0}
+
+
+# ---- Task 6: report writer + CLI -------------------------------------------
+
+
+def _fake_result(klass="A"):
+    return {"class": klass,
+            "per_candidate": [{"candidate": "Berg1", "family": "aminergic", "landmark": "L1", "distance": 1, "lwr": 0.9}],
+            "clade_consensus": [{"clade_leaves": ["Berg1", "Berg2"], "consensus_family": "aminergic", "n_called": 2}],
+            "axis1": {"n": 1, "n_agree": 1, "concordance": 1.0, "confusion": {("aminergic", "aminergic"): 1}, "discordant": []},
+            "axis2": [{"landmark": "L1", "with_berghia": ["Berg1"], "placed_berghia": [], "jaccard": 0.0, "reproduced": False, "infiltrating_in_with_tree": True}],
+            "axis3": {"rf": 0.1, "max_rf": 10, "n_shared_clades": 4, "n_clean_clades": 5, "shared_fraction": 0.8}}
+
+
+def test_write_report_emits_six_files_and_md_sections(tmp_path):
+    out = tmp_path / "lp"
+    vlp.write_report(str(out), [_fake_result("A")])
+    for fn in ["per_candidate_calls.tsv", "clade_consensus.tsv", "axis1_concordance.tsv",
+               "axis2_position.tsv", "axis3_lse_robustness.tsv", "landmark_placement_report.md"]:
+        p = out / fn
+        assert p.exists() and p.stat().st_size > 0
+    md = (out / "landmark_placement_report.md").read_text()
+    assert "Axis 1" in md and "Axis 2" in md and "Axis 3" in md
+    assert "infiltrat" in md.lower()
+    # confusion never written as a raw python tuple
+    a1 = (out / "axis1_concordance.tsv").read_text() + md
+    assert "('aminergic'" not in a1 and "aminergic|aminergic" in (a1)
+
+
+def test_write_report_empty_results(tmp_path):
+    out = tmp_path / "lp"
+    vlp.write_report(str(out), [])
+    for fn in ["per_candidate_calls.tsv", "clade_consensus.tsv", "axis1_concordance.tsv",
+               "axis2_position.tsv", "axis3_lse_robustness.tsv", "landmark_placement_report.md"]:
+        assert (out / fn).exists()
+    md = (out / "landmark_placement_report.md").read_text()
+    assert "Axis 1" in md and "Axis 2" in md and "Axis 3" in md
+
+
+def test_main_help_exits_zero():
+    with pytest.raises(SystemExit) as e:
+        vlp.main(["--help"])
+    assert e.value.code == 0
+
+
+def test_main_missing_input_exits_2(tmp_path, capsys):
+    with pytest.raises(SystemExit) as e:
+        vlp.main(["--calibration-dir", str(tmp_path / "nope"),
+                  "--anchor-tsv", str(tmp_path / "a.tsv"),
+                  "--anchor-fasta", str(tmp_path / "a.fa"),
+                  "--class-berghia-tsv", str(tmp_path / "c.tsv"),
+                  "--out", str(tmp_path / "o")])
+    assert e.value.code == 2

@@ -7,6 +7,7 @@ Author: Jorge L. Perez-Moreno, Ph.D., Katz Lab, University of Massachusetts
 """
 from __future__ import annotations
 import argparse
+import contextlib
 import csv
 import json
 import os
@@ -17,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import classify_via_placement as cvp
+import evaluate_anchor_divergence as ead
 
 
 def normalize_family(f) -> str:
@@ -295,3 +297,269 @@ def clade_consensus(tree, per_candidate_rows, berghia_ids, supp_min=80):
         top = sorted(cnt.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
         out.append({"clade_leaves": sorted(berg), "consensus_family": top, "n_called": len(fams)})
     return out
+
+
+# ---------------------------------------------------------------------------
+# Task 6: per-class orchestration + report writer + CLI
+# ---------------------------------------------------------------------------
+
+
+def _flatten_confusion(confusion: dict) -> dict:
+    """Flatten (placement_family, classifier_family) tuple keys to 'plc|clf'
+    strings so the confusion matrix is JSON/TSV/markdown safe (never a raw
+    Python tuple)."""
+    return {f"{k[0]}|{k[1]}": v for k, v in confusion.items()}
+
+
+def _load_berghia_ids(pool_members_tsv: str) -> list:
+    """Berghia seq_ids from a pool_members_class_<X>.tsv (columns seq_id, taxid,
+    source); a Berghia tip is a row with source == 'berghia'."""
+    out = []
+    with open(pool_members_tsv, newline="") as fh:
+        for row in csv.DictReader(fh, delimiter="\t"):
+            if row.get("source") == "berghia":
+                out.append(row["seq_id"])
+    return out
+
+
+def run_class(klass, calibration_dir, anchor_tsv, anchor_fasta, class_berghia_tsv,
+              outdir, threads=4, lwr_min=0.80, supp_min=80, jaccard_min=0.5):
+    """Wire Tasks 1-5 for one class and return its per-class result dict.
+
+    This is the only function that calls real tools (mafft/epa-ng via
+    place_landmarks); it is exercised for real in Task 8 (not unit-tested).
+    Trees carry IQ-TREE SH-aLRT/UFBoot supports, so they are loaded through the
+    support-normalizing loader (evaluate_anchor_divergence.load_tree).
+    """
+    trees_dir = os.path.join(calibration_dir, "trees_nocloak")
+    clean_tree_path = os.path.join(trees_dir, f"without_class_{klass}.treefile")
+    with_tree_path = os.path.join(trees_dir, f"with_class_{klass}.treefile")
+    clean_msa_candidates = [
+        os.path.join(trees_dir, f"without_class_{klass}_trimmed.fa"),
+        os.path.join(trees_dir, f"without_class_{klass}_aligned.fa"),
+        os.path.join(trees_dir, f"_fs_without_class_{klass}", f"without_class_{klass}_tapered.fa"),
+    ]
+    clean_msa = next((p for p in clean_msa_candidates if os.path.exists(p)), None)
+    if clean_msa is None:
+        raise FileNotFoundError(
+            f"run_class: no clean-tree MSA for class {klass}; tried "
+            + ", ".join(clean_msa_candidates))
+
+    pool_members = os.path.join(calibration_dir, "pools", f"pool_members_class_{klass}.tsv")
+    berghia_ids = _load_berghia_ids(pool_members)
+
+    clean_tree = ead.load_tree(clean_tree_path)
+    with_tree = ead.load_tree(with_tree_path)
+
+    landmarks = load_landmarks(anchor_tsv, anchor_fasta, klass)
+    placements, edge_to_leaves = place_landmarks(
+        clean_msa, clean_tree_path, landmarks,
+        os.path.join(outdir, f"class_{klass}"), threads)
+    landmark_family = {lm["id"]: lm["family"] for lm in landmarks}
+    landmark_ids = [lm["id"] for lm in landmarks]
+
+    per_candidate = nearest_landmark_per_candidate(
+        clean_tree, placements, landmark_family, berghia_ids, lwr_min, edge_to_leaves)
+    clade = clade_consensus(clean_tree, per_candidate, berghia_ids, supp_min)
+    axis1 = axis1_vs_classifier(per_candidate, class_berghia_tsv)
+    axis2 = axis2_position_concordance(
+        with_tree, placements, edge_to_leaves, landmark_ids, berghia_ids, jaccard_min, supp_min)
+    axis3 = axis3_lse_robustness(with_tree, clean_tree, berghia_ids, supp_min)
+
+    return {"class": klass, "per_candidate": per_candidate, "clade_consensus": clade,
+            "axis1": axis1, "axis2": axis2, "axis3": axis3}
+
+
+def write_report(outdir, per_class_results):
+    """Emit the 6 output files (5 TSVs + markdown) summarising the study,
+    aggregating rows across classes with a leading `class` column. Confusion
+    tuple keys are flattened to 'plc|clf' before writing."""
+    od = Path(outdir)
+    od.mkdir(parents=True, exist_ok=True)
+
+    with contextlib.ExitStack() as stack:
+        def _writer(name, header):
+            fh = stack.enter_context(open(od / name, "w", newline=""))
+            w = csv.writer(fh, delimiter="\t")
+            w.writerow(header)
+            return w
+
+        pc_w = _writer("per_candidate_calls.tsv",
+                       ["class", "candidate", "family", "landmark", "distance", "lwr"])
+        cc_w = _writer("clade_consensus.tsv",
+                       ["class", "clade_leaves", "consensus_family", "n_called"])
+        a1_w = _writer("axis1_concordance.tsv",
+                       ["class", "n", "n_agree", "concordance"])
+        a2_w = _writer("axis2_position.tsv",
+                       ["class", "landmark", "with_berghia", "placed_berghia",
+                        "jaccard", "reproduced", "infiltrating_in_with_tree"])
+        a3_w = _writer("axis3_lse_robustness.tsv",
+                       ["class", "rf", "max_rf", "n_shared_clades",
+                        "n_clean_clades", "shared_fraction"])
+
+        for res in per_class_results:
+            klass = res["class"]
+            for r in res["per_candidate"]:
+                pc_w.writerow([klass, r["candidate"], r["family"], r["landmark"],
+                               r["distance"], r["lwr"]])
+            for c in res["clade_consensus"]:
+                cc_w.writerow([klass, ";".join(c["clade_leaves"]),
+                               c["consensus_family"], c["n_called"]])
+            a1 = res["axis1"]
+            a1_w.writerow([klass, a1["n"], a1["n_agree"], a1["concordance"]])
+            for r in res["axis2"]:
+                a2_w.writerow([klass, r["landmark"], ";".join(r["with_berghia"]),
+                               ";".join(r["placed_berghia"]), r["jaccard"],
+                               r["reproduced"], r["infiltrating_in_with_tree"]])
+            a3 = res["axis3"]
+            a3_w.writerow([klass, a3["rf"], a3["max_rf"], a3["n_shared_clades"],
+                           a3["n_clean_clades"], a3["shared_fraction"]])
+
+    _write_markdown(od / "landmark_placement_report.md", per_class_results)
+
+
+def _write_markdown(path, per_class_results):
+    """Markdown narrative: per-class summary + a section per axis with the
+    directional-interpretation sentences."""
+    lines = []
+    lines.append("# Landmark-placement validation report")
+    lines.append("")
+    lines.append("One-time pilot: tier-2/3 out-group landmarks (dropped by the C3 "
+                 "anchor-divergence gate) are placed back onto the clean per-class "
+                 "trees with EPA-ng, then read along three directional axes.")
+    lines.append("")
+
+    lines.append("## Per-class summary")
+    lines.append("")
+    lines.append("| class | candidates called | LSE clades called | axis-1 concordance | axis-3 rf | axis-3 shared_fraction |")
+    lines.append("|---|---|---|---|---|---|")
+    for res in per_class_results:
+        a1 = res["axis1"]
+        a3 = res["axis3"]
+        lines.append(f"| {res['class']} | {len(res['per_candidate'])} | "
+                     f"{len(res['clade_consensus'])} | {a1['concordance']:.3f} | "
+                     f"{a3['rf']:.3f} | {a3['shared_fraction']:.3f} |")
+    lines.append("")
+
+    lines.append("## Axis 1 — functional read vs classifier")
+    lines.append("")
+    lines.append("Per-candidate placement family vs the classifier's "
+                 "`evidence_family_hmm`. High concordance means the placement-based "
+                 "functional read agrees with the independent HMM classifier.")
+    lines.append("")
+    for res in per_class_results:
+        a1 = res["axis1"]
+        lines.append(f"### Class {res['class']} — concordance "
+                     f"{a1['concordance']:.3f} ({a1['n_agree']}/{a1['n']})")
+        lines.append("")
+        lines.append("Confusion (placement|classifier -> count):")
+        lines.append("")
+        lines.append("| placement|classifier | count |")
+        lines.append("|---|---|")
+        for k, v in sorted(_flatten_confusion(a1["confusion"]).items()):
+            lines.append(f"| {k} | {v} |")
+        lines.append("")
+        if a1["discordant"]:
+            lines.append("Discordant candidates:")
+            lines.append("")
+            for d in a1["discordant"]:
+                lines.append(f"- {d['candidate']}: placement={d['placement']}, "
+                             f"classifier={d['classifier']}")
+            lines.append("")
+        else:
+            lines.append("No discordant candidates.")
+            lines.append("")
+
+    lines.append("## Axis 2 — placement vs in-inference position")
+    lines.append("")
+    lines.append("Directional: where a landmark is soundly placed we expect the "
+                 "EPA-ng position to *reproduce* its in-inference (with-anchor) "
+                 "Berghia neighborhood; where the with-anchor tree shows the "
+                 "landmark infiltrating an all-Berghia clade (long-branch "
+                 "attraction), we expect placement to NOT reproduce that "
+                 "infiltration — i.e. `reproduced=False` for an infiltrating "
+                 "landmark is the desired outcome and supports the drop.")
+    lines.append("")
+    for res in per_class_results:
+        rows = res["axis2"]
+        n_repro = sum(1 for r in rows if r["reproduced"])
+        n_infil = sum(1 for r in rows if r["infiltrating_in_with_tree"])
+        lines.append(f"### Class {res['class']} — {len(rows)} landmarks; "
+                     f"{n_repro} reproduced, {n_infil} infiltrating in with-tree")
+        lines.append("")
+        lines.append("| landmark | with_berghia | placed_berghia | jaccard | reproduced | infiltrating_in_with_tree |")
+        lines.append("|---|---|---|---|---|---|")
+        for r in rows:
+            lines.append(f"| {r['landmark']} | {';'.join(r['with_berghia'])} | "
+                         f"{';'.join(r['placed_berghia'])} | {r['jaccard']:.3f} | "
+                         f"{r['reproduced']} | {r['infiltrating_in_with_tree']} |")
+        lines.append("")
+
+    lines.append("## Axis 3 — LSE robustness")
+    lines.append("")
+    lines.append("Berghia-restricted Robinson-Foulds between the with-anchor and "
+                 "clean trees. A low rf means adding the anchors did not perturb "
+                 "the lineage-specific-expansion structure, so dropping them is "
+                 "harmless. A high rf means the anchors did perturb the Berghia "
+                 "structure; since the clean tree is the LBA-free reference, a high "
+                 "rf supports the drop.")
+    lines.append("")
+    lines.append("| class | rf | shared_fraction | n_shared_clades | n_clean_clades |")
+    lines.append("|---|---|---|---|---|")
+    for res in per_class_results:
+        a3 = res["axis3"]
+        lines.append(f"| {res['class']} | {a3['rf']:.3f} | "
+                     f"{a3['shared_fraction']:.3f} | {a3['n_shared_clades']} | "
+                     f"{a3['n_clean_clades']} |")
+    lines.append("")
+
+    Path(path).write_text("\n".join(lines))
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(
+        description="Place dropped tier-2/3 landmarks on the clean per-class "
+                    "trees and run the three directional validation axes.")
+    p.add_argument("--calibration-dir", required=True,
+                   help="C3 anchor_calibration directory (contains trees_nocloak/, pools/)")
+    p.add_argument("--anchor-tsv", required=True, help="anchor_set.tsv (landmark metadata)")
+    p.add_argument("--anchor-fasta", required=True, help="anchor_set.fasta (landmark sequences)")
+    p.add_argument("--class-berghia-tsv", required=True,
+                   help="class_berghia.tsv (axis-1 classifier baseline)")
+    p.add_argument("--out", required=True, help="output directory for the 6 report files")
+    p.add_argument("--classes", default="A B C F",
+                   help="whitespace-separated class list (default: 'A B C F')")
+    p.add_argument("--threads", type=int, default=4, help="threads for mafft/epa-ng")
+    args = p.parse_args(argv)
+
+    missing = []
+    if not os.path.isdir(args.calibration_dir):
+        missing.append(f"--calibration-dir directory not found: {args.calibration_dir}")
+    for label, pth in (("--anchor-tsv", args.anchor_tsv),
+                       ("--anchor-fasta", args.anchor_fasta),
+                       ("--class-berghia-tsv", args.class_berghia_tsv)):
+        if not os.path.isfile(pth):
+            missing.append(f"{label} file not found: {pth}")
+    if missing:
+        for m in missing:
+            print(f"ERROR: {m}", file=sys.stderr)
+        sys.exit(2)
+
+    results = []
+    for klass in args.classes.split():
+        try:
+            res = run_class(klass, args.calibration_dir, args.anchor_tsv,
+                            args.anchor_fasta, args.class_berghia_tsv, args.out,
+                            threads=args.threads)
+        except FileNotFoundError as exc:
+            print(f"WARNING: skipping class {klass}: {exc}", file=sys.stderr)
+            continue
+        results.append(res)
+
+    write_report(args.out, results)
+    print(f"Wrote landmark-placement report for {len(results)} class(es) to {args.out}",
+          file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()
