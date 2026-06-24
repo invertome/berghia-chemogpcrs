@@ -109,3 +109,44 @@ def test_nearest_landmark_tiebreak_is_alphabetical():
     assert len(rows) == 1
     assert rows[0]["landmark"] == "AAA"               # alphabetically-first wins the tie
     assert rows[0]["family"] == "aminergic"
+
+
+# ---- Task 3: axis-1 classifier concordance ---------------------------------
+
+
+def test_axis1_vs_classifier_concordance(tmp_path):
+    tsv = tmp_path / "class_berghia.tsv"
+    tsv.write_text(
+        "seq_id\tclass\tevidence_pfam\tevidence_family_hmm\ttop_evalue\n"
+        "Berg1\tA\tPF00001\taminergic\t1e-20\n"
+        "Berg2\tA\tPF00001\topsin\t1e-20\n"
+    )  # Berg3 intentionally absent -> "?unknown?" baseline
+    rows = [
+        {"candidate": "Berg1", "family": "aminergic", "landmark": "L1", "distance": 1, "lwr": 0.9},  # agree
+        {"candidate": "Berg2", "family": "peptide",   "landmark": "L2", "distance": 1, "lwr": 0.9},  # disagree (opsin)
+        {"candidate": "Berg3", "family": "opsin",     "landmark": "L3", "distance": 1, "lwr": 0.9},  # baseline absent
+    ]
+    res = vlp.axis1_vs_classifier(rows, str(tsv))
+    assert res["n"] == 3
+    assert res["n_agree"] == 1                                   # only Berg1
+    assert abs(res["concordance"] - 1/3) < 1e-9
+    assert {"candidate": "Berg2", "placement": "peptide", "classifier": "opsin"} in res["discordant"]
+    assert any(d["candidate"] == "Berg3" and d["classifier"] == "?unknown?" for d in res["discordant"])
+    assert res["confusion"][("aminergic", "aminergic")] == 1
+
+
+def test_axis1_vs_classifier_empty_rows(tmp_path):
+    tsv = tmp_path / "empty.tsv"
+    tsv.write_text("seq_id\tevidence_family_hmm\n")
+    res = vlp.axis1_vs_classifier([], str(tsv))
+    assert res == {"n": 0, "n_agree": 0, "concordance": 0.0, "confusion": {}, "discordant": []}
+
+
+def test_axis1_vs_classifier_blank_evidence_is_unknown(tmp_path):
+    tsv = tmp_path / "b.tsv"
+    tsv.write_text("seq_id\tclass\tevidence_pfam\tevidence_family_hmm\ttop_evalue\n"
+                   "Berg4\tA\tPF1\t\t1e-5\n")
+    rows = [{"candidate": "Berg4", "family": "opsin", "landmark": "L", "distance": 1, "lwr": 0.9}]
+    res = vlp.axis1_vs_classifier(rows, str(tsv))
+    assert res["n_agree"] == 0
+    assert any(d["candidate"] == "Berg4" and d["classifier"] == "?unknown?" for d in res["discordant"])

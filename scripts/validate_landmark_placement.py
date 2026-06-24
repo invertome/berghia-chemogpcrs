@@ -138,6 +138,38 @@ def nearest_landmark_per_candidate(tree, placements, landmark_family, berghia_id
     return rows
 
 
+def axis1_vs_classifier(per_candidate_rows, class_berghia_tsv):
+    """Per-candidate placement family vs classifier evidence_family_hmm.
+    Candidates absent from the baseline are scored against '?unknown?'.
+    confusion keys are (placement_family, classifier_family) TUPLES; callers
+    must flatten (e.g. 'plc|clf') before JSON."""
+    base = {}
+    with open(class_berghia_tsv, newline="") as fh:
+        reader = csv.DictReader(fh, delimiter="\t")
+        if reader.fieldnames is None or "seq_id" not in reader.fieldnames:
+            raise KeyError(
+                f"axis1_vs_classifier: expected 'seq_id' column in "
+                f"{class_berghia_tsv!r}; got {reader.fieldnames}")
+        for row in reader:
+            base[row["seq_id"]] = normalize_family(row.get("evidence_family_hmm", ""))
+    n = 0
+    n_agree = 0
+    conf = Counter()
+    disc = []
+    for r in per_candidate_rows:
+        plc = normalize_family(r["family"])
+        clf = base.get(r["candidate"], "?unknown?")
+        n += 1
+        conf[(plc, clf)] += 1
+        if plc == clf and plc != "?unknown?":
+            n_agree += 1
+        else:
+            disc.append({"candidate": r["candidate"], "placement": plc, "classifier": clf})
+    return {"n": n, "n_agree": n_agree,
+            "concordance": (n_agree / n if n else 0.0),
+            "confusion": dict(conf), "discordant": disc}
+
+
 def clade_consensus(tree, per_candidate_rows, berghia_ids, supp_min=80):
     """Consensus family for each supported all-Berghia internal clade.
 
