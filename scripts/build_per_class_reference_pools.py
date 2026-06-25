@@ -267,6 +267,18 @@ def per_class_anchor_tiers(
     }
 
 
+def parse_anchor_outgroup_classes(value: Optional[str]) -> Optional[frozenset[str]]:
+    """Parse the --anchor-outgroup-classes CLI value.
+
+    None (flag omitted) -> None (legacy --anchor-tiers / all-tiers path).
+    A string (including "") -> a frozenset of class labels; "" or whitespace
+    -> frozenset() (the C3 decision: every class tier-1 only), NOT None.
+    """
+    if value is None:
+        return None
+    return frozenset(c.strip() for c in value.split(",") if c.strip())
+
+
 def load_anchor_set(
     anchor_fasta: str,
     anchor_tsv: str,
@@ -1115,12 +1127,7 @@ def main(argv=None) -> None:
     parser = build_args_parser()
     args = parser.parse_args(argv)
 
-    anchor_outgroup_classes = (
-        None if args.anchor_outgroup_classes is None
-        else frozenset(
-            c.strip() for c in args.anchor_outgroup_classes.split(",") if c.strip()
-        )
-    )
+    anchor_outgroup_classes = parse_anchor_outgroup_classes(args.anchor_outgroup_classes)
     if anchor_outgroup_classes is not None and args.anchor_tiers:
         parser.error(
             "--anchor-outgroup-classes and --anchor-tiers are mutually "

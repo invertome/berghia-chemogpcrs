@@ -340,3 +340,13 @@ def test_anchor_outgroup_classes_mutually_exclusive_with_anchor_tiers():
         main(["--scan-fasta-glob", "x", "--class-tsv", "y", "--out-dir", "z",
               "--anchor-outgroup-classes", "F", "--anchor-tiers", "1"])
     assert exc.value.code == 2
+
+
+def test_parse_anchor_outgroup_classes():
+    from build_per_class_reference_pools import parse_anchor_outgroup_classes
+    assert parse_anchor_outgroup_classes(None) is None                       # flag omitted -> legacy
+    assert parse_anchor_outgroup_classes("") == frozenset()                  # C3 production value: all tier-1, NOT None
+    assert parse_anchor_outgroup_classes("") is not None
+    assert parse_anchor_outgroup_classes("F") == frozenset({"F"})
+    assert parse_anchor_outgroup_classes("A,B,C,F") == frozenset({"A", "B", "C", "F"})
+    assert parse_anchor_outgroup_classes(" F , ") == frozenset({"F"})        # whitespace tolerated
