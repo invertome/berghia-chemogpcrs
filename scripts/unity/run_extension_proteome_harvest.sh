@@ -3,10 +3,11 @@
 #
 # Reinstates the Phase-1a download step for the extension set: selects
 # NCBI-annotated extension species, downloads their protein FASTAs via
-# NCBI Datasets CLI, appends them to proteome_manifest.tsv, then re-derives
-# the extension + genome inventories and produces a consolidation report.
+# NCBI Datasets CLI, appends them to proteome_manifest.tsv, then marks the
+# harvested species in genome_inventory.tsv (drop_reason="harvested_annotated")
+# so the BRAKER consumers exclude them, and runs a consolidation sanity check.
 #
-# STOPS after writing updated manifests + the consolidation report.
+# STOPS after writing updated manifests + the consolidation check.
 # NO git commit, NO Phase-1f release. The updated manifests are for human
 # review before the next pipeline stage.
 #
@@ -127,18 +128,19 @@ python3 "${REPO_ROOT}/scripts/harvest_extension_proteomes.py" append \
     --proteome-manifest "${PROTEOME_MANIFEST}"
 
 # ---------------------------------------------------------------------------
-# Step (f): re-derive inventories + consolidation report
+# Step (f): mark harvested species in genome_inventory + consolidation check
 # ---------------------------------------------------------------------------
-echo "[$(date '+%H:%M:%S')] Step (f): re-derive extension inventory"
-python3 "${REPO_ROOT}/scripts/build_species_tree_phase1d_extension_inventory.py" \
-    --phase1a-manifest "${PROTEOME_MANIFEST}" \
-    --out "${REFS}/extension_inventory_rederived.tsv"
+# genome_inventory.tsv's builder is append-only and the BRAKER consumers keep
+# any accession-bearing row, so re-deriving cannot drop the harvested species.
+# Instead, mark their rows with drop_reason="harvested_annotated"; the BRAKER
+# consumers (build_braker4_samples_csv, download_species_tree_phase1f_genomes)
+# skip non-empty drop_reason, removing them from the de-novo annotation set.
+echo "[$(date '+%H:%M:%S')] Step (f): mark harvested species in genome_inventory.tsv"
+python3 "${REPO_ROOT}/scripts/harvest_extension_proteomes.py" mark \
+    --genome-inventory "${GENOME_INVENTORY}" \
+    --proteome-manifest "${PROTEOME_MANIFEST}"
 
-echo "[$(date '+%H:%M:%S')] Step (f): re-derive unified genome inventory"
-python3 "${REPO_ROOT}/scripts/build_genome_inventory.py" \
-    --manifest "${GENOME_INVENTORY}"
-
-echo "[$(date '+%H:%M:%S')] Step (f): consolidation report"
+echo "[$(date '+%H:%M:%S')] Step (f): consolidation sanity check (harvested species; not the full P6 consolidation — Berghia omitted)"
 mkdir -p "${CONSOLIDATE_OUTDIR}"
 python3 "${REPO_ROOT}/scripts/consolidate_proteomes_for_genome_wide_og.py" \
     --out-dir "${CONSOLIDATE_OUTDIR}" \
