@@ -136,11 +136,13 @@ def mark_harvested_in_genome_inventory(
     proteome_manifest_tsv: str,
     reason: str = "harvested_annotated",
 ) -> int:
-    """Set drop_reason on genome_inventory rows whose taxid is in proteome_manifest.
+    """Mark genome_inventory rows for species that already have a usable proteome.
 
-    Reads the set of taxids present in proteome_manifest_tsv, then rewrites
-    genome_inventory_tsv in place: for each row whose taxid is in that set and
-    whose current drop_reason is empty, sets drop_reason to `reason`. Every
+    Reads the taxids of species WITH a usable proteome (empty drop_reason) from
+    proteome_manifest_tsv — NOT the confirmed-no-proteome entries
+    (drop_reason="no_proteome_in_ncbi"), which still need BRAKER annotation — then
+    rewrites genome_inventory_tsv in place: for each row whose taxid is in that set
+    and whose current drop_reason is empty, sets drop_reason to `reason`. Every
     other row and every other column is left unchanged. The header, exact column
     order, and all columns are preserved (fieldnames are read from the file).
 
@@ -150,12 +152,16 @@ def mark_harvested_in_genome_inventory(
     The file's existing line terminator (CRLF or LF) is detected and preserved
     so a mark run never silently rewrites every line's ending.
     """
-    # Collect taxids present in the proteome manifest
+    # Collect taxids of species with a USABLE proteome (empty drop_reason).
+    # proteome_manifest also tracks species it confirmed have NO proteome
+    # (drop_reason="no_proteome_in_ncbi"); those still need BRAKER de-novo
+    # annotation, so they must NOT be marked/excluded from the target set.
     manifest_taxids: set[str] = set()
     with open(proteome_manifest_tsv, newline="") as fh:
         for row in csv.DictReader(fh, delimiter="\t"):
             tx = (row.get("taxid") or "").strip()
-            if tx:
+            drop = (row.get("drop_reason") or "").strip()
+            if tx and not drop:
                 manifest_taxids.add(tx)
 
     # Detect the existing line terminator so the rewrite preserves it.

@@ -297,6 +297,34 @@ def test_mark_sets_drop_reason_for_proteome_taxids(tmp_path):
     assert by_taxid["6161"]["drop_reason"] == ""
 
 
+def test_mark_skips_no_proteome_manifest_entries(tmp_path):
+    """A taxid in proteome_manifest flagged drop_reason='no_proteome_in_ncbi' must
+    NOT be marked: those species have no usable proteome and still need BRAKER
+    de-novo annotation. Regression for the real-data over-exclusion — the manifest
+    tracks BOTH species-with-proteomes and confirmed-no-proteome species, so the
+    mark must key only off usable (empty-drop_reason) entries."""
+    gi = _make_gi(tmp_path, [
+        {"taxid": "231223", "binomial": "Elysia crispata",
+         "accession": "GCA_033675545.1"},                                  # usable in PM
+        {"taxid": "6359", "binomial": "Platynereis dumerilii",
+         "accession": "GCA_043381215.1"},                                  # no_proteome in PM
+    ])
+    pm = tmp_path / "pm.tsv"
+    pm.write_text(
+        "taxid\tbinomial\tclade\tsource\taccession\tassembly_level\t"
+        "annotation_status\test_protein_count\tsubmission_date\tdrop_reason\n"
+        "231223\tElysia crispata\tgastropoda\tGenBank\tGCA_033675545.1\tContig\t\t67429\t2023-01-01\t\n"
+        "6359\tPlatynereis dumerilii\tannelida\tGenBank\tGCA_043381215.1\tContig\t\t0\t2024-01-01\tno_proteome_in_ncbi\n"
+    )
+    n = hep.mark_harvested_in_genome_inventory(str(gi), str(pm))
+    assert n == 1  # only 231223 (usable); 6359 (no_proteome_in_ncbi) must NOT be marked
+    import csv as _csv
+    with open(gi) as fh:
+        by_taxid = {r["taxid"]: r for r in _csv.DictReader(fh, delimiter="\t")}
+    assert by_taxid["231223"]["drop_reason"] == "harvested_annotated"
+    assert by_taxid["6359"]["drop_reason"] == ""   # no-proteome species stays a BRAKER target
+
+
 def test_mark_preserves_accession_and_all_columns(tmp_path):
     """Every non-drop_reason column must be byte-identical after marking."""
     gi = _make_gi(tmp_path, [

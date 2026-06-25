@@ -69,15 +69,19 @@ class TestHarvestExclusionEndToEnd:
         self, tmp_path: Path
     ) -> None:
         """After mark, the harvested taxid is excluded by both BRAKER consumers;
-        the control taxid (empty drop_reason) remains in both outputs.
+        a control taxid (empty drop_reason, not in the manifest) and a
+        no_proteome_in_ncbi taxid (in the manifest but with no usable proteome)
+        both remain in both outputs.
 
-        Regression for the no-op-re-derive defect: append-only inventory +
-        accession-only consumer filtering left harvested species in the
-        BRAKER de-novo annotation set.
+        Regressions covered: (1) the no-op-re-derive defect (append-only inventory
+        + accession-only consumer filtering left harvested species in the BRAKER
+        set); (2) the over-exclusion defect (mark keyed off ALL manifest taxids,
+        wrongly excluding no_proteome species that still need BRAKER).
         """
         # ------------------------------------------------------------------ #
-        # 1. genome_inventory: two rows, both with valid accessions and empty
-        #    drop_reason.  111111 will be "harvested"; 222222 is the control.
+        # 1. genome_inventory: three rows, all with valid accessions and empty
+        #    drop_reason. 111111 will be "harvested"; 222222 is the control (not
+        #    in the manifest); 333333 is in the manifest as no_proteome_in_ncbi.
         # ------------------------------------------------------------------ #
         gi = _make_gi(tmp_path, [
             {
@@ -92,10 +96,17 @@ class TestHarvestExclusionEndToEnd:
                 "clade": "gastropoda",
                 "accession": "GCA_222222.1",
             },
+            {
+                "taxid": "333333",
+                "binomial": "No-proteome species",
+                "clade": "gastropoda",
+                "accession": "GCA_333333.1",
+            },
         ])
 
         # ------------------------------------------------------------------ #
-        # 2. proteome_manifest: contains 111111 but NOT 222222.
+        # 2. proteome_manifest: 111111 (usable) + 333333 (no_proteome_in_ncbi);
+        #    222222 is absent from the manifest entirely.
         # ------------------------------------------------------------------ #
         pm = _make_pm(tmp_path, [
             {
@@ -107,6 +118,19 @@ class TestHarvestExclusionEndToEnd:
                 "assembly_level": "Chromosome",
                 "est_protein_count": "12345",
                 "submission_date": "2024-01-01",
+            },
+            # In the manifest but flagged no_proteome_in_ncbi: phase-1a confirmed
+            # NCBI has no proteome, so it still needs BRAKER and must NOT be marked.
+            {
+                "taxid": "333333",
+                "binomial": "No-proteome species",
+                "clade": "gastropoda",
+                "source": "GenBank",
+                "accession": "GCA_333333.1",
+                "assembly_level": "Contig",
+                "est_protein_count": "0",
+                "submission_date": "2024-01-01",
+                "drop_reason": "no_proteome_in_ncbi",
             },
         ])
 
@@ -146,4 +170,14 @@ class TestHarvestExclusionEndToEnd:
         assert 222222 in dl_taxids, (
             "read_download_targets() dropped control taxid 222222 (empty drop_reason); "
             "it must be included"
+        )
+        # 333333 has NO usable proteome (no_proteome_in_ncbi) -> must remain a
+        # BRAKER target in both consumers (mark must not over-exclude it).
+        assert 333333 in braker4_taxids, (
+            "read_targets() dropped no_proteome taxid 333333; species without a "
+            "usable proteome must stay BRAKER targets"
+        )
+        assert 333333 in dl_taxids, (
+            "read_download_targets() dropped no_proteome taxid 333333; species "
+            "without a usable proteome must stay BRAKER targets"
         )
