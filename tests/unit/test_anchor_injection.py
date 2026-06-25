@@ -258,3 +258,85 @@ def test_build_all_pools_injects_anchors(tmp_path):
     assert rows["berghia_A1"]["taxid"] == "1287507"
     assert rows["cand_A1"]["source"] == "ref"
     assert rows["cand_A1"]["taxid"] == "6500"
+
+
+# ---------------------------------------------------------------------------
+# per_class_anchor_tiers: maps ANCHOR_OUTGROUP_CLASSES decision to per-class
+# tier sets
+# ---------------------------------------------------------------------------
+
+def test_per_class_anchor_tiers_empty():
+    from build_per_class_reference_pools import per_class_anchor_tiers
+    assert per_class_anchor_tiers(frozenset()) == {
+        "A": frozenset({"1"}), "B": frozenset({"1"}),
+        "C": frozenset({"1"}), "F": frozenset({"1"}),
+    }
+
+
+def test_per_class_anchor_tiers_partial():
+    from build_per_class_reference_pools import per_class_anchor_tiers
+    m = per_class_anchor_tiers(frozenset({"F"}))
+    assert m["F"] == frozenset({"1", "2", "3"})
+    assert m["A"] == m["B"] == m["C"] == frozenset({"1"})
+
+
+def test_per_class_anchor_tiers_all_four():
+    from build_per_class_reference_pools import per_class_anchor_tiers
+    m = per_class_anchor_tiers(frozenset({"A", "B", "C", "F"}))
+    assert all(v == frozenset({"1", "2", "3"}) for v in m.values())
+
+
+def _write_anchor_fixture(tmp_path):
+    """4 anchors: A tier-1, A tier-2, F tier-1, F tier-3."""
+    fa = tmp_path / "anchor_set.fasta"
+    fa.write_text(
+        ">ANCHOR_A_1_accA1\nMAAA\n>ANCHOR_A_2_accA2\nMBBB\n"
+        ">ANCHOR_F_1_accF1\nMCCC\n>ANCHOR_F_3_accF3\nMDDD\n"
+    )
+    tsv = tmp_path / "anchor_set.tsv"
+    tsv.write_text("accession\ttaxid\naccA1\t111\naccA2\t222\naccF1\t333\naccF3\t444\n")
+    return str(fa), str(tsv)
+
+
+def test_load_anchor_set_per_class_dict(tmp_path):
+    from build_per_class_reference_pools import load_anchor_set
+    fa, tsv = _write_anchor_fixture(tmp_path)
+    keep = {"A": frozenset({"1"}), "B": frozenset({"1"}),
+            "C": frozenset({"1"}), "F": frozenset({"1", "3"})}
+    per_class = load_anchor_set(fa, tsv, keep_tiers=keep)
+    assert {r.id for _, r in per_class["A"]} == {"ANCHOR_A_1_accA1"}
+    assert {r.id for _, r in per_class["F"]} == {"ANCHOR_F_1_accF1", "ANCHOR_F_3_accF3"}
+
+
+def test_load_anchor_set_partial_dict_absent_class_loads_nothing(tmp_path):
+    from build_per_class_reference_pools import load_anchor_set
+    fa, tsv = _write_anchor_fixture(tmp_path)   # A tier-1/2, F tier-1/3
+    per_class = load_anchor_set(fa, tsv, keep_tiers={"F": frozenset({"1"})})
+    assert {r.id for _, r in per_class["F"]} == {"ANCHOR_F_1_accF1"}
+    assert per_class["A"] == []   # A absent from the dict -> nothing loaded
+
+
+def test_load_anchor_set_global_frozenset_unchanged(tmp_path):
+    from build_per_class_reference_pools import load_anchor_set
+    fa, tsv = _write_anchor_fixture(tmp_path)
+    per_class = load_anchor_set(fa, tsv, keep_tiers=frozenset({"1"}))
+    assert {r.id for _, r in per_class["A"]} == {"ANCHOR_A_1_accA1"}
+    assert {r.id for _, r in per_class["F"]} == {"ANCHOR_F_1_accF1"}
+
+
+def test_anchor_outgroup_classes_not_env_defaulted(monkeypatch):
+    monkeypatch.setenv("ANCHOR_OUTGROUP_CLASSES", "A,B")
+    from build_per_class_reference_pools import build_args_parser
+    args = build_args_parser().parse_args(
+        ["--scan-fasta-glob", "x", "--class-tsv", "y", "--out-dir", "z"]
+    )
+    assert args.anchor_outgroup_classes is None
+
+
+def test_anchor_outgroup_classes_mutually_exclusive_with_anchor_tiers():
+    import pytest
+    from build_per_class_reference_pools import main
+    with pytest.raises(SystemExit) as exc:
+        main(["--scan-fasta-glob", "x", "--class-tsv", "y", "--out-dir", "z",
+              "--anchor-outgroup-classes", "F", "--anchor-tiers", "1"])
+    assert exc.value.code == 2

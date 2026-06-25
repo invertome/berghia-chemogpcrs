@@ -50,7 +50,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 from Bio import SeqIO
 from Bio.SeqRecord import SeqRecord
@@ -252,10 +252,25 @@ def load_berghia_candidates(
     return per_class
 
 
+def per_class_anchor_tiers(
+    outgroup_classes: frozenset[str],
+) -> dict[str, frozenset[str]]:
+    """Per-class anchor tier map for the ANCHOR_OUTGROUP_CLASSES decision.
+
+    Classes in ``outgroup_classes`` receive out-group anchor tiers (1,2,3);
+    every other class receives in-group tier-1 only.
+    """
+    return {
+        cls: (frozenset({"1", "2", "3"}) if cls in outgroup_classes
+              else frozenset({"1"}))
+        for cls in GPCR_CLASSES
+    }
+
+
 def load_anchor_set(
     anchor_fasta: str,
     anchor_tsv: str,
-    keep_tiers: Optional[frozenset[str]] = None,
+    keep_tiers: Optional[Union[frozenset[str], dict[str, frozenset[str]]]] = None,
 ) -> dict[str, list[tuple[int, SeqRecord]]]:
     """Load the curated anchor set into per-class (taxid, SeqRecord) bins.
 
@@ -268,9 +283,15 @@ def load_anchor_set(
     Args:
         anchor_fasta: path to anchor_set.fasta.
         anchor_tsv: path to anchor_set.tsv (cols incl. accession, taxid).
-        keep_tiers: if given, only anchors of these tiers ('1'/'2'/'3') are
-            loaded. Used by the C3 calibration to build the "without out-group
-            anchors" pool ({'1'}) vs the full pool (None).
+        keep_tiers: controls which tiers are loaded. May be:
+            - None: all tiers (legacy default, used by C3 calibration with-anchors pool).
+            - frozenset[str]: a single global tier-set applied to every class.
+              E.g. frozenset({'1'}) = in-group only, for the C3 calibration
+              "without out-group anchors" pool.
+            - dict[str, frozenset[str]]: per-class tier-sets (from
+              ``per_class_anchor_tiers``). Each class is filtered by its own
+              allowed tiers; a per-class dict is an allow-list — a class absent
+              from the dict loads no anchors.
 
     Returns:
         dict mapping class label (A/B/C/F) → list of (taxid, SeqRecord).
@@ -292,7 +313,14 @@ def load_anchor_set(
             continue
         klass = parts[1]
         tier = parts[2]
-        if keep_tiers is not None and tier not in keep_tiers:
+        # keep_tiers may be a single global frozenset (one filter for every
+        # class) or a per-class dict (class -> allowed tiers). Resolve the
+        # effective tier-set for this record's class. A per-class dict is an
+        # allow-list: a class absent from the dict resolves to an empty set,
+        # filtering out all its anchors (not a no-op pass-through).
+        eff_tiers = (keep_tiers.get(klass, frozenset())
+                     if isinstance(keep_tiers, dict) else keep_tiers)
+        if eff_tiers is not None and tier not in eff_tiers:
             continue
         accession = "_".join(parts[3:])
         taxid = acc_taxid.get(accession, 0)
@@ -626,6 +654,7 @@ def build_all_pools(
     anchor_fasta: Optional[str] = None,
     anchor_tsv: Optional[str] = None,
     anchor_tiers: Optional[frozenset[str]] = None,
+    anchor_outgroup_classes: Optional[frozenset[str]] = None,
     ref_floor_per_species: int = DEFAULT_REF_FLOOR_PER_SPECIES,
     ref_cap_per_taxon: int = DEFAULT_REF_CAP_PER_TAXON,
     selection_seed: int = DEFAULT_SELECTION_SEED,
@@ -653,6 +682,14 @@ def build_all_pools(
             injected must-keep, through CD-HIT (keep-annotated-on-collision),
             charged to that class's refs budget.
         anchor_tsv: optional path to anchor_set.tsv (required with anchor_fasta).
+        anchor_tiers: optional global frozenset of tier strings ('1'/'2'/'3')
+            applied to EVERY class (the C3 calibration's with/without-out-group
+            pools). Mutually exclusive with ``anchor_outgroup_classes`` (enforced
+            in main()).
+        anchor_outgroup_classes: GPCR classes (A/B/C/F) that receive out-group
+            anchor tiers (1,2,3); unlisted classes get tier-1 only. When set,
+            takes precedence over ``anchor_tiers`` (the two are mutually
+            exclusive; enforced in main()). None = legacy behavior.
         force: re-run even if outputs already exist.
     """
     out_path = Path(out_dir)
@@ -696,8 +733,11 @@ def build_all_pools(
     }
     if anchor_fasta and anchor_tsv:
         if os.path.exists(anchor_fasta) and os.path.exists(anchor_tsv):
+            keep_tiers = (per_class_anchor_tiers(anchor_outgroup_classes)
+                          if anchor_outgroup_classes is not None
+                          else anchor_tiers)
             anchor_per_class = load_anchor_set(anchor_fasta, anchor_tsv,
-                                               keep_tiers=anchor_tiers)
+                                               keep_tiers=keep_tiers)
         else:
             print(
                 f"  WARNING: anchor set not found ({anchor_fasta} / {anchor_tsv}); "
@@ -1025,6 +1065,20 @@ def build_args_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--anchor-outgroup-classes",
+        default=None,
+        metavar="CLS[,CLS...]",
+        help=(
+            "Comma-separated GPCR classes (A/B/C/F) that receive out-group "
+            "anchor tiers (1,2,3); unlisted classes get tier-1 (in-group) only. "
+            "Empty string = every class tier-1 only. Omit = legacy behavior "
+            "(--anchor-tiers / all tiers). NOT env-defaulted, to keep the C3 "
+            "calibration's with-all-anchors pool intact. Wires config.sh "
+            "ANCHOR_OUTGROUP_CLASSES per class; mutually exclusive with "
+            "--anchor-tiers."
+        ),
+    )
+    parser.add_argument(
         "--ref-floor-per-species",
         type=int,
         default=int(os.environ.get("REF_FLOOR_PER_SPECIES", str(DEFAULT_REF_FLOOR_PER_SPECIES))),
@@ -1061,6 +1115,18 @@ def main(argv=None) -> None:
     parser = build_args_parser()
     args = parser.parse_args(argv)
 
+    anchor_outgroup_classes = (
+        None if args.anchor_outgroup_classes is None
+        else frozenset(
+            c.strip() for c in args.anchor_outgroup_classes.split(",") if c.strip()
+        )
+    )
+    if anchor_outgroup_classes is not None and args.anchor_tiers:
+        parser.error(
+            "--anchor-outgroup-classes and --anchor-tiers are mutually "
+            "exclusive (they set anchor tiers two different ways)"
+        )
+
     must_include: frozenset[int]
     if args.must_include_taxids:
         must_include = load_must_include_taxids(args.must_include_taxids)
@@ -1089,6 +1155,7 @@ def main(argv=None) -> None:
         anchor_tsv=args.anchor_tsv,
         anchor_tiers=(frozenset(t.strip() for t in args.anchor_tiers.split(","))
                       if args.anchor_tiers else None),
+        anchor_outgroup_classes=anchor_outgroup_classes,
         ref_floor_per_species=args.ref_floor_per_species,
         ref_cap_per_taxon=args.ref_cap_per_taxon,
         selection_seed=args.selection_seed,
