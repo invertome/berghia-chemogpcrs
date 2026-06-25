@@ -338,6 +338,8 @@ def read_download_targets(*manifest_paths: Union[str, Path]) -> list[DownloadTar
                 accession = (row.get("accession") or "").strip()
                 if not accession:
                     continue
+                if (row.get("drop_reason") or "").strip():
+                    continue
                 try:
                     taxid = int(row["taxid"])
                 except (KeyError, ValueError):

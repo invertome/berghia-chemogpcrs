@@ -6,8 +6,10 @@ require_annotation=False and skipped Phase 1a's identify-annotated ->
 download-proteome -> proteome_manifest step. This driver reinstates it for the
 extension set: select the NCBI-annotated extension species, hand them to
 download_species_tree_phase1a.py, and append the successfully-downloaded ones to
-proteome_manifest.tsv. The existing extension-inventory disjointness logic then
-drops them from the BRAKER target set on re-derive. Bead berghia-chemogpcrs-w2x.
+proteome_manifest.tsv. The `mark` subcommand then writes a `drop_reason` on
+those rows in genome_inventory.tsv so the two BRAKER consumers (build_braker4_
+samples_csv.py, download_species_tree_phase1f_genomes.py) skip them on
+re-derive. Bead berghia-chemogpcrs-w2x.
 
 Author: Jorge L. Perez-Moreno, Ph.D., Katz Lab, University of Massachusetts
 """
@@ -129,6 +131,62 @@ def append_to_proteome_manifest(staged_tsv: str, download_results_tsv: str,
     return len(to_add)
 
 
+def mark_harvested_in_genome_inventory(
+    genome_inventory_tsv: str,
+    proteome_manifest_tsv: str,
+    reason: str = "harvested_annotated",
+) -> int:
+    """Set drop_reason on genome_inventory rows whose taxid is in proteome_manifest.
+
+    Reads the set of taxids present in proteome_manifest_tsv, then rewrites
+    genome_inventory_tsv in place: for each row whose taxid is in that set and
+    whose current drop_reason is empty, sets drop_reason to `reason`. Every
+    other row and every other column is left unchanged. The header, exact column
+    order, and all columns are preserved (fieldnames are read from the file).
+
+    Idempotent: a row that already carries any non-empty drop_reason is not
+    overwritten. Returns the count of rows newly marked.
+
+    The file's existing line terminator (CRLF or LF) is detected and preserved
+    so a mark run never silently rewrites every line's ending.
+    """
+    # Collect taxids present in the proteome manifest
+    manifest_taxids: set[str] = set()
+    with open(proteome_manifest_tsv, newline="") as fh:
+        for row in csv.DictReader(fh, delimiter="\t"):
+            tx = (row.get("taxid") or "").strip()
+            if tx:
+                manifest_taxids.add(tx)
+
+    # Detect the existing line terminator so the rewrite preserves it.
+    with open(genome_inventory_tsv, "rb") as fh:
+        linesep = "\r\n" if b"\r\n" in fh.read() else "\n"
+
+    # Read genome_inventory (newline="" lets csv strip the \r from field values).
+    with open(genome_inventory_tsv, newline="") as fh:
+        reader = csv.DictReader(fh, delimiter="\t")
+        fieldnames = list(reader.fieldnames or [])
+        rows = list(reader)
+
+    n_marked = 0
+    for row in rows:
+        tx = (row.get("taxid") or "").strip()
+        current_reason = (row.get("drop_reason") or "").strip()
+        # For each matching row with no existing drop_reason, set it to `reason`.
+        if tx in manifest_taxids and not current_reason:
+            row["drop_reason"] = reason
+            n_marked += 1
+
+    # Rewrite in place, preserving the original line terminator.
+    with open(genome_inventory_tsv, "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=fieldnames,
+                           delimiter="\t", lineterminator=linesep)
+        w.writeheader()
+        w.writerows(rows)
+
+    return n_marked
+
+
 def _build_argparser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
@@ -164,6 +222,18 @@ def _build_argparser() -> argparse.ArgumentParser:
     app.add_argument("--proteome-manifest", required=True,
                      help="proteome_manifest.tsv to append to.")
 
+    mrk = sub.add_parser(
+        "mark",
+        help=(
+            "Mark harvested species in genome_inventory.tsv with a drop_reason so "
+            "BRAKER consumers skip them on re-derive."
+        ),
+    )
+    mrk.add_argument("--genome-inventory", required=True,
+                     help="genome_inventory.tsv to update in place.")
+    mrk.add_argument("--proteome-manifest", required=True,
+                     help="proteome_manifest.tsv whose taxids will be marked.")
+
     return p
 
 
@@ -197,6 +267,20 @@ def main(argv=None) -> None:
             args.staged, args.download_results, args.proteome_manifest
         )
         print(f"[harvest] appended {n} species to {args.proteome_manifest}",
+              file=sys.stderr)
+
+    elif args.command == "mark":
+        for flag, path in (
+            ("--genome-inventory", args.genome_inventory),
+            ("--proteome-manifest", args.proteome_manifest),
+        ):
+            if not Path(path).exists():
+                print(f"ERROR: {flag} path does not exist: {path!r}", file=sys.stderr)
+                sys.exit(2)
+        n = mark_harvested_in_genome_inventory(
+            args.genome_inventory, args.proteome_manifest
+        )
+        print(f"[harvest] marked {n} rows in {args.genome_inventory}",
               file=sys.stderr)
 
 
