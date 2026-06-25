@@ -13,8 +13,10 @@ Author: Jorge L. Perez-Moreno, Ph.D., Katz Lab, University of Massachusetts
 """
 from __future__ import annotations
 
+import argparse
 import csv
 import json
+import sys
 from pathlib import Path
 
 PROTEOME_MANIFEST_COLUMNS = (
@@ -125,3 +127,78 @@ def append_to_proteome_manifest(staged_tsv: str, download_results_tsv: str,
             for r in to_add:
                 w.writerow(r)
     return len(to_add)
+
+
+def _build_argparser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        description=(
+            "harvest_extension_proteomes — close the Phase-1d extension annotation gap. "
+            "Select NCBI-annotated extension species and append downloaded proteomes "
+            "to proteome_manifest.tsv."
+        )
+    )
+    sub = p.add_subparsers(dest="command", metavar="COMMAND")
+    sub.required = True
+
+    sel = sub.add_parser(
+        "select",
+        help="Select annotated extension species and write download + staged manifests.",
+    )
+    sel.add_argument("--extension-tsv", required=True,
+                     help="Phase 1d extension inventory TSV.")
+    sel.add_argument("--datasets-jsonl", required=True,
+                     help="NCBI datasets summary JSONL for extension accessions.")
+    sel.add_argument("--download-manifest-out", required=True,
+                     help="Output path for the 4-col download manifest TSV.")
+    sel.add_argument("--staged-out", required=True,
+                     help="Output path for the 10-col staged proteome manifest TSV.")
+
+    app = sub.add_parser(
+        "append",
+        help="Append successfully-downloaded extension species to proteome_manifest.tsv.",
+    )
+    app.add_argument("--staged", required=True,
+                     help="Staged manifest TSV produced by the select subcommand.")
+    app.add_argument("--download-results", required=True,
+                     help="Per-species download report TSV (taxid, status, …).")
+    app.add_argument("--proteome-manifest", required=True,
+                     help="proteome_manifest.tsv to append to.")
+
+    return p
+
+
+def main(argv=None) -> None:
+    args = _build_argparser().parse_args(argv)
+
+    if args.command == "select":
+        for flag, path in (
+            ("--extension-tsv", args.extension_tsv),
+            ("--datasets-jsonl", args.datasets_jsonl),
+        ):
+            if not Path(path).exists():
+                print(f"ERROR: {flag} path does not exist: {path!r}", file=sys.stderr)
+                sys.exit(2)
+        targets = select_annotated_extension(args.extension_tsv, args.datasets_jsonl)
+        write_download_manifest(targets, args.download_manifest_out)
+        write_staged_manifest(targets, args.staged_out)
+        print(f"[harvest] selected {len(targets)} annotated extension species",
+              file=sys.stderr)
+
+    elif args.command == "append":
+        for flag, path in (
+            ("--staged", args.staged),
+            ("--download-results", args.download_results),
+            ("--proteome-manifest", args.proteome_manifest),
+        ):
+            if not Path(path).exists():
+                print(f"ERROR: {flag} path does not exist: {path!r}", file=sys.stderr)
+                sys.exit(2)
+        n = append_to_proteome_manifest(
+            args.staged, args.download_results, args.proteome_manifest
+        )
+        print(f"[harvest] appended {n} species to {args.proteome_manifest}",
+              file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()

@@ -142,3 +142,104 @@ def test_append_includes_ok_no_cds(tmp_path):
     rs = tmp_path / "res.tsv"
     rs.write_text("taxid\tstatus\n555\tok_no_cds\n")
     assert hep.append_to_proteome_manifest(str(st), str(rs), str(pm)) == 1
+
+
+# ---------------------------------------------------------------------------
+# CLI tests (Task 2)
+# ---------------------------------------------------------------------------
+import pytest
+
+
+def test_main_help_exits_zero():
+    with pytest.raises(SystemExit) as e:
+        hep.main(["--help"])
+    assert e.value.code == 0
+
+
+def test_main_select_help_exits_zero():
+    with pytest.raises(SystemExit) as e:
+        hep.main(["select", "--help"])
+    assert e.value.code == 0
+
+
+def test_main_select_missing_args_exits_2():
+    with pytest.raises(SystemExit) as e:
+        hep.main(["select"])
+    assert e.value.code == 2
+
+
+def test_main_append_missing_args_exits_2():
+    with pytest.raises(SystemExit) as e:
+        hep.main(["append"])
+    assert e.value.code == 2
+
+
+def test_main_select_happy_path(tmp_path):
+    e = tmp_path / "ext.tsv"
+    e.write_text(EXT)
+    j = tmp_path / "s.jsonl"
+    j.write_text(JSONL)
+    dl = tmp_path / "dl.tsv"
+    staged = tmp_path / "staged.tsv"
+    hep.main(["select", "--extension-tsv", str(e), "--datasets-jsonl", str(j),
+              "--download-manifest-out", str(dl), "--staged-out", str(staged)])
+    assert dl.exists() and staged.exists()
+    assert "GCA_033675545.1" in dl.read_text()
+
+
+def test_main_select_missing_extension_tsv_exits_2(tmp_path):
+    j = tmp_path / "s.jsonl"
+    j.write_text(JSONL)
+    dl = tmp_path / "dl.tsv"
+    staged = tmp_path / "staged.tsv"
+    with pytest.raises(SystemExit) as e:
+        hep.main(["select",
+                  "--extension-tsv", str(tmp_path / "no_such.tsv"),
+                  "--datasets-jsonl", str(j),
+                  "--download-manifest-out", str(dl),
+                  "--staged-out", str(staged)])
+    assert e.value.code == 2
+
+
+def test_main_select_missing_jsonl_exits_2(tmp_path):
+    ext = tmp_path / "ext.tsv"
+    ext.write_text(EXT)
+    dl = tmp_path / "dl.tsv"
+    staged = tmp_path / "staged.tsv"
+    with pytest.raises(SystemExit) as e:
+        hep.main(["select",
+                  "--extension-tsv", str(ext),
+                  "--datasets-jsonl", str(tmp_path / "no_such.jsonl"),
+                  "--download-manifest-out", str(dl),
+                  "--staged-out", str(staged)])
+    assert e.value.code == 2
+
+
+def test_main_append_happy_path(tmp_path):
+    pm = tmp_path / "pm.tsv"
+    pm.write_text(PM)
+    st = tmp_path / "staged.tsv"
+    st.write_text(STAGED)
+    rs = tmp_path / "res.tsv"
+    rs.write_text(RESULTS)
+    hep.main(["append",
+              "--staged", str(st),
+              "--download-results", str(rs),
+              "--proteome-manifest", str(pm)])
+    import csv as _csv
+    with open(pm) as fh:
+        rows = list(_csv.DictReader(fh, delimiter="\t"))
+    assert any(r["taxid"] == "231223" for r in rows)
+
+
+def test_main_append_missing_staged_exits_2(tmp_path):
+    pm = tmp_path / "pm.tsv"
+    pm.write_text(PM)
+    rs = tmp_path / "res.tsv"
+    rs.write_text(RESULTS)
+    with pytest.raises(SystemExit) as e:
+        hep.main(["append",
+                  "--staged", str(tmp_path / "no_staged.tsv"),
+                  "--download-results", str(rs),
+                  "--proteome-manifest", str(pm)])
+    assert e.value.code == 2
