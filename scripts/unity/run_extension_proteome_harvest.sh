@@ -147,6 +147,14 @@ python3 "${REPO_ROOT}/scripts/consolidate_proteomes_for_genome_wide_og.py" \
     --phase1a-manifest "${PROTEOME_MANIFEST}" \
     --manifest "${GENOME_INVENTORY}"
 
+echo ""
+echo "  NOTE on the consolidation report: 'duplicate_taxid' rows are EXPECTED and benign."
+echo "  Every annotated species correctly lives in BOTH proteome_manifest.tsv and"
+echo "  genome_inventory.tsv; consolidate dedups them to phase-1a (no double-count). The"
+echo "  consolidate reader does not yet honor drop_reason, so each overlap surfaces as a"
+echo "  'duplicate_taxid' / 'CAFE5 will refuse' warning — these are NOT real problems."
+echo "  When reviewing, act ONLY on 'missing_proteome' / 'empty_fasta' rows."
+
 # ---------------------------------------------------------------------------
 # Summary — stop here; no git commit, no Phase-1f release
 # ---------------------------------------------------------------------------
@@ -156,4 +164,4 @@ echo "  genome_inventory  : ${GENOME_INVENTORY}"
 echo "  consolidation dir : ${CONSOLIDATE_OUTDIR}"
 echo "  download report   : ${DOWNLOAD_REPORT}"
 echo ""
-echo "  Review the above before releasing Phase-1f or committing changes."
+echo "  Review the above (see the consolidation NOTE) before releasing Phase-1f or committing."
