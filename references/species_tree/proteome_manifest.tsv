@@ -233,3 +233,17 @@ taxid	binomial	clade	source	accession	assembly_level	annotation_status	est_prote
 2922911	Acholoe squamosa	annelida							no_proteome_in_ncbi
 3003519	Proteocephalus fallax	platyhelminthes							no_proteome_in_ncbi
 3244846	Crassostrea ariakensis	bivalvia							no_proteome_in_ncbi
+55810	Bulinus truncatus	Heterobranchia	GenBank	GCA_021962125.1	Scaffold		26279		
+145626	Bradybaena similaris	Heterobranchia	GenBank	GCA_050415755.1	Chromosome		29227		
+191775	Bulinus ugandae	Heterobranchia	GenBank	GCA_057383705.1	Contig		29133		
+231223	Elysia crispata	Heterobranchia	GenBank	GCA_033675545.1	Contig		67429		
+6551	Mytilus trossulus	Bivalvia	RefSeq	GCF_036588685.1	Chromosome	Full annotation	34235		
+31199	Argopecten irradians	Bivalvia	RefSeq	GCF_041381155.1	Chromosome	Full annotation	25634		
+31220	Littorina saxatilis	Caenogastropoda	RefSeq	GCF_037325665.1	Chromosome	Full annotation	27788		
+109174	Haliotis asinina	Vetigastropoda	RefSeq	GCF_037392515.1	Chromosome	Full annotation	26848		
+1069815	Sinanodonta woodiana	Bivalvia	GenBank	GCA_046254885.1	Chromosome		44785		
+2302425	Mactra antiquata	Bivalvia	GenBank	GCA_047288015.1	Chromosome		24436		
+672921	Tubulanus polymorphus	Nemertea	RefSeq	GCF_964204645.1	Chromosome	Full annotation	15035		
+6189	Schistosoma spindalis	Platyhelminthes	GenBank	GCA_946903255.1	Chromosome		9330		
+38744	Schistosoma mekongi	Platyhelminthes	GenBank	GCA_034768735.1	Chromosome		9094		
+3198878	Liolophura sinensis	Polyplacophora	RefSeq	GCF_032854445.1	Chromosome	Updated annotation	17422		

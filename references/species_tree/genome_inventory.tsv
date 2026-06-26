@@ -1,7 +1,7 @@
 taxid	binomial	clade	policy_class	source	accession	assembly_level	annotation_status	est_protein_count	submission_date	contig_n50	total_length_bp	drop_reason	source_batch
 6161	Dugesia japonica	platyhelminthes		GenBank	GCA_001938525.1	Scaffold		0		1166	854187087		nath_phase1e
 6162	Girardia tigrina	platyhelminthes		GenBank	GCA_001938485.1	Scaffold		0		5133	1428149015		nath_phase1e
-6189	Schistosoma spindalis	Platyhelminthes	outgroup_platyhelminthes	GenBank	GCA_946903255.1	Chromosome		9330		3920158	390075707		extension_phase1d
+6189	Schistosoma spindalis	Platyhelminthes	outgroup_platyhelminthes	GenBank	GCA_946903255.1	Chromosome		9330		3920158	390075707	harvested_annotated	extension_phase1d
 6206	Taenia saginata	platyhelminthes		GenBank	GCA_001693075.2	Scaffold		0		142979	169104283		nath_phase1e
 6212	Echinococcus oligarthrus	platyhelminthes		GenBank	GCA_900683695.1	Contig		0		2071	105959096		nath_phase1e
 6344	Arenicola marina	Annelida	outgroup_annelida	GenBank	GCA_964019135.1	Chromosome		0		360722	869392476		extension_phase1d
@@ -14,7 +14,7 @@ taxid	binomial	clade	policy_class	source	accession	assembly_level	annotation_sta
 6494	Conus textile	Caenogastropoda	other_mollusca	GenBank	GCA_055473965.1	Chromosome		0		188487	3351847729		extension_phase1d
 6511	Dolabella auricularia	Heterobranchia	heterobranchia	GenBank	GCA_982957055.1	Chromosome		0		603969	1170037518		extension_phase1d
 6535	Cornu aspersum	Heterobranchia	heterobranchia	GenBank	GCA_964187895.1	Chromosome		0		1303995	2908448789		extension_phase1d
-6551	Mytilus trossulus	Bivalvia	other_mollusca	RefSeq	GCF_036588685.1	Chromosome	Full annotation	34235		4973962	1298571991		extension_phase1d
+6551	Mytilus trossulus	Bivalvia	other_mollusca	RefSeq	GCF_036588685.1	Chromosome	Full annotation	34235		4973962	1298571991	harvested_annotated	extension_phase1d
 6610	Sepia officinalis	Cephalopoda	other_mollusca	GenBank	GCA_964300435.1	Chromosome		0		2020660	5752151390		extension_phase1d
 6625	Watasenia scintillans	cephalopoda		GenBank	GCA_015471945.1	Contig		0		1283	649175396		nath_phase1e
 6655	Cryptochiton stelleri	Polyplacophora	rare_basal	GenBank	GCA_031471745.1	Scaffold		0		3056	783734439		extension_phase1d
@@ -23,13 +23,13 @@ taxid	binomial	clade	policy_class	source	accession	assembly_level	annotation_sta
 13016	Codakia orbicularis	Bivalvia	other_mollusca	GenBank	GCA_977930555.1	Chromosome		0		51581000	1729527016		extension_phase1d
 28835	Cepaea nemoralis	Heterobranchia	heterobranchia	GenBank	GCA_964166675.2	Chromosome		0		651301	3270717112		extension_phase1d
 28841	Moniezia expansa	platyhelminthes		GenBank	GCA_019097775.1	Scaffold		0		3386365	142225902		nath_phase1e
-31199	Argopecten irradians	Bivalvia	other_mollusca	RefSeq	GCF_041381155.1	Chromosome	Full annotation	25634		3547744	845889701		extension_phase1d
+31199	Argopecten irradians	Bivalvia	other_mollusca	RefSeq	GCF_041381155.1	Chromosome	Full annotation	25634		3547744	845889701	harvested_annotated	extension_phase1d
 31201	Spisula solida	bivalvia		GenBank	GCA_947247005.1	Chromosome		0		15021671	932088914		nath_phase1e
 31202	Spisula subtruncata	Bivalvia	other_mollusca	GenBank	GCA_963678985.1	Chromosome		0		3953165	930842501		extension_phase1d
 31210	Acanthosepion esculentum	Cephalopoda	other_mollusca	GenBank	GCA_964036315.1	Chromosome		0		1721682	5142313129		extension_phase1d
 31216	Littorina littorea	Caenogastropoda	other_mollusca	GenBank	GCA_964330335.1	Chromosome		0		169519	849613989		extension_phase1d
 31218	Littorina obtusata	Caenogastropoda	other_mollusca	GenBank	GCA_965235085.1	Chromosome		0		326000	1077495798		extension_phase1d
-31220	Littorina saxatilis	Caenogastropoda	other_mollusca	RefSeq	GCF_037325665.1	Chromosome	Full annotation	27788		270961	1256192465		extension_phase1d
+31220	Littorina saxatilis	Caenogastropoda	other_mollusca	RefSeq	GCF_037325665.1	Chromosome	Full annotation	27788		270961	1256192465	harvested_annotated	extension_phase1d
 34570	Sepioteuthis lessoniana	Cephalopoda	other_mollusca	GenBank	GCA_963585895.1	Chromosome		0		657215	5056232740		extension_phase1d
 34573	Nautilus pompilius	cephalopoda		GenBank	GCA_047652355.1	Chromosome		0		2482390	784797206		nath_phase1e
 34576	Nautilus macromphalus	Cephalopoda	other_mollusca	GenBank	GCA_976954165.2	Chromosome		0		20336530	949282482		extension_phase1d
@@ -41,7 +41,7 @@ taxid	binomial	clade	policy_class	source	accession	assembly_level	annotation_sta
 37629	Gyrodactylus salaris	platyhelminthes		GenBank	GCA_000715275.1	Scaffold		0		14673	67380660		nath_phase1e
 37643	Crassostrea rhizophorae	Bivalvia	other_mollusca	GenBank	GCA_977013615.1	Chromosome		0		8143000	508242776		extension_phase1d
 37655	Octopus rubescens	cephalopoda		GenBank	GCA_027564515.1	Scaffold		0		2937	2757134468		nath_phase1e
-38744	Schistosoma mekongi	Platyhelminthes	outgroup_platyhelminthes	GenBank	GCA_034768735.1	Chromosome		9094		1168079	404245338		extension_phase1d
+38744	Schistosoma mekongi	Platyhelminthes	outgroup_platyhelminthes	GenBank	GCA_034768735.1	Chromosome		9094		1168079	404245338	harvested_annotated	extension_phase1d
 40130	Donax trunculus	Bivalvia	other_mollusca	GenBank	GCA_964273945.3	Chromosome		0		19973170	1578539939		extension_phase1d
 42344	Haliotis discus hannai	gastropoda		GenBank	GCA_044707095.1	Scaffold		0		28490	1883591751		nath_phase1e
 43123	Pedicellina cernua	other_lophotrochozoan_phyla										no_proteome_in_ncbi	nath_phase1e
@@ -62,7 +62,7 @@ taxid	binomial	clade	policy_class	source	accession	assembly_level	annotation_sta
 55715	Venus verrucosa	Bivalvia	other_mollusca	GenBank	GCA_964200665.2	Chromosome		0		15529060	2087848406		extension_phase1d
 55720	Uroteuthis edulis	Cephalopoda	other_mollusca	GenBank	GCA_965641475.1	Chromosome		0		802163	4234062252		extension_phase1d
 55729	Melanoides tuberculata	gastropoda		GenBank	GCA_028565955.2	Scaffold		0		1059	970667096		nath_phase1e
-55810	Bulinus truncatus	Heterobranchia	heterobranchia	GenBank	GCA_021962125.1	Scaffold		26279		234305	1221776979		extension_phase1d
+55810	Bulinus truncatus	Heterobranchia	heterobranchia	GenBank	GCA_021962125.1	Scaffold		26279		234305	1221776979	harvested_annotated	extension_phase1d
 55837	Unio pictorum	bivalvia		GenBank	GCA_030141615.1	Contig		0		10612599	2434325818		nath_phase1e
 56141	Oncomelania hupensis	Caenogastropoda	other_mollusca	GenBank	GCA_036898135.1	Chromosome		0		1346093	1449858197		extension_phase1d
 57642	Siphonaria pectinata	Heterobranchia	heterobranchia	GenBank	GCA_978134735.1	Chromosome		0		1866751	817401451		extension_phase1d
@@ -121,7 +121,7 @@ taxid	binomial	clade	policy_class	source	accession	assembly_level	annotation_sta
 104385	Ruditapes decussatus	Bivalvia	other_mollusca	GenBank	GCA_977926895.1	Chromosome		0		1729466	1398147054		extension_phase1d
 104660	Pinctada maxima	Bivalvia	other_mollusca	GenBank	GCA_050580605.1	Chromosome		0		649306	1264926820		extension_phase1d
 106299	Chlamys farreri	bivalvia										no_proteome_in_ncbi	nath_phase1e
-109174	Haliotis asinina	Vetigastropoda	other_mollusca	RefSeq	GCF_037392515.1	Chromosome	Full annotation	26848		38260015	1143434573		extension_phase1d
+109174	Haliotis asinina	Vetigastropoda	other_mollusca	RefSeq	GCF_037392515.1	Chromosome	Full annotation	26848		38260015	1143434573	harvested_annotated	extension_phase1d
 109628	Illex coindetii	Cephalopoda	other_mollusca	GenBank	GCA_977009265.1	Chromosome		0		7048351	3990732263		extension_phase1d
 112136	Lithophaga nigra	bivalvia		GenBank	GCA_028566555.1	Scaffold		0		2277	1492027032		nath_phase1e
 112209	Pinctada radiata	Bivalvia	other_mollusca	GenBank	GCA_964261305.2	Chromosome		0		8065000	930972745		extension_phase1d
@@ -142,7 +142,7 @@ taxid	binomial	clade	policy_class	source	accession	assembly_level	annotation_sta
 135721	Corbicula fluminalis	Bivalvia	other_mollusca	GenBank	GCA_048771855.1	Chromosome		0		31110544	1149359062		extension_phase1d
 138984	Chamelea gallina	Bivalvia	other_mollusca	GenBank	GCA_977927505.1	Chromosome		0		99135139	1888514228		extension_phase1d
 141464	Corbicula japonica	Bivalvia	other_mollusca	GenBank	GCA_038501625.2	Chromosome		0		616602	1069813790		extension_phase1d
-145626	Bradybaena similaris	Heterobranchia	heterobranchia	GenBank	GCA_050415755.1	Chromosome		29227		17198119	2289373504		extension_phase1d
+145626	Bradybaena similaris	Heterobranchia	heterobranchia	GenBank	GCA_050415755.1	Chromosome		29227		17198119	2289373504	harvested_annotated	extension_phase1d
 147581	Deroceras laeve	Heterobranchia	heterobranchia	GenBank	GCA_051403575.1	Chromosome		0		1583774	1783141715		extension_phase1d
 148819	Scapharca broughtonii	bivalvia										no_proteome_in_ncbi	nath_phase1e
 152013	Congeria kusceri	bivalvia		GenBank	GCA_027627225.1	Chromosome		0		6387040	1550098618		nath_phase1e
@@ -162,7 +162,7 @@ taxid	binomial	clade	policy_class	source	accession	assembly_level	annotation_sta
 179646	Bolinus brandaris	Caenogastropoda	other_mollusca	GenBank	GCA_965120365.1	Chromosome		0		1097130	2487942006		extension_phase1d
 179648	Hexaplex trunculus	Caenogastropoda	other_mollusca	GenBank	GCA_977070975.2	Chromosome		0		24661824	2059466971		extension_phase1d
 190912	Dendrodoris denisoni	Heterobranchia	heterobranchia	GenBank	GCA_056523665.1	Scaffold		0		1954	748767013		extension_phase1d
-191775	Bulinus ugandae	Heterobranchia	heterobranchia	GenBank	GCA_057383705.1	Contig		29133		6863688	1197570150		extension_phase1d
+191775	Bulinus ugandae	Heterobranchia	heterobranchia	GenBank	GCA_057383705.1	Contig		29133		6863688	1197570150	harvested_annotated	extension_phase1d
 192920	Bugulina stolonifera	Bryozoa	outgroup_bryozoa	GenBank	GCA_935421135.1	Chromosome		0		12561000	234968257		extension_phase1d
 195873	Aeolidia papillosa	Heterobranchia	heterobranchia	GenBank	GCA_032466315.1	Scaffold		0		273	166752208		extension_phase1d
 200191	Sinotaia quadrata	Caenogastropoda	other_mollusca	GenBank	GCA_028829895.1	Chromosome		0		37213934	984328742		extension_phase1d
@@ -182,7 +182,7 @@ taxid	binomial	clade	policy_class	source	accession	assembly_level	annotation_sta
 225476	Hygromia cinctella	Heterobranchia	heterobranchia	GenBank	GCA_974392715.2	Chromosome		0		222033	1432880999		extension_phase1d
 228297	Argopecten purpuratus	bivalvia										no_proteome_in_ncbi	nath_phase1e
 228457	Laternula elliptica	bivalvia		GenBank	GCA_050575415.1	Contig		0		2884873	1153961776		nath_phase1e
-231223	Elysia crispata	Heterobranchia	heterobranchia	GenBank	GCA_033675545.1	Contig		67429		458731	786336081		extension_phase1d
+231223	Elysia crispata	Heterobranchia	heterobranchia	GenBank	GCA_033675545.1	Contig		67429		458731	786336081	harvested_annotated	extension_phase1d
 231999	Epimenia babai	other_molluscan_classes		GenBank	GCA_011762755.2	Scaffold		0		5209	537167073		nath_phase1e
 238240	Lamellibrachia luymesi	annelida		GenBank	GCA_009193005.1	Scaffold		0		24086	687706213		nath_phase1e
 241154	Acanthocardia echinata	Bivalvia	other_mollusca	GenBank	GCA_977930445.1	Chromosome		0		4250610	1351164484		extension_phase1d
@@ -275,7 +275,7 @@ taxid	binomial	clade	policy_class	source	accession	assembly_level	annotation_sta
 623738	Octopus maya	cephalopoda		GenBank	GCA_027122535.1	Scaffold		0		2361	2341750473		nath_phase1e
 627230	Ostrea lurida	bivalvia		GenBank	GCA_903981925.1	Scaffold		0		7815	1140787867		nath_phase1e
 669229	Wirenia argentea	other_molluscan_classes		GenBank	GCA_025802215.1	Scaffold		0		2969	528769856		nath_phase1e
-672921	Tubulanus polymorphus	Nemertea	outgroup_nemertea	RefSeq	GCF_964204645.1	Chromosome	Full annotation	15035		9529141	267806677		extension_phase1d
+672921	Tubulanus polymorphus	Nemertea	outgroup_nemertea	RefSeq	GCF_964204645.1	Chromosome	Full annotation	15035		9529141	267806677	harvested_annotated	extension_phase1d
 683711	Macrostomum hystrix	platyhelminthes		GenBank	GCA_950097015.1	Contig		0		13505968	220453370		nath_phase1e
 703304	Gibbula magus	gastropoda		GenBank	GCA_936450465.1	Chromosome		0		3416053	1470388822		nath_phase1e
 703305	Steromphala pennanti	Vetigastropoda	other_mollusca	GenBank	GCA_972017475.2	Chromosome		0		19544000	1230639586		extension_phase1d
@@ -309,7 +309,7 @@ taxid	binomial	clade	policy_class	source	accession	assembly_level	annotation_sta
 1048606	Talochlamys pusio	Bivalvia	other_mollusca	GenBank	GCA_977012135.2	Chromosome		0		31685418	1126839705		extension_phase1d
 1049056	Panopea generosa	bivalvia		GenBank	GCA_029582155.1	Chromosome		0		1571249	1474161289		nath_phase1e
 1051067	Doryteuthis pealeii	Cephalopoda	other_mollusca	GenBank	GCA_023376005.1	Chromosome		0		230938	4598001602		extension_phase1d
-1069815	Sinanodonta woodiana	Bivalvia	other_mollusca	GenBank	GCA_046254885.1	Chromosome		44785		4007853	2804107447		extension_phase1d
+1069815	Sinanodonta woodiana	Bivalvia	other_mollusca	GenBank	GCA_046254885.1	Chromosome		44785		4007853	2804107447	harvested_annotated	extension_phase1d
 1077242	Gadila tolmiei	other_molluscan_classes										no_proteome_in_ncbi	nath_phase1e
 1131437	Terebella lapidaria	annelida		GenBank	GCA_949152475.1	Chromosome		0		6684000	765232019		nath_phase1e
 1138471	Boreochiton ruber	Polyplacophora	rare_basal	GenBank	GCA_048127235.1	Contig		0		4028624	1660703474		extension_phase1d
@@ -382,7 +382,7 @@ taxid	binomial	clade	policy_class	source	accession	assembly_level	annotation_sta
 2201794	Muusoctopus leioderma	cephalopoda		GenBank	GCA_027124095.1	Scaffold		0		3109	1531747144		nath_phase1e
 2291463	Prostheceraeus crozieri	platyhelminthes		GenBank	GCA_907163375.1	Scaffold		0		287821	2065465794		nath_phase1e
 2291877	Archivesica marissinica	bivalvia		GenBank	GCA_014843695.1	Chromosome		0		79144	1544610695		nath_phase1e
-2302425	Mactra antiquata	Bivalvia	other_mollusca	GenBank	GCA_047288015.1	Chromosome		24436		8652042	791834592		extension_phase1d
+2302425	Mactra antiquata	Bivalvia	other_mollusca	GenBank	GCA_047288015.1	Chromosome		24436		8652042	791834592	harvested_annotated	extension_phase1d
 2302672	Eumandya parva	Cephalopoda	other_mollusca	GenBank	GCA_964059275.1	Chromosome		0		1364429	4425887515		extension_phase1d
 2483392	Flabellinopsis iodinea	Heterobranchia	heterobranchia	GenBank	GCA_056592575.1	Scaffold		0		2954	700539562		extension_phase1d
 2496851	Halgerda indotessellata	Heterobranchia	heterobranchia	GenBank	GCA_056593295.1	Scaffold		0		1480	1094045699		extension_phase1d
@@ -457,7 +457,7 @@ taxid	binomial	clade	policy_class	source	accession	assembly_level	annotation_sta
 3186388	Enigmonia aenigmatica	Bivalvia	other_mollusca	GenBank	GCA_056601665.1	Chromosome		0		42118662	465968615		extension_phase1d
 3190879	Globivenus rigida	Bivalvia	other_mollusca	GenBank	GCA_982557745.1	Chromosome		0		26367000	1800665150		extension_phase1d
 3198454	Lima caribaea	Bivalvia	other_mollusca	GenBank	GCA_977909015.1	Chromosome		0		17215279	1636169571		extension_phase1d
-3198878	Liolophura sinensis	Polyplacophora	rare_basal	RefSeq	GCF_032854445.1	Chromosome	Updated annotation	17422		764463	609495693		extension_phase1d
+3198878	Liolophura sinensis	Polyplacophora	rare_basal	RefSeq	GCF_032854445.1	Chromosome	Updated annotation	17422		764463	609495693	harvested_annotated	extension_phase1d
 3199284	Lotoria lotoria	Caenogastropoda	other_mollusca	GenBank	GCA_977112875.1	Chromosome		0		1553312	2996845438		extension_phase1d
 3211865	Poecilozonites bermudensis	Heterobranchia	heterobranchia	GenBank	GCA_053573765.1	Chromosome		0		138507	1355784518		extension_phase1d
 3237505	Sinosolenaia oleivora	Bivalvia	other_mollusca	GenBank	GCA_039955035.1	Chromosome		0		18762744	2052292795		extension_phase1d
