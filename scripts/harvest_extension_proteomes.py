@@ -104,7 +104,8 @@ def _read_status(download_results_tsv: str) -> dict:
 
 def append_to_proteome_manifest(staged_tsv: str, download_results_tsv: str,
                                 proteome_manifest_tsv: str) -> int:
-    """Append ok/ok_no_cds staged species to proteome_manifest.tsv (idempotent)."""
+    """Append staged species with a present proteome (ok/ok_no_cds/skipped — the
+    last meaning already-cached) to proteome_manifest.tsv (idempotent)."""
     if not Path(proteome_manifest_tsv).exists():
         raise FileNotFoundError(
             f"proteome_manifest_tsv not found: {proteome_manifest_tsv!r} (run Phase 1a before harvest)")
@@ -119,7 +120,10 @@ def append_to_proteome_manifest(staged_tsv: str, download_results_tsv: str,
             tx = (row.get("taxid") or "").strip()
             if tx in existing:
                 continue
-            if status.get(tx) not in ("ok", "ok_no_cds"):
+            # "skipped" = proteome already cached (present) from a prior run, so it
+            # is a usable proteome and must be recorded too — keeps the harvest
+            # idempotent when the cache is populated but the manifest was rebuilt.
+            if status.get(tx) not in ("ok", "ok_no_cds", "skipped"):
                 continue
             to_add.append({c: row.get(c, "") for c in PROTEOME_MANIFEST_COLUMNS})
     if to_add:

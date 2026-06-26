@@ -121,6 +121,22 @@ def test_append_only_ok_idempotent(tmp_path):
     assert hep.append_to_proteome_manifest(str(st), str(rs), str(pm)) == 0
 
 
+def test_append_includes_skipped_cached(tmp_path):
+    """A 'skipped' (already-cached) download is still appended — a cached proteome
+    is present, so it must be recorded; this keeps the harvest idempotent when the
+    cache is populated but the manifest was rebuilt/reverted."""
+    import csv as _csv
+    pm = tmp_path / "pm.tsv"; pm.write_text(PM)
+    st = tmp_path / "staged.tsv"; st.write_text(STAGED)
+    rs = tmp_path / "res.tsv"
+    rs.write_text("taxid\tstatus\n231223\tskipped\n999\tdownload_failed\n")
+    n = hep.append_to_proteome_manifest(str(st), str(rs), str(pm))
+    assert n == 1  # 231223 (skipped/cached) appended; 999 (download_failed) not
+    with open(pm) as fh:
+        taxids = {r["taxid"] for r in _csv.DictReader(fh, delimiter="\t")}
+    assert "231223" in taxids
+
+
 def test_append_uses_lf_line_endings(tmp_path):
     pm = tmp_path / "pm.tsv"
     pm.write_text(PM)
