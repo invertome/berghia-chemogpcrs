@@ -26,15 +26,26 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-# Family-label substrings recognized as NON-chemoreceptor GPCR families.
-# A module constant (rather than hard-coded inline) so it is testable and
-# overridable by callers without editing this module. Matches the family
-# taxonomy the non-chemoreceptor classifier already uses (see
-# scripts/_classification_labels.py) -- labels like "aminergic_5HT",
-# "class-B-secretin", "class-F-frizzled".
+# Coarse NON-chemoreceptor GPCR family labels. A module constant (rather than
+# hard-coded inline) so it is testable and overridable by callers without
+# editing this module.
+#
+# These are the EXACT canonical coarse families the non-chemoreceptor
+# classifier emits: an authoritative mirror of COARSE_FAMILIES in
+# scripts/validate_classification_hmms.py (identical to the family list in
+# scripts/curate_gpcr_references.py). Keep the three copies in sync. Using the
+# classifier's own strings is what lets a Foldseek hit to e.g. the
+# glycoprotein-hormone (TSHR/FSHR/LHCGR) or metabotropic-neurotransmitter
+# family correctly corroborate EXCLUSION instead of silently leaking away as
+# "known_other". classify_hit() substring-matches these against a family_map
+# label, so both the bare coarse form ("glycoprotein-hormone") and the
+# "<coarse>_<subfamily>" form ("aminergic_5HT") match. NB: "unclassified-gpcr"
+# is the uncertain/candidate bucket, NOT a non-chemoreceptor family -- omitted
+# on purpose.
 NON_CHEMORECEPTOR_FAMILIES = {
-    "peptide", "aminergic", "opsin", "lipid", "nucleotide",
-    "class-B", "class-C", "class-F", "bioamine",
+    "aminergic", "peptide", "opsin", "lipid", "nucleotide",
+    "metabotropic-neurotransmitter", "glycoprotein-hormone",
+    "class-B-secretin", "class-C", "class-F-frizzled",
 }
 
 # foldseek easy-search --format-output "query,target,fident,alntmscore,evalue"

@@ -129,6 +129,44 @@ def test_classify_hit_recognizes_every_nonchemoreceptor_tag(family):
     assert classify_hit(best, family_map) == "known_non_chemoreceptor"
 
 
+def test_nonchemoreceptor_families_matches_authoritative_taxonomy():
+    """The exclusion set must equal the classifier's canonical coarse families
+    (COARSE_FAMILIES in scripts/validate_classification_hmms.py). Guards the
+    completeness gap the fix closed: no missing live families, no stray tags."""
+    assert NON_CHEMORECEPTOR_FAMILIES == {
+        "aminergic", "peptide", "opsin", "lipid", "nucleotide",
+        "metabotropic-neurotransmitter", "glycoprotein-hormone",
+        "class-B-secretin", "class-C", "class-F-frizzled",
+    }
+    # The vestigial colloquialism must be gone (taxonomy emits 'aminergic').
+    assert "bioamine" not in NON_CHEMORECEPTOR_FAMILIES
+
+
+def test_classify_hit_glycoprotein_hormone_is_nonchemoreceptor_regression():
+    """Regression for the exact completeness gap: a confident structural hit to
+    the glycoprotein-hormone family (TSHR/FSHR/LHCGR) MUST corroborate
+    exclusion. Before the taxonomy fix, NON_CHEMORECEPTOR_FAMILIES omitted this
+    LIVE family, so the hit was silently misclassified 'known_other' and the
+    exclusion signal was lost. Tests both the bare coarse label and the
+    realistic '<coarse>_<subfamily>' form."""
+    best = {"target": "tshr_model", "alntmscore": 0.88, "fident": 0.70,
+            "evalue": 1e-28}
+    assert classify_hit(best, {"tshr_model": "glycoprotein-hormone"}) == \
+        "known_non_chemoreceptor"
+    assert classify_hit(best, {"tshr_model": "glycoprotein-hormone_TSH"}) == \
+        "known_non_chemoreceptor"
+
+
+def test_classify_hit_metabotropic_neurotransmitter_is_nonchemoreceptor_regression():
+    """Companion gap: metabotropic-neurotransmitter (mGlu / GABA-B) was also
+    absent from the pre-fix set and would have leaked to 'known_other'."""
+    best = {"target": "mglur_model", "alntmscore": 0.82, "fident": 0.60,
+            "evalue": 1e-20}
+    assert classify_hit(
+        best, {"mglur_model": "metabotropic-neurotransmitter"}) == \
+        "known_non_chemoreceptor"
+
+
 # --- structural_channel -------------------------------------------------------
 
 def test_structural_channel_flags_novel_and_corroborated(tmp_path):
