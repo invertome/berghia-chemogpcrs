@@ -18,6 +18,12 @@ SIGNAL_COLUMNS = [
     "gprotein_coexpr_score", "ecl_divergence_score", "expansion_score",
     "og_confidence_score",
     "tandem_cluster_score",  # flag suffix-swaps correctly (has_tandem_cluster_data)
+    # Task 6: structural/embedding/microswitch evidence channels
+    # (rank_aggregation.py SIGNAL_SPEC). None of these follow the
+    # "<name>_score" naming convention, so each needs a FLAG_OVERRIDES entry.
+    "struct_novelty", "struct_nonchemo_corrob",
+    "emb_classA_sim", "emb_nonchemo_sim",
+    "or_microswitch",
 ]
 
 # Signals whose has_*_data flag does not follow the "<name>_score" ->
@@ -26,6 +32,11 @@ SIGNAL_COLUMNS = [
 FLAG_OVERRIDES = {
     "gprotein_coexpr_score": "has_gprotein_data",
     "ecl_divergence_score": "has_ecl_data",
+    "struct_novelty": "has_struct_data",
+    "struct_nonchemo_corrob": "has_struct_data",
+    "emb_classA_sim": "has_emb_data",
+    "emb_nonchemo_sim": "has_emb_data",
+    "or_microswitch": "has_or_microswitch_data",
 }
 
 def load_signal_matrix(csv_path):

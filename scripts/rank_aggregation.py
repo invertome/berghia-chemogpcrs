@@ -25,7 +25,10 @@ casts one vote, not one vote per redundant signal.
 """
 from __future__ import annotations
 
+import os
+
 import numpy as np
+import pandas as pd
 from scipy.special import betainc
 from scipy.stats import rankdata
 
@@ -153,11 +156,27 @@ def aggregate(per_signal_ranklists, method="rra", groups=None):
 # Bridge to the candidate-ranking dataframe (shared by rank_candidates.py and
 # compare_ranking_methods.py so the 12-signal spec lives in exactly one place)
 # --------------------------------------------------------------------------- #
-# The 12 ranking signals as (signal_key, has_flag). has_flag=None marks the
-# four base signals that are ALWAYS present; the other eight contribute a
-# candidate's value only where their has_*_data boolean is True. The two
-# non-obvious flag names (gprotein/ecl) mirror the production ranked CSV and
+# The 12 core ranking signals as (signal_key, has_flag), PLUS (Task 6) five
+# optional structural/embedding/microswitch evidence-channel signals appended
+# below. has_flag=None marks the four base signals that are ALWAYS present;
+# every other entry contributes a candidate's value only where its
+# has_*_data boolean is True. The two non-obvious flag names (gprotein/ecl)
+# mirror the production ranked CSV and
 # scripts/audit_signal_ranking_independence.py's FLAG_OVERRIDES.
+#
+# Each entry is (key, flag) or (key, flag, column, invert):
+#   - column: the exact df column to read. Omitted/None (the 12 core
+#     signals) means "look up f'{key}_score_norm' then fall back to
+#     f'{key}_score'" (rank_candidates.py's CSV convention). The Task-6
+#     evidence channels don't follow that convention (they are not
+#     normalized/weighted scores), so they name their own literal column.
+#   - invert: True marks an EXCLUSION signal. Rank aggregation has no
+#     weights to negate, so the ONLY way an exclusion signal can lower a
+#     candidate's standing is to flip its polarity before it ever reaches
+#     normalized_ranks(): the stored ranklist value becomes (1 - raw), so
+#     "higher stored value = better" holds for every signal, exclusion or
+#     not. See merge_evidence_channels() for how the Task-4/5/6 channel
+#     outputs get joined onto the ranking df in the first place.
 SIGNAL_SPEC = [
     ("phylo", None),
     ("purifying", None),
@@ -171,27 +190,53 @@ SIGNAL_SPEC = [
     ("expansion", "has_expansion_data"),
     ("og_confidence", "has_og_confidence_data"),
     ("tandem_cluster", "has_tandem_cluster_data"),
+    # --- Task 6: optional structural/embedding/microswitch evidence
+    # channels. Dormant by default (merge_evidence_channels() never ran /
+    # channel columns absent / has_*_data all False) -- the 12 signals above
+    # alone then reproduce the pre-Task-6 ranking exactly (see
+    # tests/unit/test_channel_integration.py's regression tests).
+    ("struct_novelty", "has_struct_data", "struct_novelty", False),
+    ("struct_nonchemo_corrob", "has_struct_data", "struct_nonchemo_corrob", True),
+    ("emb_classA_sim", "has_emb_data", "emb_classA_sim", False),
+    ("emb_nonchemo_sim", "has_emb_data", "emb_nonchemo_sim", True),
+    ("or_microswitch", "has_or_microswitch_data", "or_microswitch", False),
 ]
 
 
 def build_ranklists_from_df(df, id_col="id"):
-    """Build ``{signal: {id: score}}`` for the 12 ranking signals from a df.
+    """Build ``{signal: {id: score}}`` for every signal in SIGNAL_SPEC from a df.
 
-    Prefers the normalized ``<signal>_score_norm`` column and falls back to
-    the raw ``<signal>_score`` column (the written ranked CSV carries the raw
-    columns, not the norm ones -- rank aggregation ranks within each signal,
-    which is invariant to the monotonic min-max normalization, so either
-    yields identical rankings). A gated signal contributes a candidate's value
-    only where its ``has_*_data`` flag is True; the four base signals are
-    always included. Higher score = better (every axis enters the weighted sum
-    positively). Missing/NaN values and empty signals are dropped so a signal
-    only "votes" where it has data.
+    The 12 core ranking signals prefer the normalized ``<signal>_score_norm``
+    column and fall back to the raw ``<signal>_score`` column (the written
+    ranked CSV carries the raw columns, not the norm ones -- rank aggregation
+    ranks within each signal, which is invariant to the monotonic min-max
+    normalization, so either yields identical rankings). The Task-6
+    evidence-channel signals instead read their own exact ``column`` named in
+    SIGNAL_SPEC, since they are not normalized/weighted scores.
+
+    A gated signal (``flag`` not None) contributes a candidate's value only
+    where its ``has_*_data`` flag is True; the four base signals are always
+    included. Higher stored value = better for every signal. An EXCLUSION
+    signal (``invert=True`` in SIGNAL_SPEC) stores ``1 - raw_value`` instead
+    of the raw value, so that invariant holds for it too -- rank aggregation
+    has no weights, so inversion is the only way an exclusion signal can
+    lower, never raise, a candidate's standing. Missing/NaN values and empty
+    signals are dropped so a signal only "votes" where it has data; a signal
+    whose column (or, for a gated signal, whose flag column) is entirely
+    absent from ``df`` is skipped -- this is what keeps the Task-6 channels
+    dormant until merge_evidence_channels() has actually joined them in.
     """
     ids = list(df[id_col])
     ranklists = {}
-    for key, flag in SIGNAL_SPEC:
-        norm_col, raw_col = f"{key}_score_norm", f"{key}_score"
-        col = norm_col if norm_col in df.columns else raw_col
+    for spec in SIGNAL_SPEC:
+        key, flag = spec[0], spec[1]
+        column = spec[2] if len(spec) > 2 else None
+        invert = spec[3] if len(spec) > 3 else False
+        if column is not None:
+            col = column
+        else:
+            norm_col, raw_col = f"{key}_score_norm", f"{key}_score"
+            col = norm_col if norm_col in df.columns else raw_col
         if col not in df.columns:
             continue
         values = list(df[col])
@@ -206,10 +251,61 @@ def build_ranklists_from_df(df, id_col="id"):
         for idv, val, present in zip(ids, values, keep):
             if not present or _is_missing(val):
                 continue
-            signal_map[idv] = float(val)
+            val = float(val)
+            if invert:
+                val = 1.0 - val
+            signal_map[idv] = val
         if signal_map:
             ranklists[key] = signal_map
     return ranklists
+
+
+def merge_evidence_channels(df, struct_tsv=None, emb_tsv=None,
+                             microswitch_tsv=None, id_col="id"):
+    """Left-join the Task-4/5/6 evidence-channel outputs onto ``df`` by id.
+
+    Each ``*_tsv`` path is a tab-separated table of an already-computed
+    channel's per-candidate columns, keyed by ``id_col``:
+        struct_tsv      -- id, struct_novelty, struct_nonchemo_corrob[, ...]
+                           (structural_evidence.structural_channel() output)
+        emb_tsv         -- id, emb_classA_sim, emb_nonchemo_sim[, ...]
+                           (embedding_evidence.embedding_channel() output)
+        microswitch_tsv -- id, or_microswitch
+                           (or_microswitch.or_microswitch_flag() output)
+
+    A ``None`` path, or one that doesn't exist on disk, leaves that channel
+    entirely DORMANT: its ``has_*_data`` flag is False for every row and none
+    of its score columns are added to the output -- the channel simply never
+    ran (or hasn't been produced yet). This mirrors parse_foldseek() /
+    load_embeddings() treating a missing input file as "no evidence", never
+    an error.
+
+    Sets ``has_struct_data`` / ``has_emb_data`` / ``has_or_microswitch_data``
+    to True ONLY for the ``df`` rows whose id was found in the corresponding
+    TSV. This is a LEFT join: every row of ``df`` is preserved regardless of
+    channel coverage, and a row absent from a TSV keeps its score column(s)
+    as NaN (dropped downstream by build_ranklists_from_df's missing-value
+    handling) with that channel's flag False.
+    """
+    merged = df.copy()
+    channels = (
+        (struct_tsv, "has_struct_data",
+         ["struct_novelty", "struct_nonchemo_corrob", "struct_state"]),
+        (emb_tsv, "has_emb_data",
+         ["emb_classA_sim", "emb_nonchemo_sim", "emb_nonchemo_family",
+          "emb_leakage_flag"]),
+        (microswitch_tsv, "has_or_microswitch_data", ["or_microswitch"]),
+    )
+    for tsv_path, flag_col, value_cols in channels:
+        if tsv_path is None or not os.path.exists(tsv_path):
+            merged[flag_col] = False
+            continue
+        chan = pd.read_csv(tsv_path, sep="\t").set_index(id_col)
+        for col in value_cols:
+            if col in chan.columns:
+                merged[col] = merged[id_col].map(chan[col])
+        merged[flag_col] = merged[id_col].isin(chan.index)
+    return merged
 
 
 def normalize_group_names(groups):
@@ -232,7 +328,8 @@ def rerank_output(df_sorted, method, groups=None):
     ``method != "rankagg"`` (the default ``"weighted"``): returns ``df_sorted``
     UNCHANGED -- a strict identity so the weighted production ordering/output
     stays byte-identical. ``method == "rankagg"``: reorders rows by a Robust
-    Rank Aggregation fusion of the 12 per-signal ranklists (``groups`` fuses
+    Rank Aggregation fusion of the SIGNAL_SPEC per-signal ranklists (the 12
+    core signals, plus any Task-6 evidence channels present; ``groups`` fuses
     confounded signals into one vote); ids covered by no signal keep their
     incoming (weighted) order at the tail via a stable sort.
     """
