@@ -38,8 +38,24 @@ def test_paf_identity_and_coverage(tmp_path):
                    "tp:A:P\tcs:Z::294*ac\n")
     p = rc.parse_minimap2_paf(str(paf))[0]
     assert p.chrom == "chr1" and p.strand == "+"
-    assert 97 <= p.pct_identity <= 99      # 294/300
-    assert p.pct_coverage == 100.0         # (300-0)/300
+    assert p.pct_identity == 98.0          # 100 * 294/300 (exact)
+    assert p.pct_coverage == 100.0         # 100 * (300-0)/300
+
+
+def test_paf_distinct_qlen_and_alen_denominators(tmp_path):
+    """Guards the identity/coverage denominator wiring: identity uses
+    alen (f[10]) and coverage uses qlen (f[1]). With qlen != alen the
+    two are numerically distinct, so a swapped-denominator regression
+    (identity<->coverage) changes both values and this test fails.
+    Correct:  identity = 100*294/300 = 98.0 ; coverage = 100*300/305 = 98.36..
+    Swapped:  identity = 100*294/305 = 96.39 ; coverage = 100*300/300 = 100.0
+    """
+    paf = tmp_path / "m.paf"
+    # qname qlen=305 qstart=0 qend=300 strand tname tlen tstart tend nmatch=294 alen=300 mapq
+    paf.write_text("q1\t305\t0\t300\t+\tchr1\t10000\t500\t800\t294\t300\t60\n")
+    p = rc.parse_minimap2_paf(str(paf))[0]
+    assert p.pct_identity == 98.0                              # 100 * 294/300
+    assert abs(p.pct_coverage - 98.36065573770492) < 1e-9      # 100 * 300/305
 
 
 def test_paf_query_and_score_and_method(tmp_path):
@@ -211,6 +227,21 @@ def test_gmap_gff_query_from_target_when_name_absent(tmp_path):
     gff.write_text("##gff-version 3\n" + line)
     p = rc.parse_gmap_gff(str(gff))[0]
     assert p.query == "BersteEVm7"
+
+
+def test_gmap_gff_no_name_or_target_is_skipped(tmp_path):
+    """Fail closed on the join key: an mRNA row that carries identity=/
+    coverage= but has neither Name= nor Target= is SKIPPED rather than
+    falling back to ID= (which is `<id>.pathN.mrnaN`, not the bare
+    transcript id — a silently-wrong key that would break Task 4
+    concordance). Losing a placement degrades gracefully (the cascade
+    falls through to miniprot); a wrong key does not."""
+    line = ("chr1\tgmap\tmRNA\t500\t800\t.\t+\t.\t"
+            "ID=BersteEVm1.path1.mrna1;Parent=BersteEVm1.path1;"
+            "coverage=99.5;identity=97.2\n")
+    gff = tmp_path / "g.gff3"
+    gff.write_text("##gff-version 3\n" + line)
+    assert rc.parse_gmap_gff(str(gff)) == []
 
 
 def test_gmap_gff_missing_file_returns_empty():

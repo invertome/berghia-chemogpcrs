@@ -38,9 +38,14 @@ from dataclasses import dataclass
 MINIPROT_COVERAGE_SENTINEL = 0.0
 
 
-@dataclass
+@dataclass(frozen=True)
 class Placement:
-    """A single candidate-to-genome placement from one aligner."""
+    """A single candidate-to-genome placement from one aligner.
+
+    Frozen (immutable + hashable): a Placement is a value record, never
+    mutated after construction, and Task 2's locus dedup needs it
+    hashable — matching the repo's value-record convention.
+    """
     query: str
     chrom: str
     start: int
@@ -111,9 +116,10 @@ def parse_minimap2_paf(path: str) -> list[Placement]:
                 continue
             pct_identity = 100.0 * nmatch / alen if alen else 0.0
             pct_coverage = 100.0 * (qe - qs) / qlen if qlen else 0.0
-            out.append(Placement(f[0], f[5], tstart, tend, f[4],
-                                  pct_identity, pct_coverage,
-                                  "minimap2", mapq))
+            out.append(Placement(query=f[0], chrom=f[5], start=tstart, end=tend,
+                                  strand=f[4], pct_identity=pct_identity,
+                                  pct_coverage=pct_coverage, method="minimap2",
+                                  score=mapq))
     return out
 
 
@@ -157,7 +163,12 @@ def parse_gmap_gff(path: str) -> list[Placement]:
                 pct_coverage = float(coverage_s)
             except ValueError:
                 continue
-            query = _attr(attrs, "Name") or _attr(attrs, "Target") or _attr(attrs, "ID")
+            # Fail closed on the join key: use the bare transcript id from
+            # Name= or Target=; never fall back to ID= (which is
+            # `<id>.pathN.mrnaN` — a silently-wrong key that would break
+            # Task 4 concordance). No usable id -> skip the row (the
+            # cascade then falls through to miniprot).
+            query = _attr(attrs, "Name") or _attr(attrs, "Target")
             if query is None:
                 continue
             query = query.split()[0]  # Target="<id> start end [strand]" -> id
@@ -166,8 +177,10 @@ def parse_gmap_gff(path: str) -> list[Placement]:
                 score = float(score_s) if score_s is not None else 0.0
             except ValueError:
                 score = 0.0
-            out.append(Placement(query, f[0], start, end, f[6],
-                                  pct_identity, pct_coverage, "gmap", score))
+            out.append(Placement(query=query, chrom=f[0], start=start, end=end,
+                                  strand=f[6], pct_identity=pct_identity,
+                                  pct_coverage=pct_coverage, method="gmap",
+                                  score=score))
     return out
 
 
@@ -220,8 +233,10 @@ def parse_miniprot_gff(path: str) -> list[Placement]:
                 score = float(f[5])
             except ValueError:
                 score = 0.0
-            out.append(Placement(query, f[0], start, end, f[6],
-                                  pct_identity, pct_coverage, "miniprot", score))
+            out.append(Placement(query=query, chrom=f[0], start=start, end=end,
+                                  strand=f[6], pct_identity=pct_identity,
+                                  pct_coverage=pct_coverage, method="miniprot",
+                                  score=score))
     return out
 
 
@@ -258,8 +273,10 @@ def parse_blastp_tab(path: str, coords: dict[str, tuple[str, int, int, str]]
             except ValueError:
                 continue
             chrom, start, end, strand = locus
-            out.append(Placement(qseqid, chrom, start, end, strand,
-                                  pident, qcovs, "blastp", bitscore))
+            out.append(Placement(query=qseqid, chrom=chrom, start=start, end=end,
+                                  strand=strand, pct_identity=pident,
+                                  pct_coverage=qcovs, method="blastp",
+                                  score=bitscore))
     return out
 
 
