@@ -17,6 +17,7 @@ SIGNAL_COLUMNS = [
     "expression_score", "lse_depth_score", "chemosensory_expr_score",
     "gprotein_coexpr_score", "ecl_divergence_score", "expansion_score",
     "og_confidence_score",
+    "tandem_cluster_score",  # flag suffix-swaps correctly (has_tandem_cluster_data)
 ]
 
 # Signals whose has_*_data flag does not follow the "<name>_score" ->

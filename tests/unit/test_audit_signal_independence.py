@@ -67,3 +67,18 @@ def test_production_flag_names_mask_gprotein_and_ecl(tmp_path):
     assert g.loc["b"] == 0.5 and g.loc["d"] == 0.9          # flagged True -> kept
     assert np.isnan(e.loc["a"]) and np.isnan(e.loc["b"])   # flagged False -> NaN
     assert e.loc["c"] == 0.7 and e.loc["d"] == 0.3          # flagged True -> kept
+
+def test_tandem_cluster_signal_loaded_and_masked(tmp_path):
+    # the 12th live scorer signal (bead -ar8, weight 2.5) must be audited too.
+    # flag has_tandem_cluster_data derives via the plain suffix-swap.
+    df = pd.DataFrame({
+        "id": ["a", "b", "c", "d"],
+        "tandem_cluster_score":    [0.0, 0.8, 0.0, 0.4],
+        "has_tandem_cluster_data": [False, True, False, True],
+    })
+    p = tmp_path / "tandem.csv"; df.to_csv(p, index=False)
+    m = au.load_signal_matrix(str(p))
+    assert "tandem_cluster_score" in m.columns
+    t = m["tandem_cluster_score"]
+    assert np.isnan(t.loc["a"]) and np.isnan(t.loc["c"])   # flagged False -> NaN
+    assert t.loc["b"] == 0.8 and t.loc["d"] == 0.4          # flagged True -> kept
