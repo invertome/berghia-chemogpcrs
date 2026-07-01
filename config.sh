@@ -66,6 +66,18 @@ export FASTTREE="FastTree"
 export TRIMAL="trimal"
 export FASTML="fastml"
 export MINIMAP2="minimap2"
+export MINIPROT="${MINIPROT:-miniprot}"
+export GMAP="${GMAP:-gmap}"
+export GMAP_BUILD="${GMAP_BUILD:-gmap_build}"
+export GFFCOMPARE="${GFFCOMPARE:-gffcompare}"
+export BEDTOOLS="${BEDTOOLS:-bedtools}"
+export BLASTP="${BLASTP:-blastp}"
+export MAKEBLASTDB="${MAKEBLASTDB:-makeblastdb}"
+# Berghia RefSeq proteins + de novo transcript nucleotide models (genome-track inputs).
+# Built from BERGHIA_FILE_PREFIX (not hardcoded) to stay consistent with every other
+# Berghia path above (GENOME, GENOME_PROTEIN, TRANSCRIPTOME, ...).
+export BERGHIA_GENOME_PROTEINS="${BERGHIA_GENOME_PROTEINS:-${GENOME_DIR}/${BERGHIA_FILE_PREFIX}.proteins.fa}"
+export BERGHIA_TRANSCRIPTOME_MRNA="${BERGHIA_TRANSCRIPTOME_MRNA:-${TRANSCRIPTOME_DIR}/${BERGHIA_FILE_PREFIX}.mrna}"
 export SAMTOOLS="samtools"
 export MCSCANX="MCScanX"
 # Bead -e59: JCVI MCscan (Tang et al. 2024) entry point. Invoked as a Python
@@ -164,6 +176,9 @@ export ASR_BACKEND="${ASR_BACKEND:-iqtree}"
 export SYNTENY_BACKEND="${SYNTENY_BACKEND:-jcvi}"
 # Bead -6nh: TM predictor primary
 export TM_PREDICTOR_PRIMARY="${TM_PREDICTOR_PRIMARY:-tmbed}"
+# Genome track: identify candidates on the Berghia RefSeq proteins and reconcile
+# with the transcriptome candidates (stage 02c). 0 = transcriptome-only (legacy).
+export RUN_GENOME_TRACK="${RUN_GENOME_TRACK:-1}"
 
 # --- Local overrides (gitignored) ---
 # Allow per-machine config (real SLURM_EMAIL, custom paths, etc.) without
