@@ -69,7 +69,7 @@ import sys
 import numpy as np
 import torch
 from esm.models.esmc import ESMC
-from esm.sdk.api import ESMProtein
+from esm.sdk.api import ESMProtein, LogitsConfig
 
 candidate_faa = os.environ["CANDIDATE_FAA"]
 out_npz = os.environ["OUT_NPZ"]
@@ -109,8 +109,15 @@ vectors = {}
 with torch.no_grad():
     for i, (seq_id, seq) in enumerate(sequences.items(), start=1):
         protein = ESMProtein(sequence=seq)
-        tensor = model.encode(protein)
-        per_residue = model.forward(tensor)          # (1, L, hidden_dim)
+        tensor = model.encode(protein)               # -> ESMProteinTensor
+        # ESM-C SDK: get embeddings via logits(..., LogitsConfig(return_embeddings=True)),
+        # which batches encode->forward and unwraps the hidden states. Do NOT call
+        # model.forward(tensor).mean(): forward() returns an ESMCOutput dataclass
+        # (no .mean()) and expects a raw token tensor, not the ESMProteinTensor
+        # container. The `esm` API can drift across versions — confirm this call
+        # against the Unity env's installed `esm` version on the first run.
+        logits_output = model.logits(tensor, LogitsConfig(return_embeddings=True))
+        per_residue = logits_output.embeddings       # (1, L, hidden_dim) tensor
         mean_pooled = per_residue.mean(dim=1).squeeze(0)  # (hidden_dim,)
         vectors[seq_id] = mean_pooled.float().cpu().numpy()
         if i % 50 == 0:
