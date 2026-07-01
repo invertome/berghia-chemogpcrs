@@ -92,16 +92,83 @@ fi
 # Extract all GPCR IDs
 awk '/^>/ {print substr($1,2)}' "${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa" > "${RESULTS_DIR}/ranking/candidate_ids.txt"
 
-# --- RANK_METHOD=rankagg: audit signal independence before ranking ---
+# --- RANK_METHOD=rankagg: build evidence channels + audit signal
+# independence before ranking (Glue G3) ---
 # The label-free rank-aggregation reranker must not let signals that share a
 # confound (e.g. phylo + og_confidence, both from the same OrthoFinder tree)
 # count as several independent votes. The audit groups correlated signals and
 # rank_candidates.py fuses each group into one vote. It reads the PRIOR run's
 # ranked CSV (the signal-correlation structure is stable across runs); on the
 # first run none exists, so rankagg simply treats every signal independently.
-# The default RANK_METHOD=weighted path is unchanged (this block is skipped).
+#
+# The structural/embedding/microswitch evidence-channel PRODUCERS (Glue
+# G1/G2/G5: build_structural_channel.py / build_embedding_channel.py /
+# build_microswitch_channel.py) also run here, each independently gated on
+# its own raw Unity inputs -- a producer whose inputs aren't present is
+# skipped (its channel simply stays dormant downstream, never an error).
+# Outputs land in CHANNELS_DIR, which rank_candidates.py's
+# _merge_channels_if_present() reads (default location: alongside the output
+# CSV, in a channels/ subdirectory).
+#
+# The default RANK_METHOD=weighted path is unchanged (this whole block is
+# skipped).
 RANKED_CSV="${RESULTS_DIR}/ranking/ranked_candidates_sorted.csv"
+CHANNELS_DIR="${RESULTS_DIR}/ranking/channels"
 if [ "${RANK_METHOD:-weighted}" = "rankagg" ]; then
+    mkdir -p "${CHANNELS_DIR}"
+
+    # Structural channel (Foldseek vs PDB/AFDB50/GPCRdb; Glue G1). Gated on
+    # at least one of the 3 Foldseek DB tabs scripts/unity/run_foldseek_candidates.sh
+    # produces -- that script itself tolerates a subset of its 3 DBs being
+    # unavailable, so we mirror that tolerance here rather than requiring all 3.
+    FOLDSEEK_CANDIDATES_DIR="${FOLDSEEK_CANDIDATES_DIR:-${RESULTS_DIR}/foldseek/candidates}"
+    FOLDSEEK_TSVS=()
+    for db in PDB AFDB50 GPCRdb; do
+        [ -f "${FOLDSEEK_CANDIDATES_DIR}/${db}.tsv" ] && FOLDSEEK_TSVS+=("${FOLDSEEK_CANDIDATES_DIR}/${db}.tsv")
+    done
+    if [ "${#FOLDSEEK_TSVS[@]}" -gt 0 ]; then
+        log "RANK_METHOD=rankagg: building structural evidence channel (${#FOLDSEEK_TSVS[@]} Foldseek DB tab(s))..."
+        python3 "${SCRIPTS_DIR}/build_structural_channel.py" \
+            --foldseek-tsvs "${FOLDSEEK_TSVS[@]}" \
+            --anchor-set "${REFERENCE_DIR}/anchors/anchor_set.tsv" \
+            --out "${CHANNELS_DIR}/structural_channel.tsv" \
+            2>> "${LOGS_DIR}/build_structural_channel.err" \
+            || log --level=WARN "Structural channel producer failed (channel stays dormant)"
+    else
+        log "Note: no Foldseek candidate hit TSVs found under ${FOLDSEEK_CANDIDATES_DIR} (run scripts/unity/run_foldseek_candidates.sh) -- structural channel skipped, stays dormant"
+    fi
+
+    # Embedding channel (ESM-C candidate vs non-chemoreceptor family centroids; Glue G2).
+    # Gated on BOTH the candidate-side and reference-side embeddings existing.
+    ESMC_CANDIDATE_NPZ="${ESMC_CANDIDATE_NPZ:-${RESULTS_DIR}/ranking/embeddings/candidates_esmc300m.npz}"
+    ESMC_REFERENCE_NPZ="${ESMC_REFERENCE_NPZ:-${RESULTS_DIR}/ranking/embeddings/reference_esmc300m.npz}"
+    if [ -f "${ESMC_CANDIDATE_NPZ}" ] && [ -f "${ESMC_REFERENCE_NPZ}" ]; then
+        log "RANK_METHOD=rankagg: building ESM-C embedding evidence channel..."
+        python3 "${SCRIPTS_DIR}/build_embedding_channel.py" \
+            --candidate-npz "${ESMC_CANDIDATE_NPZ}" \
+            --ref-npz "${ESMC_REFERENCE_NPZ}" \
+            --ref-labels "${REFERENCE_DIR}/anchors/anchor_set.tsv" \
+            --out "${CHANNELS_DIR}/embedding_channel.tsv" \
+            2>> "${LOGS_DIR}/build_embedding_channel.err" \
+            || log --level=WARN "Embedding channel producer failed (channel stays dormant)"
+    else
+        log "Note: ESM-C candidate/reference embeddings not found (${ESMC_CANDIDATE_NPZ}, ${ESMC_REFERENCE_NPZ}; run scripts/unity/run_esmc_embeddings.sh + run_esmc_reference_embeddings.sh) -- embedding channel skipped, stays dormant"
+    fi
+
+    # OR-microswitch channel (structural BW number-transfer; Glue G5). Gated
+    # on the per-candidate alignment-report directory existing and non-empty.
+    MICROSWITCH_ALIGNMENTS_DIR="${MICROSWITCH_ALIGNMENTS_DIR:-${RESULTS_DIR}/ranking/microswitch/alignments}"
+    if [ -d "${MICROSWITCH_ALIGNMENTS_DIR}" ] && [ -n "$(ls -A "${MICROSWITCH_ALIGNMENTS_DIR}" 2>/dev/null)" ]; then
+        log "RANK_METHOD=rankagg: building OR-microswitch evidence channel..."
+        python3 "${SCRIPTS_DIR}/build_microswitch_channel.py" \
+            --alignments "${MICROSWITCH_ALIGNMENTS_DIR}" \
+            --out "${CHANNELS_DIR}/microswitch_channel.tsv" \
+            2>> "${LOGS_DIR}/build_microswitch_channel.err" \
+            || log --level=WARN "Microswitch channel producer failed (channel stays dormant)"
+    else
+        log "Note: no microswitch alignment reports found under ${MICROSWITCH_ALIGNMENTS_DIR} (run scripts/unity/run_microswitch_bw_transfer.sh) -- microswitch channel skipped, stays dormant"
+    fi
+
     if [ -f "${RANKED_CSV}" ]; then
         log "RANK_METHOD=rankagg: auditing signal-ranking independence..."
         python3 "${SCRIPTS_DIR}/audit_signal_ranking_independence.py" \
@@ -189,7 +256,7 @@ if [ -f "${RANKED_CSV}" ]; then
     COMPARE_GROUPS="${RESULTS_DIR}/ranking/signal_independence_groups.json"
     [ -f "${COMPARE_GROUPS}" ] && COMPARE_ARGS+=(--groups-json "${COMPARE_GROUPS}")
     [ -f "${HCR_CONTROLS_CSV:-${REFERENCE_DIR}/hcr_positive_controls.csv}" ] && \
-        COMPARE_ARGS+=(--controls-csv "${REFERENCE_DIR}/hcr_positive_controls.csv")
+        COMPARE_ARGS+=(--controls-csv "${HCR_CONTROLS_CSV:-${REFERENCE_DIR}/hcr_positive_controls.csv}")
     python3 "${SCRIPTS_DIR}/compare_ranking_methods.py" "${COMPARE_ARGS[@]}" \
         2>> "${LOGS_DIR}/ranking_method_comparison.err" \
         || log --level=WARN "Ranking-method comparison failed (non-fatal)"

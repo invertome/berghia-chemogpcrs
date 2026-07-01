@@ -74,6 +74,35 @@ def _load_signal_groups(output_path):
     return _rank_agg.normalize_group_names(groups)
 
 
+def _merge_channels_if_present(df, channels_dir):
+    """Left-join the Glue-G1/G2/G5 evidence-channel TSVs (structural/
+    embedding/microswitch) onto ``df`` from ``channels_dir``.
+
+    07_candidate_ranking.sh's RANK_METHOD=rankagg branch runs each channel's
+    producer (build_structural_channel.py / build_embedding_channel.py /
+    build_microswitch_channel.py), independently gated on that producer's own
+    raw Unity inputs, writing whatever succeeds into ``channels_dir`` as
+    structural_channel.tsv / embedding_channel.tsv / microswitch_channel.tsv.
+    A channel whose TSV isn't there (its producer never ran, or ran but had
+    no inputs) is passed as None to merge_evidence_channels(), which leaves
+    it entirely dormant -- has_*_data False for every row, no score columns
+    added -- never an error. Only consulted on the RANK_METHOD=rankagg path,
+    before rerank_output() runs.
+    """
+    from rank_aggregation import merge_evidence_channels
+
+    def _path_if_exists(filename):
+        path = os.path.join(channels_dir, filename)
+        return path if os.path.exists(path) else None
+
+    return merge_evidence_channels(
+        df,
+        struct_tsv=_path_if_exists('structural_channel.tsv'),
+        emb_tsv=_path_if_exists('embedding_channel.tsv'),
+        microswitch_tsv=_path_if_exists('microswitch_channel.tsv'),
+    )
+
+
 # --- Input Arguments ---
 candidates_file = sys.argv[1]
 expression_file = sys.argv[2]
@@ -2084,6 +2113,8 @@ df_sorted = df.sort_values('rank_score', ascending=False)
 # is a separate gated decision; this only reorders the emitted CSV on request.
 if RANK_METHOD == 'rankagg':
     from rank_aggregation import rerank_output as _rerank_output
+    _channels_dir = os.path.join(os.path.dirname(output_file), 'channels')
+    df_sorted = _merge_channels_if_present(df_sorted, _channels_dir)
     _signal_groups = _load_signal_groups(output_file)
     df_sorted = _rerank_output(df_sorted, 'rankagg', groups=_signal_groups)
 
