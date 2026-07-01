@@ -8,7 +8,7 @@ taxid	binomial	clade	source	accession	assembly_level	annotation_status	est_prote
 6186	Schistosoma curassoni	platyhelminthes	GenBank	GCA_944474815.3	Chromosome		10084		
 6187	Schistosoma intercalatum	platyhelminthes	GenBank	GCA_944470365.2	Chromosome		9676		
 6188	Schistosoma rodhaini	platyhelminthes	GenBank	GCA_944470415.2	Chromosome		9927		
-6192	Fasciola hepatica	platyhelminthes	GenBank	GCA_000947175.1	Scaffold		0		
+6192	Fasciola hepatica	platyhelminthes	GenBank	GCA_000947175.1	Scaffold		0		no_proteome_in_ncbi
 6198	Opisthorchis viverrini	platyhelminthes	RefSeq	GCF_000715545.1	Scaffold		16356		
 6204	Taenia solium	platyhelminthes	GenBank	GCA_001870725.1	Scaffold		11854		
 6205	Hydatigera taeniaeformis	platyhelminthes	GenBank	GCA_900622495.1	Scaffold		11598		
