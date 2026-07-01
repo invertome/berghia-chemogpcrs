@@ -5,55 +5,65 @@ empirical questions: (a) is the ranking actually driven by which signals a
 candidate happens to have data for (the has_*_data / evidence_completeness
 machinery) rather than by what those signals say, and (b) do a few
 correlated signal groups dominate the composite regardless of the rest?
-These tests pin the harness's primitives (topk_jaccard, ablate,
-ablation_report, write_markdown) against hand-computed expectations using
-rank_candidates.calculate_rank_score's actual per-row formula, so a
-regression in either the harness or its reuse of the production scorer
-would be caught here.
+
+The harness must measure the REAL ranking — the ``rank_score`` column
+rank_candidates.py writes and sorts on (line ~2002/2047), which is produced
+by the row-wise ``calculate_fair_rank_score`` (rank_candidates.py:1953) →
+``_rank_candidates_lib.calculate_fair_rank_score(scores, weights,
+completeness_floor=0.4)``. That scorer has the evidence-completeness
+multiplier (floored at 0.4 — literally the missingness effect the ablation
+exists to measure) and a 12th ``tandem_cluster`` signal. These tests pin
+the harness against that scorer, with hand-computed literals derived from
+the fair formula ``score = (weighted_sum / avail_weight) * max(floor,
+avail_weight / total_weight)``.
 """
 from __future__ import annotations
 
 import pandas as pd
 import pytest
 
+import _rank_candidates_lib
 import ablate_ranking as ar
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
 # ---------------------------------------------------------------------------
 
-# Explicit weights matching rank_candidates.py's literal *_WEIGHT env-var
-# defaults (see ar._production_weights). Tests that need exact,
-# hand-computable numbers pass this explicitly rather than relying on
-# _production_weights()'s environment, which could vary by shell.
+# The full 12-signal production weights (rank_candidates.py's *_WEIGHT env
+# defaults). NOTE the fair scorer's key is 'expression' (fed by EXPR_WEIGHT),
+# not 'expr', and includes tandem_cluster (2.5). Sum = 20.5. Passed
+# explicitly wherever a test needs exact, hand-computable numbers.
 DEFAULT_WEIGHTS = {
     "phylo": 2.0,
     "purifying": 1.0,
     "positive": 1.0,
-    "synteny": 3.0,
-    "expr": 1.0,
     "lse_depth": 1.0,
+    "synteny": 3.0,
+    "expression": 1.0,
     "chemosensory_expr": 3.0,
     "gprotein_coexpr": 2.0,
     "ecl_divergence": 1.5,
     "expansion": 1.5,
     "og_confidence": 1.0,
-}  # sum = 18.0
+    "tandem_cluster": 2.5,
+}  # sum = 20.5
+TOTAL_WEIGHT = 20.5
 
 WEIGHT_ENV_VARS = [
     "PHYLO_WEIGHT", "PURIFYING_WEIGHT", "POSITIVE_WEIGHT", "SYNTENY_WEIGHT",
     "EXPR_WEIGHT", "LSE_DEPTH_WEIGHT", "CHEMOSENSORY_EXPR_WEIGHT",
     "GPROTEIN_COEXPR_WEIGHT", "ECL_DIVERGENCE_WEIGHT", "EXPANSION_WEIGHT",
-    "OG_CONFIDENCE_WEIGHT",
+    "OG_CONFIDENCE_WEIGHT", "TANDEM_CLUSTER_WEIGHT",
 ]
 
 
 def _full_row(id_, **overrides):
-    """A candidate row with every column calculate_rank_score touches,
+    """A candidate row with every column the fair scorer's bridge touches,
     defaulting to "no data" (has_*=False, scores=0.0). Mirrors how
     rank_candidates.py always populates these columns for every row
     (missing raw scores normalize to 0.0; has_*_data is what actually
-    gates inclusion) — see rank_candidates.py's normalize_cols loop.
+    gates inclusion) — see rank_candidates.py's normalize_cols loop and
+    calculate_fair_rank_score at lines 1970-1998.
     """
     row = {
         "id": id_,
@@ -61,7 +71,6 @@ def _full_row(id_, **overrides):
         "purifying_score_norm": 0.0,
         "positive_score_norm": 0.0,
         "lse_depth_score_norm": 0.0,
-        "dnds_reliability_weight": 1.0,
         "synteny_score_norm": 0.0,
         "has_synteny_data": False,
         "expression_score_norm": 0.0,
@@ -76,46 +85,89 @@ def _full_row(id_, **overrides):
         "has_expansion_data": False,
         "og_confidence_score_norm": 0.0,
         "has_og_confidence_data": False,
+        "tandem_cluster_score_norm": 0.0,
+        "has_tandem_cluster_data": False,
         "evidence_completeness": 0.0,
     }
     row.update(overrides)
     return row
 
 
+def _direct_fair_score(row, weights):
+    """Independent ground-truth: build the scores dict inline (an explicit
+    replication of rank_candidates.py:1970-1984) and call the production
+    lib scorer directly. Deliberately does NOT reuse ar._row_scores, so a
+    bug in the harness's own bridge is caught here.
+    """
+    scores = {
+        "phylo": row.get("phylo_score_norm"),
+        "purifying": row.get("purifying_score_norm"),
+        "positive": row.get("positive_score_norm"),
+        "lse_depth": row.get("lse_depth_score_norm"),
+        "synteny": row.get("synteny_score_norm") if row.get("has_synteny_data") else None,
+        "expression": row.get("expression_score_norm") if row.get("has_expression_data") else None,
+        "chemosensory_expr": row.get("chemosensory_expr_score_norm") if row.get("has_chemosensory_expr_data") else None,
+        "gprotein_coexpr": row.get("gprotein_coexpr_score_norm") if row.get("has_gprotein_data") else None,
+        "ecl_divergence": row.get("ecl_divergence_score_norm") if row.get("has_ecl_data") else None,
+        "expansion": row.get("expansion_score_norm") if row.get("has_expansion_data") else None,
+        "og_confidence": row.get("og_confidence_score_norm") if row.get("has_og_confidence_data") else None,
+        "tandem_cluster": row.get("tandem_cluster_score_norm") if row.get("has_tandem_cluster_data") else None,
+    }
+    return _rank_candidates_lib.calculate_fair_rank_score(scores, weights, completeness_floor=0.4)
+
+
 @pytest.fixture
 def sparse_vs_dense_df():
-    """Two candidates with the SAME hand-computed baseline score gap used
-    throughout this file:
+    """Two candidates whose baseline order is set by the completeness floor:
 
-    cand_sparse: only phylo_score_norm=1.0, no other data at all.
-      score = 1.0*2 = 2.0; total_weight = 2+1+1+1 = 5 (base axes only)
-      -> (2.0/5) * 18 = 7.2
+    cand_sparse: only phylo_score_norm=1.0, no other data.
+      avail_weight = 5 (the 4 always-present base axes); weighted_sum = 2.0
+      (phylo weight 2 * 1.0). completeness_raw = 5/20.5 = 0.244, BELOW the
+      0.4 floor -> completeness = 0.4. score = (2.0/5)*0.4 = 0.16.
 
-    cand_dense: moderate (0.2-0.3) score on every axis, ALL has_*=True.
-      score sums to 6.5 with total_weight == max_possible_weight (18)
-      -> 6.5
+    cand_mid: moderate signal on synteny/chemo/gprotein (has_*=True).
+      avail_weight = 5 + 3 + 3 + 2 = 13; weighted_sum = 3*0.25 + 3*0.25 +
+      2*0.4 = 2.3. completeness_raw = 13/20.5 = 0.634 (ABOVE floor).
+      score = (2.3/13)*(13/20.5) = 2.3/20.5 = 0.11220.
 
-    So the DEFAULT ranking (7.2 > 6.5) puts the sparse-but-strong-on-one-axis
-    candidate FIRST — exactly the "fair scoring" behavior hypothesis (a)
-    is concerned about. Dropping 'phylo' (removing cand_sparse's only
-    signal) or neutralizing missingness (diluting cand_sparse's score by
-    counting axes it has no data for) both flip the order.
+    Baseline: sparse (0.16) > mid (0.1122). The sparse candidate wins ONLY
+    because the floor protects its low completeness — exactly the
+    missingness effect hypothesis (a) probes. Neutralizing missingness
+    (removing the floor's protection: sparse -> 2.0/20.5 = 0.0976) or
+    dropping 'phylo' (removing sparse's only signal -> 0.0) both flip it.
     """
     sparse = _full_row("cand_sparse", phylo_score_norm=1.0)
-    dense = _full_row(
-        "cand_dense",
-        phylo_score_norm=0.3, purifying_score_norm=0.2, positive_score_norm=0.2,
-        lse_depth_score_norm=0.3,
-        synteny_score_norm=0.4, has_synteny_data=True,
-        expression_score_norm=0.4, has_expression_data=True,
-        chemosensory_expr_score_norm=0.4, has_chemosensory_expr_data=True,
+    mid = _full_row(
+        "cand_mid",
+        synteny_score_norm=0.25, has_synteny_data=True,
+        chemosensory_expr_score_norm=0.25, has_chemosensory_expr_data=True,
         gprotein_coexpr_score_norm=0.4, has_gprotein_data=True,
-        ecl_divergence_score_norm=0.4, has_ecl_data=True,
-        expansion_score_norm=0.4, has_expansion_data=True,
-        og_confidence_score_norm=0.4, has_og_confidence_data=True,
-        evidence_completeness=1.0,
     )
-    return pd.DataFrame([sparse, dense])
+    return pd.DataFrame([sparse, mid])
+
+
+@pytest.fixture
+def tandem_vs_plain_df():
+    """Isolates the 12th signal (tandem_cluster). cand_tandem leans on
+    tandem_cluster; cand_plain has none. Dropping tandem_cluster's weight
+    must flip their order — proving the tandem axis is wired into the
+    harness.
+
+    cand_tandem: phylo=0.5, tandem_cluster=1.0 (has_tandem_cluster_data=True).
+      avail = 5 + 2.5 = 7.5; weighted_sum = 2*0.5 + 2.5*1.0 = 3.5.
+      completeness_raw = 7.5/20.5 = 0.366 (below floor) -> 0.4.
+      score = (3.5/7.5)*0.4 = 0.18667.
+    cand_plain: phylo=0.6 only. avail = 5; weighted_sum = 1.2.
+      completeness -> 0.4. score = (1.2/5)*0.4 = 0.096.
+    Baseline: [tandem, plain]. Drop tandem_cluster -> tandem 0.08 < plain
+    0.096 -> [plain, tandem].
+    """
+    tandem = _full_row(
+        "cand_tandem", phylo_score_norm=0.5,
+        tandem_cluster_score_norm=1.0, has_tandem_cluster_data=True,
+    )
+    plain = _full_row("cand_plain", phylo_score_norm=0.6)
+    return pd.DataFrame([tandem, plain])
 
 
 # ---------------------------------------------------------------------------
@@ -154,46 +206,24 @@ def test_topk_jaccard_k_larger_than_lists_still_works():
 
 
 # ---------------------------------------------------------------------------
-# Production scorer resolution
+# Targets the REAL production fair scorer (not calculate_rank_score)
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_calculate_rank_score_returns_memoized_callable():
-    scorer1 = ar._resolve_calculate_rank_score()
-    scorer2 = ar._resolve_calculate_rank_score()
-    assert callable(scorer1)
-    assert scorer1 is scorer2
+def test_harness_reuses_lib_fair_rank_score_object():
+    """The harness must import the production lib scorer itself — not a copy,
+    mirror, or the sensitivity-only calculate_rank_score."""
+    assert ar.calculate_fair_rank_score is _rank_candidates_lib.calculate_fair_rank_score
 
 
-def test_extract_calculate_rank_score_from_source_matches_hand_computed_value():
-    fn = ar._extract_calculate_rank_score_from_source()
-    df = pd.DataFrame([_full_row("g1", phylo_score_norm=1.0)])
-    result = fn(df, DEFAULT_WEIGHTS)
-    assert result.tolist() == pytest.approx([7.2])
-
-
-def test_local_mirror_matches_hand_computed_values(sparse_vs_dense_df):
-    result = ar._local_calculate_rank_score(sparse_vs_dense_df, DEFAULT_WEIGHTS)
-    assert result.tolist() == pytest.approx([7.2, 6.5])
-
-
-def test_resolved_scorer_matches_hand_computed_values_for_all_three_scenarios(sparse_vs_dense_df):
-    """Pins the harness's actual reused scorer (whichever tier resolves)
-    against hand-computed values for baseline, drop-phylo, and
-    neutralize-missingness — the three scenarios exercised elsewhere in
-    this file via the public `ablate` API."""
-    scorer = ar._resolve_calculate_rank_score()
-
-    baseline = scorer(sparse_vs_dense_df, DEFAULT_WEIGHTS)
-    assert baseline.tolist() == pytest.approx([7.2, 6.5])
-
-    dropped_weights = ar._apply_drop_signals(DEFAULT_WEIGHTS, ["phylo"])
-    dropped = scorer(sparse_vs_dense_df, dropped_weights)
-    assert dropped.tolist() == pytest.approx([0.0, 5.9])
-
-    neutralized_df = ar._neutralize_missingness(sparse_vs_dense_df)
-    neutralized = scorer(neutralized_df, DEFAULT_WEIGHTS)
-    assert neutralized.tolist() == pytest.approx([2.0, 6.5])
+def test_harness_dropped_the_wrong_scorer_apparatus():
+    """The earlier revision targeted calculate_rank_score via source-slicing
+    + a hand mirror. That must be gone: no extract/exec or local-mirror
+    fallback remains, and the module does not carry its own
+    calculate_rank_score."""
+    assert not hasattr(ar, "_extract_calculate_rank_score_from_source")
+    assert not hasattr(ar, "_local_calculate_rank_score")
+    assert not hasattr(ar, "calculate_rank_score")
 
 
 # ---------------------------------------------------------------------------
@@ -201,10 +231,14 @@ def test_resolved_scorer_matches_hand_computed_values_for_all_three_scenarios(sp
 # ---------------------------------------------------------------------------
 
 
-def test_production_weights_match_rank_candidates_defaults(monkeypatch):
+def test_production_weights_are_the_full_12_signal_set(monkeypatch):
     for var in WEIGHT_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
-    assert ar._production_weights() == DEFAULT_WEIGHTS
+    weights = ar._production_weights()
+    assert weights == DEFAULT_WEIGHTS
+    # Explicitly pin the two properties the rework hinged on.
+    assert "tandem_cluster" in weights and weights["tandem_cluster"] == 2.5
+    assert "expression" in weights and "expr" not in weights
 
 
 # ---------------------------------------------------------------------------
@@ -242,28 +276,65 @@ def test_neutralize_missingness_does_not_mutate_input(sparse_vs_dense_df):
 
 
 # ---------------------------------------------------------------------------
-# ablate()
+# Ground truth: ablate() reproduces the real fair rank_score ordering
 # ---------------------------------------------------------------------------
 
 
-def test_ablate_baseline_ranks_sparse_strong_signal_first(sparse_vs_dense_df):
-    ranked = ar.ablate(sparse_vs_dense_df, weights=DEFAULT_WEIGHTS)
-    assert ranked == ["cand_sparse", "cand_dense"]
+def test_ablate_reproduces_direct_fair_score_ordering(sparse_vs_dense_df):
+    """ablate(df) with no ablation must equal df sorted by the real fair
+    rank_score obtained by calling _rank_candidates_lib.calculate_fair_rank_score
+    directly per row."""
+    direct = [
+        (r["id"], _direct_fair_score(r, DEFAULT_WEIGHTS))
+        for _, r in sparse_vs_dense_df.iterrows()
+    ]
+    expected_order = [cid for cid, _ in sorted(direct, key=lambda t: t[1], reverse=True)]
+    assert ar.ablate(sparse_vs_dense_df, weights=DEFAULT_WEIGHTS) == expected_order
+
+
+def test_ablate_baseline_matches_hand_computed_fair_scores(sparse_vs_dense_df):
+    scores = {
+        r["id"]: _direct_fair_score(r, DEFAULT_WEIGHTS)
+        for _, r in sparse_vs_dense_df.iterrows()
+    }
+    assert scores["cand_sparse"] == pytest.approx(0.16)          # floor-protected
+    assert scores["cand_mid"] == pytest.approx(2.3 / TOTAL_WEIGHT)  # 0.11220
+    assert ar.ablate(sparse_vs_dense_df, weights=DEFAULT_WEIGHTS) == ["cand_sparse", "cand_mid"]
+
+
+# ---------------------------------------------------------------------------
+# ablate() — ablations reorder as the fair formula predicts
+# ---------------------------------------------------------------------------
 
 
 def test_ablate_drop_dominant_signal_reorders_topk(sparse_vs_dense_df):
     baseline = ar.ablate(sparse_vs_dense_df, weights=DEFAULT_WEIGHTS)
     dropped = ar.ablate(sparse_vs_dense_df, drop_signals=["phylo"], weights=DEFAULT_WEIGHTS)
-    assert dropped == ["cand_dense", "cand_sparse"]
+    assert baseline == ["cand_sparse", "cand_mid"]
+    assert dropped == ["cand_mid", "cand_sparse"]
     assert ar.topk_jaccard(baseline, dropped, k=1) == 0.0
 
 
 def test_ablate_neutralize_missingness_changes_order_when_completeness_differs(sparse_vs_dense_df):
+    """Proves the evidence-completeness multiplier is in the loop: forcing
+    every axis 'present' removes the floor bonus the sparse candidate
+    relied on, flipping the order."""
     baseline = ar.ablate(sparse_vs_dense_df, weights=DEFAULT_WEIGHTS)
-    neutralized = ar.ablate(sparse_vs_dense_df, neutralize_missingness=True, weights=DEFAULT_WEIGHTS)
-    assert baseline == ["cand_sparse", "cand_dense"]
-    assert neutralized == ["cand_dense", "cand_sparse"]
+    neutralized = ar.ablate(
+        sparse_vs_dense_df, neutralize_missingness=True, weights=DEFAULT_WEIGHTS
+    )
+    assert baseline == ["cand_sparse", "cand_mid"]
+    assert neutralized == ["cand_mid", "cand_sparse"]
     assert ar.topk_jaccard(baseline, neutralized, k=1) == 0.0
+
+
+def test_ablate_drop_tandem_cluster_reorders(tandem_vs_plain_df):
+    """The 12th signal must be wired: a tandem-led candidate loses to a
+    plain one once tandem_cluster's weight is zeroed."""
+    baseline = ar.ablate(tandem_vs_plain_df, weights=DEFAULT_WEIGHTS)
+    dropped = ar.ablate(tandem_vs_plain_df, drop_signals=["tandem_cluster"], weights=DEFAULT_WEIGHTS)
+    assert baseline == ["cand_tandem", "cand_plain"]
+    assert dropped == ["cand_plain", "cand_tandem"]
 
 
 def test_ablate_does_not_mutate_input(sparse_vs_dense_df):
@@ -279,13 +350,13 @@ def test_ablate_uses_production_defaults_when_weights_not_given(sparse_vs_dense_
     for var in WEIGHT_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
     ranked = ar.ablate(sparse_vs_dense_df)
-    assert ranked == ["cand_sparse", "cand_dense"]
+    assert ranked == ["cand_sparse", "cand_mid"]
 
 
 def test_ablate_drop_signals_applies_on_top_of_custom_weights():
     df = pd.DataFrame([
-        _full_row("g1", phylo_score_norm=1.0, lse_depth_score_norm=0.0),
-        _full_row("g2", phylo_score_norm=0.0, lse_depth_score_norm=1.0),
+        _full_row("g1", phylo_score_norm=1.0),
+        _full_row("g2", lse_depth_score_norm=1.0),
     ])
     custom_weights = {"phylo": 5.0, "lse_depth": 1.0}
     # g1 wins on phylo under custom weights...
@@ -300,8 +371,8 @@ def test_ablate_drop_signals_applies_on_top_of_custom_weights():
 
 
 def test_ablation_report_has_missingness_and_group_keys(sparse_vs_dense_df):
-    report = ar.ablation_report(sparse_vs_dense_df, groups=[["phylo"], ["synteny", "expr"]], k=1)
-    assert set(report.keys()) == {"missingness", "group:phylo", "group:synteny+expr"}
+    report = ar.ablation_report(sparse_vs_dense_df, groups=[["phylo"], ["synteny", "expression"]], k=1)
+    assert set(report.keys()) == {"missingness", "group:phylo", "group:synteny+expression"}
     for metrics in report.values():
         assert set(metrics.keys()) == {"spearman", "jaccard_at_k", "n_moved_into_topk"}
 
@@ -321,9 +392,10 @@ def test_ablation_report_missingness_reflects_hand_computed_flip(sparse_vs_dense
     assert report["missingness"]["spearman"] == pytest.approx(-1.0)
 
 
-def test_ablation_report_no_op_group_matches_baseline_exactly():
-    # Dropping an axis neither candidate has data for is a true no-op:
-    # ranking, top-k membership, and rank order must all be unchanged.
+def test_ablation_report_order_stable_group_shows_no_churn():
+    # Two candidates ordered by phylo alone; dropping og_confidence (which
+    # neither has and which is below both floors) leaves the ORDER unchanged,
+    # so the churn metrics report no movement.
     df = pd.DataFrame([
         _full_row("g1", phylo_score_norm=0.9),
         _full_row("g2", phylo_score_norm=0.1),

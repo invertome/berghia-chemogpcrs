@@ -4,7 +4,7 @@
 A council review of the hand-weighted chemoreceptor ranking raised two
 empirical questions about what today's ranking is actually driven by:
 
-    (a) the `has_*_data` / `evidence_completeness` missingness machinery
+    (a) the ``has_*_data`` / ``evidence_completeness`` missingness machinery
         may be encoding "this gene sits in a detectable tandem array"
         (i.e. how MUCH evidence exists for a candidate) rather than
         biology (what the evidence actually says); and
@@ -13,41 +13,80 @@ empirical questions about what today's ranking is actually driven by:
         score regardless of the other axes.
 
 This module answers both by re-ranking the same candidate set under
-targeted ablations — dropping a signal group's weight to zero, or
-neutralizing the missingness flags so every axis looks "present" — and
-comparing the result to the real (unablated) ranking via Spearman rank
-correlation and top-k Jaccard overlap. It is a pure analysis module: it
-takes an already-scored DataFrame (the *_score_norm / has_*_data columns
-rank_candidates.py produces) and re-ranks in memory. It does not read or
-write any pipeline files itself.
+targeted ablations — zeroing a signal group's weight, or neutralizing the
+missingness flags so every axis looks "present" — and comparing the result
+to the real (unablated) ranking via Spearman rank correlation and top-k
+Jaccard overlap. It is a pure analysis module: it takes an already-scored
+DataFrame (the *_score_norm / has_*_data columns rank_candidates.py
+produces) and re-ranks in memory. It does not read or write any pipeline
+files itself.
 
-Reuses the REAL production scorer, ``rank_candidates.calculate_rank_score``,
-so ablation results reflect the actual ranking math rather than an
-approximation of it — see `_resolve_calculate_rank_score` for how that
-function is recovered. rank_candidates.py is a one-shot CLI script (it
-parses ``sys.argv[1:7]`` and loads pipeline files at module scope, all
-before ``calculate_rank_score`` is even defined), so a plain
-``from rank_candidates import calculate_rank_score`` reliably fails
-under a test process — and, worse, if it ever got far enough with an
-unrelated argv it could reach the script's own file-writing code. Instead
-this module recovers the function by slicing it out of rank_candidates.py's
-source text and exec'ing just that fragment: the same technique already
-used by tests/unit/test_rank_candidates_dnds_reliability.py and
-tests/unit/test_ranking_lib.py for the same reason. That gives the ACTUAL
-current function body (no hand-copy drift risk) without executing any of
-the script's argv-parsing / file-loading / file-writing side effects. A
-hand-maintained mirror (`_local_calculate_rank_score`) is the last-resort
-fallback if even that extraction fails.
+It reuses the EXACT production scorer that produces the ranking actually
+written to ranked_candidates_sorted.csv: ``rank_candidates.py`` computes
+its ``rank_score`` column (line ~2002, then sorts by it) via the row-wise
+``calculate_fair_rank_score`` (rank_candidates.py:1953), which bridges each
+candidate's per-axis normalized scores and the ``*_WEIGHT`` env constants
+into ``_rank_candidates_lib.calculate_fair_rank_score`` with
+``completeness_floor=0.4`` (bead -ce4). That lib function is explicitly
+side-effect-free and importable, so this module imports it directly and
+reconstructs the same 12-signal scores/weights bridge (INCLUDING the
+tandem_cluster axis and the evidence-completeness multiplier). The earlier
+``calculate_rank_score`` (rank_candidates.py:1382) is NOT the ranking
+scorer — it is used only by the Monte-Carlo sensitivity analysis and lacks
+both the completeness multiplier and the tandem_cluster signal, so it is
+deliberately not used here.
 
 Author: Jorge L. Perez-Moreno, Ph.D., Katz Lab, University of Massachusetts
 """
 from __future__ import annotations
 
 import os
+import sys
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Union
 
 import pandas as pd
 from scipy import stats
+
+# Sibling-import the pure scoring lib the production ranker uses. Matches the
+# import-path setup rank_candidates.py and the other scripts in this dir do
+# (this only mutates sys.path so the sibling import resolves — no data
+# loading, file I/O, or env reads happen at import time).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _rank_candidates_lib import calculate_fair_rank_score  # noqa: E402
+
+# The 12 signal axes of the production fair scorer, mapping each weight key
+# to the DataFrame columns rank_candidates.py's calculate_fair_rank_score
+# reads (rank_candidates.py:1970-1998). ``gated`` axes contribute their
+# score only when the paired ``has_*_data`` flag is truthy (otherwise the
+# score is None = "missing", which the fair scorer excludes from the
+# available-weight numerator but still counts in the total-weight
+# denominator — that is the missingness penalty). The four base axes
+# (phylo/purifying/positive/lse_depth) are always contributed. NOTE the
+# 'expression' weight key is fed by the EXPR_WEIGHT env var, and
+# tandem_cluster (the field's signature chemoreceptor signal) is the 12th.
+_SIGNAL_SPEC = [
+    # (weight_key, score_norm_column, has_flag_column_or_None, env_var, default)
+    ("phylo", "phylo_score_norm", None, "PHYLO_WEIGHT", 2.0),
+    ("purifying", "purifying_score_norm", None, "PURIFYING_WEIGHT", 1.0),
+    ("positive", "positive_score_norm", None, "POSITIVE_WEIGHT", 1.0),
+    ("lse_depth", "lse_depth_score_norm", None, "LSE_DEPTH_WEIGHT", 1.0),
+    ("synteny", "synteny_score_norm", "has_synteny_data", "SYNTENY_WEIGHT", 3.0),
+    ("expression", "expression_score_norm", "has_expression_data", "EXPR_WEIGHT", 1.0),
+    ("chemosensory_expr", "chemosensory_expr_score_norm", "has_chemosensory_expr_data",
+     "CHEMOSENSORY_EXPR_WEIGHT", 3.0),
+    ("gprotein_coexpr", "gprotein_coexpr_score_norm", "has_gprotein_data",
+     "GPROTEIN_COEXPR_WEIGHT", 2.0),
+    ("ecl_divergence", "ecl_divergence_score_norm", "has_ecl_data",
+     "ECL_DIVERGENCE_WEIGHT", 1.5),
+    ("expansion", "expansion_score_norm", "has_expansion_data", "EXPANSION_WEIGHT", 1.5),
+    ("og_confidence", "og_confidence_score_norm", "has_og_confidence_data",
+     "OG_CONFIDENCE_WEIGHT", 1.0),
+    ("tandem_cluster", "tandem_cluster_score_norm", "has_tandem_cluster_data",
+     "TANDEM_CLUSTER_WEIGHT", 2.5),
+]
+
+_COMPLETENESS_FLOOR = 0.4  # matches rank_candidates.py:1999
+
 
 # ---------------------------------------------------------------------------
 # Top-k Jaccard
@@ -70,151 +109,48 @@ def topk_jaccard(rank_a: Sequence[Any], rank_b: Sequence[Any], k: int) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Production scorer resolution (see module docstring)
+# Production weights + per-row scoring bridge
 # ---------------------------------------------------------------------------
-
-_PROD_SCORER: Optional[Any] = None
-_PROD_RESOLVED = False
-
-
-def _extract_calculate_rank_score_from_source() -> Any:
-    """Recover the real `calculate_rank_score` by slicing it out of
-    scripts/rank_candidates.py's source and exec'ing just that fragment.
-
-    rank_candidates.py cannot be imported directly — it parses
-    ``sys.argv[1:7]`` and loads pipeline files at module scope, long
-    before ``calculate_rank_score`` is even defined, so a plain import
-    raises during that module-level execution (and could, with a
-    different argv, run all the way to the script's own CSV-writing
-    code). This is the same technique
-    tests/unit/test_rank_candidates_dnds_reliability.py and
-    tests/unit/test_ranking_lib.py already use for the same script — it
-    recovers the ACTUAL current function body (no hand-copy drift risk)
-    without running any of the script's side effects.
-    """
-    src_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rank_candidates.py")
-    with open(src_path) as fh:
-        src = fh.read()
-    start = src.find("def calculate_rank_score(")
-    if start == -1:
-        raise RuntimeError("calculate_rank_score not found in rank_candidates.py")
-    end = src.find("\n\ndef ", start + 1)
-    fragment = src[start:end] if end != -1 else src[start:]
-    namespace: Dict[str, Any] = {"pd": pd, "np": __import__("numpy")}
-    exec(fragment, namespace)
-    return namespace["calculate_rank_score"]
-
-
-def _local_calculate_rank_score(df: pd.DataFrame, weights: Mapping[str, float]) -> pd.Series:
-    """Hand-maintained mirror of rank_candidates.calculate_rank_score, used
-    only if the source-extraction above fails (e.g. the source file
-    becomes unreadable or the function is renamed/restructured).
-
-    Mirrors the exact per-row logic as of the 2026-05 review-fix sweep:
-    phylo / purifying / positive / lse_depth are always included (the
-    latter two scaled by the per-OG ``dnds_reliability_weight``, default
-    1.0 when absent); synteny / expr / chemosensory_expr /
-    gprotein_coexpr / ecl_divergence / expansion / og_confidence are
-    included only when their ``has_*_data`` flag is True. The composite
-    is ``(available_score / available_weight) * sum(all weights)`` — a
-    candidate scores as if its available axes were the WHOLE signal,
-    then is rescaled to the full-weight scale (this asymmetry is exactly
-    what this harness's ``neutralize_missingness`` option probes). Keep
-    this in sync with rank_candidates.calculate_rank_score if that
-    function changes.
-    """
-    max_possible_weight = sum(weights.values())
-
-    def calc_row(row):
-        dnds_rw = row.get("dnds_reliability_weight", 1.0)
-        try:
-            dnds_rw = float(dnds_rw)
-        except (TypeError, ValueError):
-            dnds_rw = 1.0
-
-        score = (
-            row["phylo_score_norm"] * weights.get("phylo", 0)
-            + row["purifying_score_norm"] * weights.get("purifying", 0) * dnds_rw
-            + row["positive_score_norm"] * weights.get("positive", 0) * dnds_rw
-            + row["lse_depth_score_norm"] * weights.get("lse_depth", 0)
-        )
-        total_weight = (
-            weights.get("phylo", 0)
-            + weights.get("purifying", 0) * dnds_rw
-            + weights.get("positive", 0) * dnds_rw
-            + weights.get("lse_depth", 0)
-        )
-
-        if row.get("has_synteny_data", False):
-            score += row["synteny_score_norm"] * weights.get("synteny", 0)
-            total_weight += weights.get("synteny", 0)
-        if row.get("has_expression_data", False):
-            score += row["expression_score_norm"] * weights.get("expr", 0)
-            total_weight += weights.get("expr", 0)
-        if row.get("has_chemosensory_expr_data", False):
-            score += row.get("chemosensory_expr_score_norm", 0) * weights.get("chemosensory_expr", 0)
-            total_weight += weights.get("chemosensory_expr", 0)
-        if row.get("has_gprotein_data", False):
-            score += row.get("gprotein_coexpr_score_norm", 0) * weights.get("gprotein_coexpr", 0)
-            total_weight += weights.get("gprotein_coexpr", 0)
-        if row.get("has_ecl_data", False):
-            score += row.get("ecl_divergence_score_norm", 0) * weights.get("ecl_divergence", 0)
-            total_weight += weights.get("ecl_divergence", 0)
-        if row.get("has_expansion_data", False):
-            score += row.get("expansion_score_norm", 0) * weights.get("expansion", 0)
-            total_weight += weights.get("expansion", 0)
-        if row.get("has_og_confidence_data", False):
-            score += row.get("og_confidence_score_norm", 0) * weights.get("og_confidence", 0)
-            total_weight += weights.get("og_confidence", 0)
-
-        if total_weight > 0:
-            return (score / total_weight) * max_possible_weight
-        return 0.0
-
-    return df.apply(calc_row, axis=1)
-
-
-def _resolve_calculate_rank_score() -> Any:
-    """Return the production ``calculate_rank_score``, preferring the real
-    function recovered from rank_candidates.py's source (see module
-    docstring). Falls back to `_local_calculate_rank_score` only if that
-    extraction fails. Memoized after the first call.
-    """
-    global _PROD_SCORER, _PROD_RESOLVED
-    if _PROD_RESOLVED:
-        return _PROD_SCORER
-    _PROD_RESOLVED = True
-
-    try:
-        _PROD_SCORER = _extract_calculate_rank_score_from_source()
-    except Exception:
-        _PROD_SCORER = _local_calculate_rank_score
-    return _PROD_SCORER
 
 
 def _production_weights() -> Dict[str, float]:
-    """Construct the weights dict exactly as rank_candidates.py does before
-    calling calculate_rank_score: the module-level ``*_WEIGHT`` env vars
-    (same names, same string defaults) mapped to the dict keys calc_row
-    actually reads via ``weights.get(...)`` — note the key is 'expr', not
-    'expression' (that's what calculate_rank_score looks up; the
-    'expression' key used when *building* rank_candidates.py's
-    sensitivity-analysis base_weights dict is a separate, pre-existing
-    naming mismatch in that call site, not something to replicate here).
+    """Construct the 12-signal weights dict exactly as rank_candidates.py's
+    ``calculate_fair_rank_score`` does (rank_candidates.py:1985-1998): the
+    module-level ``*_WEIGHT`` env vars (same names, same string defaults)
+    mapped to the fair scorer's weight keys. Note the key is 'expression'
+    (fed by EXPR_WEIGHT), not 'expr', and the tandem_cluster axis is
+    included with default 2.5.
     """
-    return {
-        "phylo": float(os.getenv("PHYLO_WEIGHT", 2)),
-        "purifying": float(os.getenv("PURIFYING_WEIGHT", 1)),
-        "positive": float(os.getenv("POSITIVE_WEIGHT", 1)),
-        "synteny": float(os.getenv("SYNTENY_WEIGHT", 3)),
-        "expr": float(os.getenv("EXPR_WEIGHT", 1)),
-        "lse_depth": float(os.getenv("LSE_DEPTH_WEIGHT", 1)),
-        "chemosensory_expr": float(os.getenv("CHEMOSENSORY_EXPR_WEIGHT", 3)),
-        "gprotein_coexpr": float(os.getenv("GPROTEIN_COEXPR_WEIGHT", 2)),
-        "ecl_divergence": float(os.getenv("ECL_DIVERGENCE_WEIGHT", 1.5)),
-        "expansion": float(os.getenv("EXPANSION_WEIGHT", 1.5)),
-        "og_confidence": float(os.getenv("OG_CONFIDENCE_WEIGHT", 1)),
-    }
+    return {key: float(os.getenv(env, default)) for key, _, _, env, default in _SIGNAL_SPEC}
+
+
+def _row_scores(row: Mapping[str, Any]) -> Dict[str, Optional[float]]:
+    """Build the per-candidate scores dict exactly as rank_candidates.py's
+    ``calculate_fair_rank_score`` does (rank_candidates.py:1970-1984): base
+    axes always contribute their normalized score; gated axes contribute
+    their score only when the paired ``has_*_data`` flag is truthy,
+    otherwise None (missing).
+    """
+    scores: Dict[str, Optional[float]] = {}
+    for key, score_col, has_col, _, _ in _SIGNAL_SPEC:
+        if has_col is None:
+            scores[key] = row.get(score_col)
+        else:
+            scores[key] = row.get(score_col) if row.get(has_col) else None
+    return scores
+
+
+def _fair_scores(df: pd.DataFrame, weights: Mapping[str, float]) -> pd.Series:
+    """Compute the production fair rank_score for every row of df under the
+    given weights. Mirrors ``df.apply(calculate_fair_rank_score, axis=1)``
+    from rank_candidates.py:2002, feeding the same lib function.
+    """
+    return df.apply(
+        lambda row: calculate_fair_rank_score(
+            _row_scores(row), weights, completeness_floor=_COMPLETENESS_FLOOR
+        ),
+        axis=1,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -224,10 +160,11 @@ def _production_weights() -> Dict[str, float]:
 
 def _neutralize_missingness(df: pd.DataFrame) -> pd.DataFrame:
     """Return a copy of df with every has_*_data column forced True and
-    evidence_completeness forced to 1.0 (when present). Isolates whether
-    the ranking is driven by which signals a candidate happens to have
-    data for, rather than by what the signals themselves say (hypothesis a
-    in the module docstring).
+    evidence_completeness forced to 1.0 (when present). This makes every
+    gated axis contribute (through the fair scorer's completeness
+    multiplier), isolating whether the ranking is driven by which signals
+    a candidate happens to have data for rather than by what the signals
+    themselves say (hypothesis a in the module docstring).
     """
     out = df.copy(deep=True)
     for col in out.columns:
@@ -241,7 +178,12 @@ def _neutralize_missingness(df: pd.DataFrame) -> pd.DataFrame:
 def _apply_drop_signals(
     weights: Mapping[str, float], drop_signals: Optional[Iterable[str]]
 ) -> Dict[str, float]:
-    """Return a copy of weights with each key in drop_signals zeroed out."""
+    """Return a copy of weights with each key in drop_signals zeroed out.
+
+    In the fair scorer a zeroed weight removes that axis from BOTH the
+    available-weight numerator and the total-weight denominator, so the
+    signal group is fully ablated (as if it did not exist).
+    """
     w = dict(weights)
     if drop_signals:
         for key in drop_signals:
@@ -257,22 +199,27 @@ def ablate(
 ) -> List[Any]:
     """Re-rank candidates under an ablation and return the re-ranked id list.
 
-    Reuses the real production scorer (see `_resolve_calculate_rank_score`)
-    so the result reflects the actual ranking math, not an approximation.
+    Reuses the real production fair scorer (``_rank_candidates_lib.
+    calculate_fair_rank_score`` via `_fair_scores`) so the result reflects
+    the actual ranking math — completeness multiplier and all 12 signals
+    included — not an approximation.
 
     Args:
         df: DataFrame with the *_score_norm / has_*_data columns
-            rank_candidates.calculate_rank_score consumes, plus an 'id'
-            column. Not mutated.
-        drop_signals: weight keys to zero out (e.g. ``['phylo', 'synteny']``).
+            rank_candidates.py's calculate_fair_rank_score consumes, plus
+            an 'id' column. Not mutated.
+        drop_signals: weight keys to zero out (e.g. ``['phylo', 'synteny']``;
+            any of the 12 keys in `_production_weights`, incl.
+            'tandem_cluster').
         neutralize_missingness: if True, force every has_*_data column to
-            True and evidence_completeness to 1.0 before scoring.
+            True and evidence_completeness to 1.0 before scoring, so the
+            completeness penalty no longer distinguishes candidates.
         weights: full weights dict to use instead of the production
             defaults (`_production_weights()`). `drop_signals` is applied
             on top of whichever weights dict is in effect.
 
     Returns:
-        List of ids from df['id'], sorted by the re-computed score in
+        List of ids from df['id'], sorted by the re-computed fair score in
         descending order (stable sort — ties keep their original relative
         order).
     """
@@ -281,8 +228,7 @@ def ablate(
         weights if weights is not None else _production_weights(), drop_signals
     )
 
-    scorer = _resolve_calculate_rank_score()
-    scores = scorer(working, w)
+    scores = _fair_scores(working, w)
     order = scores.sort_values(ascending=False, kind="mergesort").index
     return working.loc[order, "id"].tolist()
 
