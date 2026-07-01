@@ -70,9 +70,13 @@ classifier-gated eligible pool. `cluster_col` defaults to
 ``tandem_cluster_id`` -- the exact tandem-array column rank_candidates.py
 writes (its output has no bare ``cluster`` column) -- so the cap spreads
 the batch across distinct tandem arrays, the field's signature
-chemoreceptor grouping. If `cluster_col` is absent from the input, the cap
-is skipped entirely (documented, not an error -- tandem-cluster data is
-optional evidence throughout this pipeline).
+chemoreceptor grouping. An empty/NaN `cluster_col` value (an isolated gene,
+not part of any tandem array) is never grouped with other isolated genes --
+each is its own singleton cluster, so isolated loci are never throttled
+against one another; only genuine multi-member tandem clusters are capped.
+If `cluster_col` is absent from the input, the cap is skipped entirely
+(documented, not an error -- tandem-cluster data is optional evidence
+throughout this pipeline).
 
 Classifier gate: candidates whose `classifier_col` (default "classification")
 value is "non-chemoreceptor" or "likely-non-chemoreceptor" (the existing
@@ -184,17 +188,24 @@ def _apply_diversity_cap(ordered_ids: List[str], df: pd.DataFrame, batch_size: i
     """Walk ``ordered_ids`` picking up to ``batch_size``, capping any one
     ``cluster_col`` value at ``ceil(batch_size / n_clusters)`` (n_clusters =
     distinct cluster values among ``ordered_ids``). A missing/NaN cluster
-    value groups under ``""`` (mirrors compute_tandem_clusters.py's "no
-    cluster" convention). If ``cluster_col`` isn't in ``df``, the cap is
-    skipped and this is just a truncation to ``batch_size``.
+    value is NOT a shared bucket: an isolated gene (not part of a tandem
+    array) is its own distinct locus, so each gets its own singleton
+    cluster and is never throttled against other isolated genes (a cap is
+    always >= 1, and a singleton cluster has only one member to begin
+    with). Real (non-empty) tandem clusters are still capped as before. If
+    ``cluster_col`` isn't in ``df``, the cap is skipped and this is just a
+    truncation to ``batch_size``.
     """
     if cluster_col not in df.columns:
         return ordered_ids[:batch_size]
 
     cluster_series = df.set_index(id_col)[cluster_col]
-    cluster_of = {i: ("" if pd.isna(v) else v) for i, v in cluster_series.items()}
 
-    n_clusters = len({cluster_of.get(i, "") for i in ordered_ids}) or 1
+    def _cluster_key(cand_id: str) -> object:
+        raw = cluster_series.get(cand_id)
+        return f"__isolated__{cand_id}" if pd.isna(raw) else raw
+
+    n_clusters = len({_cluster_key(i) for i in ordered_ids}) or 1
     cap = math.ceil(batch_size / n_clusters)
 
     counts: Dict[object, int] = defaultdict(int)
@@ -202,7 +213,7 @@ def _apply_diversity_cap(ordered_ids: List[str], df: pd.DataFrame, batch_size: i
     for cand_id in ordered_ids:
         if len(selected) >= batch_size:
             break
-        c = cluster_of.get(cand_id, "")
+        c = _cluster_key(cand_id)
         if counts[c] < cap:
             selected.append(cand_id)
             counts[c] += 1

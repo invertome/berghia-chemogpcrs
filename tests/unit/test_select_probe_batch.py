@@ -231,6 +231,44 @@ def test_select_batch_diversity_cap_skipped_when_cluster_col_absent():
     assert selected == ["c0", "c1", "c2", "c3"]
 
 
+def test_select_batch_isolated_genes_are_not_capped_as_shared_group():
+    # Regression: rank_candidates.py writes '' for a candidate with no
+    # tandem array, which round-trips through CSV as NaN. Isolated genes
+    # are distinct loci, not members of one giant fake tandem cluster --
+    # they must not be throttled against EACH OTHER by the diversity cap.
+    #
+    # Real tandem cluster "T" (4 members) ranks above every isolated gene,
+    # so if uncapped it would fill the whole batch. There are 6 isolated
+    # candidates and batch_size=5 (< 6 isolated candidates).
+    df = pd.DataFrame(
+        {
+            "id": ["t0", "t1", "t2", "t3", "iso0", "iso1", "iso2", "iso3", "iso4", "iso5"],
+            "phylo_score": [10, 9, 8, 7, 6, 5, 4, 3, 2, 1],
+            "tandem_cluster_id": ["T", "T", "T", "T", None, None, None, None, None, None],
+        }
+    )
+    per_signal_ranks = _ranks_from_df(df)
+    selected = spb.select_batch(df, per_signal_ranks, batch_size=5, mode="topscore")
+
+    assert len(selected) == 5
+
+    # A genuine multi-member tandem cluster IS still capped: T has 4
+    # members that all outrank every isolated gene, but not all 4 get in.
+    t_selected = [i for i in selected if i.startswith("t")]
+    assert len(t_selected) < 4
+
+    # Isolated genes are NOT capped as a shared group: more than the
+    # pre-fix shared-bucket cap (ceil(5 / 2 buckets) == 3) are admitted.
+    iso_selected = [i for i in selected if i.startswith("iso")]
+    assert len(iso_selected) > 3
+
+    # Exact expected order pins the fixed behavior: T contributes only its
+    # top-ranked member (t0), then the top four isolated genes by rank
+    # fill the rest of the batch -- none of them excluded by a bogus
+    # shared cap with one another.
+    assert selected == ["t0", "iso0", "iso1", "iso2", "iso3"]
+
+
 # --------------------------------------------------------------------------- #
 # write_batch
 # --------------------------------------------------------------------------- #
