@@ -199,6 +199,29 @@ def test_select_batch_active_mode_respects_diversity_cap_too():
     assert counts["B"] <= 2
 
 
+def test_select_batch_default_cluster_col_matches_pipeline_schema():
+    # Regression: the real ranked CSV names the tandem-array column
+    # 'tandem_cluster_id' (rank_candidates.py output_cols), NEVER 'cluster'.
+    # The diversity cap -- the tool's headline feature -- must fire by DEFAULT
+    # against that schema; a wrong default silently no-ops it and a batch could
+    # end up 100% from one tandem cluster. This df has NO 'cluster' column.
+    df = pd.DataFrame(
+        {
+            "id": ["a0", "a1", "a2", "a3", "b0", "b1"],
+            "phylo_score": [6, 5, 4, 3, 2, 1],  # cluster A ids all rank above B
+            "tandem_cluster_id": ["A", "A", "A", "A", "B", "B"],
+        }
+    )
+    per_signal_ranks = _ranks_from_df(df)
+    selected = spb.select_batch(df, per_signal_ranks, batch_size=4, mode="topscore")
+    assert len(selected) == 4
+    cluster_of = dict(zip(df["id"], df["tandem_cluster_id"]))
+    counts = Counter(cluster_of[i] for i in selected)
+    assert counts["A"] <= 2  # ceil(4/2) = 2 -- cap enforced BY DEFAULT
+    assert counts["B"] <= 2
+    assert set(selected) == {"a0", "a1", "b0", "b1"}
+
+
 def test_select_batch_diversity_cap_skipped_when_cluster_col_absent():
     df = pd.DataFrame({"id": [f"c{i}" for i in range(4)], "phylo_score": [4, 3, 2, 1]})
     per_signal_ranks = _ranks_from_df(df)
@@ -212,12 +235,15 @@ def test_select_batch_diversity_cap_skipped_when_cluster_col_absent():
 # write_batch
 # --------------------------------------------------------------------------- #
 def test_write_batch_emits_expected_columns_and_populated_rationale(tmp_path):
+    # Input names the tandem-array column 'tandem_cluster_id' (the real
+    # rank_candidates.py schema, and write_batch's default cluster_col); the
+    # OUTPUT column is always 'cluster' regardless.
     df = pd.DataFrame(
         {
             "id": ["c0", "c1", "c2"],
             "phylo_score": [3, 2, 1],
             "purifying_score": [1, 2, 3],
-            "cluster": ["g1", "g1", "g2"],
+            "tandem_cluster_id": ["g1", "g1", "g2"],
         }
     )
     per_signal_ranks = _ranks_from_df(df)
@@ -271,7 +297,7 @@ def test_main_cli_end_to_end(tmp_path):
             "phylo_score": [6, 5, 4, 3, 2, 1],
             "purifying_score": [1, 2, 3, 4, 5, 6],
             "classification": ["chemoreceptor-candidate"] * 5 + ["non-chemoreceptor"],
-            "cluster": ["A", "A", "B", "B", "C", "C"],
+            "tandem_cluster_id": ["A", "A", "B", "B", "C", "C"],
         }
     )
     csv_path = tmp_path / "ranked.csv"

@@ -66,9 +66,13 @@ active-vs-topscore comparison isolates the disagreement-reordering effect
 rather than incidental cluster clumping. No more than
 ``ceil(batch_size / n_clusters)`` selected candidates come from any one
 `cluster_col` value, where `n_clusters` counts distinct clusters among the
-classifier-gated eligible pool. If `cluster_col` is absent from the input,
-the cap is skipped entirely (documented, not an error -- tandem-cluster
-data is optional evidence throughout this pipeline).
+classifier-gated eligible pool. `cluster_col` defaults to
+``tandem_cluster_id`` -- the exact tandem-array column rank_candidates.py
+writes (its output has no bare ``cluster`` column) -- so the cap spreads
+the batch across distinct tandem arrays, the field's signature
+chemoreceptor grouping. If `cluster_col` is absent from the input, the cap
+is skipped entirely (documented, not an error -- tandem-cluster data is
+optional evidence throughout this pipeline).
 
 Classifier gate: candidates whose `classifier_col` (default "classification")
 value is "non-chemoreceptor" or "likely-non-chemoreceptor" (the existing
@@ -223,7 +227,7 @@ def _active_order(eligible_order: List[str], per_signal_ranks: Dict[str, Dict[st
 
 def select_batch(df: pd.DataFrame, per_signal_ranks: Dict[str, Dict[str, float]],
                   batch_size: int, classifier_col: str = "classification",
-                  cluster_col: str = "cluster", mode: str = "active") -> List[str]:
+                  cluster_col: str = "tandem_cluster_id", mode: str = "active") -> List[str]:
     """An ordered list of <= ``batch_size`` candidate ids for the probe batch.
 
     (a) Excludes ids whose ``classifier_col`` is a confident non-chemoreceptor
@@ -250,7 +254,8 @@ def select_batch(df: pd.DataFrame, per_signal_ranks: Dict[str, Dict[str, float]]
 
 def write_batch(selected: List[str], df: pd.DataFrame,
                  per_signal_ranks: Dict[str, Dict[str, float]], path: str,
-                 method: str = "rra", groups=None, cluster_col: str = "cluster") -> pd.DataFrame:
+                 method: str = "rra", groups=None,
+                 cluster_col: str = "tandem_cluster_id") -> pd.DataFrame:
     """Write the bench-ready probe-batch TSV; return the written DataFrame.
 
     Columns: ``id, rank_agg_position, disagreement, cluster,
@@ -327,7 +332,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--batch-size", type=int, default=24)
     ap.add_argument("--mode", default="active", choices=["active", "topscore"])
     ap.add_argument("--classifier-col", default="classification")
-    ap.add_argument("--cluster-col", default="cluster")
+    ap.add_argument("--cluster-col", default="tandem_cluster_id")
     ap.add_argument("--out", default=None,
                      help="Output TSV (default: $RESULTS_DIR/ranking/"
                           "probe_batch_active_learning.tsv)")
