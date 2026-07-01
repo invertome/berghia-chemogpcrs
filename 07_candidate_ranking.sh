@@ -92,6 +92,28 @@ fi
 # Extract all GPCR IDs
 awk '/^>/ {print substr($1,2)}' "${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa" > "${RESULTS_DIR}/ranking/candidate_ids.txt"
 
+# --- RANK_METHOD=rankagg: audit signal independence before ranking ---
+# The label-free rank-aggregation reranker must not let signals that share a
+# confound (e.g. phylo + og_confidence, both from the same OrthoFinder tree)
+# count as several independent votes. The audit groups correlated signals and
+# rank_candidates.py fuses each group into one vote. It reads the PRIOR run's
+# ranked CSV (the signal-correlation structure is stable across runs); on the
+# first run none exists, so rankagg simply treats every signal independently.
+# The default RANK_METHOD=weighted path is unchanged (this block is skipped).
+RANKED_CSV="${RESULTS_DIR}/ranking/ranked_candidates_sorted.csv"
+if [ "${RANK_METHOD:-weighted}" = "rankagg" ]; then
+    if [ -f "${RANKED_CSV}" ]; then
+        log "RANK_METHOD=rankagg: auditing signal-ranking independence..."
+        python3 "${SCRIPTS_DIR}/audit_signal_ranking_independence.py" \
+            --ranked-csv "${RANKED_CSV}" \
+            --out-prefix "${RESULTS_DIR}/ranking/signal_independence" \
+            2>> "${LOGS_DIR}/signal_independence_audit.err" \
+            || log --level=WARN "Signal-independence audit failed (rankagg falls back to ungrouped signals)"
+    else
+        log "RANK_METHOD=rankagg: no prior ranked CSV; rankagg will treat signals as independent (first run)"
+    fi
+fi
+
 # Run ranking script with improved algorithm
 # Note: Now takes synteny directory (not file) for quantitative scoring
 run_command "rank_candidates" python3 "${SCRIPTS_DIR}/rank_candidates.py" \
@@ -153,6 +175,24 @@ if [ -f "$HCR_AUG_INPUT" ] && [ -f "$CLASS_TSV" ]; then
         || log --level=WARN "Classification column augmentation failed (kept original CSV)"
 elif [ -f "$HCR_AUG_INPUT" ]; then
     log --level=WARN "Skipping classification columns: $CLASS_TSV not found (run 06c first)"
+fi
+
+# --- Weighted-vs-rank-aggregation comparison (always emitted; non-fatal) ---
+# Descriptive audit only: reports how far the label-free rank-aggregation order
+# would differ from the production weighted order (Spearman, top-k overlap,
+# biggest movers) plus an honest, permutation-null positive-control readout.
+# The production shortlist is NOT changed here. Uses the signal-independence
+# groups.json when the rankagg audit above produced one.
+if [ -f "${RANKED_CSV}" ]; then
+    COMPARE_ARGS=(--ranked-csv "${RANKED_CSV}" \
+        --out "${RESULTS_DIR}/ranking/ranking_method_comparison.md")
+    COMPARE_GROUPS="${RESULTS_DIR}/ranking/signal_independence_groups.json"
+    [ -f "${COMPARE_GROUPS}" ] && COMPARE_ARGS+=(--groups-json "${COMPARE_GROUPS}")
+    [ -f "${HCR_CONTROLS_CSV:-${REFERENCE_DIR}/hcr_positive_controls.csv}" ] && \
+        COMPARE_ARGS+=(--controls-csv "${REFERENCE_DIR}/hcr_positive_controls.csv")
+    python3 "${SCRIPTS_DIR}/compare_ranking_methods.py" "${COMPARE_ARGS[@]}" \
+        2>> "${LOGS_DIR}/ranking_method_comparison.err" \
+        || log --level=WARN "Ranking-method comparison failed (non-fatal)"
 fi
 
 # Generate plots

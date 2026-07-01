@@ -1,5 +1,6 @@
 import math
 
+import pandas as pd
 import pytest
 from scipy.special import betainc
 
@@ -101,3 +102,74 @@ def test_aggregate_tie_break_by_id():
 def test_aggregate_invalid_method_raises():
     with pytest.raises(ValueError):
         ra.aggregate({"s1": {"a": 0.5}}, method="bogus", groups=None)
+
+
+# --------------------------------------------------------------------------- #
+# build_ranklists_from_df: the single shared 12-signal spec
+# --------------------------------------------------------------------------- #
+def test_build_ranklists_base_always_present_gated_by_flag():
+    df = pd.DataFrame(
+        {
+            "id": ["x", "y", "z"],
+            "phylo_score_norm": [0.9, 0.5, 0.1],
+            "purifying_score_norm": [0.1, 0.5, 0.9],
+            "positive_score_norm": [0.2, 0.4, 0.6],
+            "lse_depth_score_norm": [0.3, 0.3, 0.3],
+            "synteny_score_norm": [0.8, 0.2, 0.5],
+            "has_synteny_data": [True, False, True],   # y gated OUT of synteny
+            "gprotein_coexpr_score_norm": [0.7, 0.6, 0.5],
+            "has_gprotein_data": [False, False, False],  # signal fully absent
+        }
+    )
+    rl = ra.build_ranklists_from_df(df)
+    # 4 base signals always present for every id
+    for base in ("phylo", "purifying", "positive", "lse_depth"):
+        assert set(rl[base]) == {"x", "y", "z"}
+    # gated signal: only ids whose has_*_data is True
+    assert set(rl["synteny"]) == {"x", "z"}
+    # a gated signal with NO True flags drops out entirely
+    assert "gprotein_coexpr" not in rl
+    # higher norm score = better is preserved as the stored value
+    assert rl["phylo"]["x"] > rl["phylo"]["z"]
+
+
+def test_build_ranklists_falls_back_to_raw_score_columns():
+    # The written ranked CSV carries raw '<signal>_score' columns, not the
+    # in-memory '<signal>_score_norm' ones; the builder must handle both.
+    df = pd.DataFrame(
+        {
+            "id": ["x", "y"],
+            "phylo_score": [0.9, 0.1],
+            "purifying_score": [0.1, 0.9],
+            "positive_score": [0.5, 0.5],
+            "lse_depth_score": [0.2, 0.8],
+        }
+    )
+    rl = ra.build_ranklists_from_df(df)
+    assert rl["phylo"] == {"x": 0.9, "y": 0.1}
+
+
+def test_build_ranklists_uses_flag_overrides_for_gprotein_and_ecl():
+    df = pd.DataFrame(
+        {
+            "id": ["x", "y"],
+            "phylo_score_norm": [0.9, 0.1],
+            "purifying_score_norm": [0.1, 0.9],
+            "positive_score_norm": [0.5, 0.5],
+            "lse_depth_score_norm": [0.2, 0.8],
+            "ecl_divergence_score_norm": [0.4, 0.6],
+            "has_ecl_data": [True, True],            # NOT has_ecl_divergence_data
+            "gprotein_coexpr_score_norm": [0.3, 0.7],
+            "has_gprotein_data": [True, False],      # NOT has_gprotein_coexpr_data
+        }
+    )
+    rl = ra.build_ranklists_from_df(df)
+    assert set(rl["ecl_divergence"]) == {"x", "y"}
+    assert set(rl["gprotein_coexpr"]) == {"x"}
+
+
+def test_normalize_group_names_strips_score_suffix_idempotently():
+    groups = [["phylo_score", "og_confidence_score"], ["synteny_score"]]
+    assert ra.normalize_group_names(groups) == [["phylo", "og_confidence"], ["synteny"]]
+    # already-stripped names pass through unchanged
+    assert ra.normalize_group_names([["phylo"]]) == [["phylo"]]

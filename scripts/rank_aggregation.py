@@ -147,3 +147,100 @@ def aggregate(per_signal_ranklists, method="rra", groups=None):
         scores = rrf_score(per_signal_ranklists, k=60, groups=groups)
         return sorted(scores, key=lambda i: (-scores[i], i))
     raise ValueError(f"unknown method: {method!r} (expected 'rra' or 'rrf')")
+
+
+# --------------------------------------------------------------------------- #
+# Bridge to the candidate-ranking dataframe (shared by rank_candidates.py and
+# compare_ranking_methods.py so the 12-signal spec lives in exactly one place)
+# --------------------------------------------------------------------------- #
+# The 12 ranking signals as (signal_key, has_flag). has_flag=None marks the
+# four base signals that are ALWAYS present; the other eight contribute a
+# candidate's value only where their has_*_data boolean is True. The two
+# non-obvious flag names (gprotein/ecl) mirror the production ranked CSV and
+# scripts/audit_signal_ranking_independence.py's FLAG_OVERRIDES.
+SIGNAL_SPEC = [
+    ("phylo", None),
+    ("purifying", None),
+    ("positive", None),
+    ("lse_depth", None),
+    ("synteny", "has_synteny_data"),
+    ("expression", "has_expression_data"),
+    ("chemosensory_expr", "has_chemosensory_expr_data"),
+    ("gprotein_coexpr", "has_gprotein_data"),
+    ("ecl_divergence", "has_ecl_data"),
+    ("expansion", "has_expansion_data"),
+    ("og_confidence", "has_og_confidence_data"),
+    ("tandem_cluster", "has_tandem_cluster_data"),
+]
+
+
+def build_ranklists_from_df(df, id_col="id"):
+    """Build ``{signal: {id: score}}`` for the 12 ranking signals from a df.
+
+    Prefers the normalized ``<signal>_score_norm`` column and falls back to
+    the raw ``<signal>_score`` column (the written ranked CSV carries the raw
+    columns, not the norm ones -- rank aggregation ranks within each signal,
+    which is invariant to the monotonic min-max normalization, so either
+    yields identical rankings). A gated signal contributes a candidate's value
+    only where its ``has_*_data`` flag is True; the four base signals are
+    always included. Higher score = better (every axis enters the weighted sum
+    positively). Missing/NaN values and empty signals are dropped so a signal
+    only "votes" where it has data.
+    """
+    ids = list(df[id_col])
+    ranklists = {}
+    for key, flag in SIGNAL_SPEC:
+        norm_col, raw_col = f"{key}_score_norm", f"{key}_score"
+        col = norm_col if norm_col in df.columns else raw_col
+        if col not in df.columns:
+            continue
+        values = list(df[col])
+        if flag is None:
+            keep = [True] * len(ids)
+        elif flag in df.columns:
+            keep = [bool(v) for v in df[flag]]
+        else:
+            # gated signal whose flag column is absent -> treat as no data
+            continue
+        signal_map = {}
+        for idv, val, present in zip(ids, values, keep):
+            if not present or _is_missing(val):
+                continue
+            signal_map[idv] = float(val)
+        if signal_map:
+            ranklists[key] = signal_map
+    return ranklists
+
+
+def normalize_group_names(groups):
+    """Translate audit group names (``<signal>_score``) to the signal keys
+    used by :func:`build_ranklists_from_df` (``<signal>``).
+
+    scripts/audit_signal_ranking_independence.py emits groups keyed by the raw
+    ``*_score`` column names; the ranklists here are keyed by the bare signal
+    key. Stripping the ``_score`` suffix bridges the two (all 12 map
+    one-to-one). Idempotent: names without the suffix pass through unchanged.
+    """
+    def strip(name):
+        return name[: -len("_score")] if name.endswith("_score") else name
+    return [[strip(n) for n in group] for group in groups]
+
+
+def rerank_output(df_sorted, method, groups=None):
+    """Return ``df_sorted`` reordered by the chosen ranking method.
+
+    ``method != "rankagg"`` (the default ``"weighted"``): returns ``df_sorted``
+    UNCHANGED -- a strict identity so the weighted production ordering/output
+    stays byte-identical. ``method == "rankagg"``: reorders rows by a Robust
+    Rank Aggregation fusion of the 12 per-signal ranklists (``groups`` fuses
+    confounded signals into one vote); ids covered by no signal keep their
+    incoming (weighted) order at the tail via a stable sort.
+    """
+    if method != "rankagg":
+        return df_sorted
+    order = aggregate(build_ranklists_from_df(df_sorted), method="rra", groups=groups)
+    pos = {idv: i for i, idv in enumerate(order)}
+    tail = len(pos)
+    keyed = df_sorted.assign(_rankagg_pos=[pos.get(i, tail) for i in df_sorted["id"]])
+    reordered = keyed.sort_values("_rankagg_pos", kind="stable")
+    return reordered.drop(columns="_rankagg_pos")

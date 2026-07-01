@@ -51,6 +51,29 @@ except ImportError as e:
     Tree = None
     ETE3_AVAILABLE = False
 
+
+def _load_signal_groups(output_path):
+    """Load the signal-independence groups written by stage 07's audit next to
+    the output CSV (signal_independence_groups.json) and translate the audit's
+    '<signal>_score' names to the rank-aggregation signal keys. Returns None
+    when the file is absent/empty -- rankagg then treats every signal as
+    independent. Only consulted on the RANK_METHOD=rankagg path.
+    """
+    groups_path = Path(output_path).parent / 'signal_independence_groups.json'
+    if not groups_path.exists():
+        return None
+    try:
+        with open(groups_path) as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    groups = data.get('groups') if isinstance(data, dict) else data
+    if not groups:
+        return None
+    import rank_aggregation as _rank_agg
+    return _rank_agg.normalize_group_names(groups)
+
+
 # --- Input Arguments ---
 candidates_file = sys.argv[1]
 expression_file = sys.argv[2]
@@ -61,6 +84,12 @@ output_file = sys.argv[6]
 ref_categories_file = sys.argv[7] if len(sys.argv) > 7 else None
 
 # --- Configuration from Environment ---
+# Ranking method: 'weighted' (default) = the hand-weighted sum below (the
+# production ordering); 'rankagg' = ALSO reorder the emitted CSV by a
+# label-free Robust Rank Aggregation of the same 12 per-signal ranklists
+# (non-disruptive compare mode wired by 07_candidate_ranking.sh).
+RANK_METHOD = os.getenv('RANK_METHOD', 'weighted')
+
 # Ranking weights
 PHYLO_WEIGHT = float(os.getenv('PHYLO_WEIGHT', 2))
 PURIFYING_WEIGHT = float(os.getenv('PURIFYING_WEIGHT', 1))  # New: separate from positive
@@ -2045,6 +2074,18 @@ if CHEMOSENSORY_HARD_FILTER and 'has_chemosensory_expr_data' in df.columns:
 
 # --- Sort and Save ---
 df_sorted = df.sort_values('rank_score', ascending=False)
+
+# Optional label-free rank-aggregation reranking (compare mode). The default
+# RANK_METHOD=weighted skips this block entirely, so df_sorted -- and every
+# downstream output -- is byte-identical to the weighted pipeline. When
+# RANK_METHOD=rankagg, reorder the OUTPUT rows by a Robust Rank Aggregation
+# fusion of the same 12 per-signal ranklists (fusing confounded signals per the
+# stage-07 audit's groups.json, if present). Switching the production shortlist
+# is a separate gated decision; this only reorders the emitted CSV on request.
+if RANK_METHOD == 'rankagg':
+    from rank_aggregation import rerank_output as _rerank_output
+    _signal_groups = _load_signal_groups(output_file)
+    df_sorted = _rerank_output(df_sorted, 'rankagg', groups=_signal_groups)
 
 # Select columns for output (updated with new score columns)
 output_cols = [

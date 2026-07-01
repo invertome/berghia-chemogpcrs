@@ -489,6 +489,15 @@ export RUN_MODE="${RUN_MODE:-slurm}"
 # --- Ranking Weights ---
 # These weights control how different evidence types contribute to candidate ranking.
 # Higher weights give more importance to that criterion.
+#
+# RANK_METHOD selects how the per-signal scores are combined into the final
+# order. 'weighted' (default) = the hand-weighted sum below (the production
+# shortlist). 'rankagg' ADDITIONALLY runs a label-free Robust Rank Aggregation
+# over the same 12 per-signal ranklists and emits the CSV in that order plus a
+# weighted-vs-rankagg comparison report (results/ranking/ranking_method_comparison.md).
+# This is a non-disruptive compare mode; switching the production shortlist is a
+# separate, gated decision. See scripts/compare_ranking_methods.py.
+export RANK_METHOD="${RANK_METHOD:-weighted}"
 export PHYLO_WEIGHT=2           # Weight for phylogenetic distance to references
 # Bead -ea9: PURIFYING_WEIGHT defaults to 0 because chemoreceptor identification
 # rewards diversifying selection on extracellular loops, not whole-gene
