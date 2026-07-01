@@ -269,6 +269,35 @@ def test_select_batch_isolated_genes_are_not_capped_as_shared_group():
     assert selected == ["t0", "iso0", "iso1", "iso2", "iso3"]
 
 
+def test_select_batch_literal_empty_string_cluster_id_is_isolated():
+    # rank_candidates.py writes `tandem_cluster_label or ''` -- a LITERAL
+    # empty string, not None. It only reads back as NaN when main() routes
+    # through pd.read_csv(); an in-memory caller passing a df with literal
+    # ""s must get the same isolated-gene treatment, per the "empty/NaN"
+    # contract in both docstrings. Before the fix, `pd.isna("")` is False,
+    # so literal-"" genes collapsed into one shared "" bucket and got
+    # throttled together whenever a competing real cluster inflated
+    # n_clusters and shrank the cap (reviewer repro).
+    #
+    # Two isolated ("") genes + one real tandem cluster "T", batch_size=2:
+    #   pre-fix  n_clusters={"", "T"}=2, cap=ceil(2/2)=1 -> "" bucket capped
+    #            at 1, so c0 admitted, c1 DROPPED, c2("T") admitted = [c0, c2].
+    #   post-fix each "" is its own singleton -> n_clusters=3, cap=1, so the
+    #            two top-ranked isolated genes both admit = [c0, c1].
+    df = pd.DataFrame(
+        {
+            "id": ["c0", "c1", "c2"],
+            "phylo_score": [3, 2, 1],
+            "tandem_cluster_id": ["", "", "T"],  # literal empty strings, NOT None
+        }
+    )
+    per_signal_ranks = _ranks_from_df(df)
+    selected = spb.select_batch(df, per_signal_ranks, batch_size=2, mode="topscore")
+    # c1 (an isolated "" gene) is NOT dropped in favor of the real cluster:
+    # each empty-string gene is its own singleton locus.
+    assert selected == ["c0", "c1"]
+
+
 # --------------------------------------------------------------------------- #
 # write_batch
 # --------------------------------------------------------------------------- #

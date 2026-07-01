@@ -187,7 +187,7 @@ def _apply_diversity_cap(ordered_ids: List[str], df: pd.DataFrame, batch_size: i
                           cluster_col: str, id_col: str = _ID_COL) -> List[str]:
     """Walk ``ordered_ids`` picking up to ``batch_size``, capping any one
     ``cluster_col`` value at ``ceil(batch_size / n_clusters)`` (n_clusters =
-    distinct cluster values among ``ordered_ids``). A missing/NaN cluster
+    distinct cluster values among ``ordered_ids``). An empty/NaN cluster
     value is NOT a shared bucket: an isolated gene (not part of a tandem
     array) is its own distinct locus, so each gets its own singleton
     cluster and is never throttled against other isolated genes (a cap is
@@ -203,7 +203,12 @@ def _apply_diversity_cap(ordered_ids: List[str], df: pd.DataFrame, batch_size: i
 
     def _cluster_key(cand_id: str) -> object:
         raw = cluster_series.get(cand_id)
-        return f"__isolated__{cand_id}" if pd.isna(raw) else raw
+        # Both a NaN and a LITERAL empty string mean "isolated gene" here:
+        # rank_candidates.py writes `tandem_cluster_label or ''` (a literal
+        # ""), which only reads back as NaN via pd.read_csv() -- an
+        # in-memory caller passing the raw "" must get the same singleton
+        # treatment, per the "empty/NaN" contract in the docstrings above.
+        return f"__isolated__{cand_id}" if (pd.isna(raw) or raw == "") else raw
 
     n_clusters = len({_cluster_key(i) for i in ordered_ids}) or 1
     cap = math.ceil(batch_size / n_clusters)
