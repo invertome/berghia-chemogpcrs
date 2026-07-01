@@ -244,14 +244,42 @@ def write_channel_tsv(channel: Dict[str, Dict[str, object]], path: str) -> None:
     pd.DataFrame(rows, columns=CHANNEL_TSV_COLUMNS).to_csv(path, sep="\t", index=False)
 
 
+# The COMPOUND suffix run_microswitch_bw_transfer.sh writes each
+# per-candidate report under: "<candidate_id>.bw_report.txt". Recovering
+# the candidate id needs this whole suffix stripped, not just the trailing
+# ".txt" -- os.path.splitext removes only the last extension, leaving a
+# stray ".bw_report" on the id, which then never matches a real candidate
+# id in the ranking df and silently deadens the entire channel through
+# merge_evidence_channels' id-presence join (has_or_microswitch_data=False
+# for every candidate).
+_REPORT_SUFFIX = ".bw_report.txt"
+
+
+def _candidate_id_from_name(name: str) -> str:
+    """Candidate id from an alignment-report filename.
+
+    Strips run_microswitch_bw_transfer.sh's full "<id>.bw_report.txt"
+    compound suffix when present (so 'BersteEVm001t1.bw_report.txt' ->
+    'BersteEVm001t1', NOT 'BersteEVm001t1.bw_report'); falls back to plain
+    single-extension stripping for any other input filename.
+    """
+    if name.endswith(_REPORT_SUFFIX):
+        return name[: -len(_REPORT_SUFFIX)]
+    return os.path.splitext(name)[0]
+
+
 def resolve_alignment_paths(inputs: List[str]) -> Dict[str, str]:
     """{candidate_id: path} from `--alignments` CLI inputs.
 
     Each item in `inputs` can be a directory (every regular file directly
     inside it is taken as one candidate's alignment report, non-recursive)
-    or a single file path; candidate_id is the filename stem (no
-    directory, no extension) in both cases. Items that are neither an
-    existing file nor an existing directory are silently skipped.
+    or a single file path. candidate_id is recovered via
+    `_candidate_id_from_name`: the part BEFORE the ".bw_report.txt" suffix
+    run_microswitch_bw_transfer.sh writes (e.g.
+    'BersteEVm001t1.bw_report.txt' -> 'BersteEVm001t1'), so it matches the
+    real candidate ids in the ranking df; any other filename falls back to
+    its plain single-extension stem. Items that are neither an existing
+    file nor an existing directory are silently skipped.
     """
     paths: Dict[str, str] = {}
     for item in inputs:
@@ -259,9 +287,9 @@ def resolve_alignment_paths(inputs: List[str]) -> Dict[str, str]:
             for name in sorted(os.listdir(item)):
                 full = os.path.join(item, name)
                 if os.path.isfile(full):
-                    paths[os.path.splitext(name)[0]] = full
+                    paths[_candidate_id_from_name(name)] = full
         elif os.path.isfile(item):
-            paths[os.path.splitext(os.path.basename(item))[0]] = item
+            paths[_candidate_id_from_name(os.path.basename(item))] = item
     return paths
 
 

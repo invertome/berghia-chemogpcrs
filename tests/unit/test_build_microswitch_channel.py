@@ -332,6 +332,33 @@ def test_resolve_alignment_paths_skips_nonexistent_items(tmp_path):
     assert set(resolved) == {"cand1"}
 
 
+def test_resolve_alignment_paths_strips_bw_report_compound_suffix_from_directory(tmp_path):
+    """Real production convention: run_microswitch_bw_transfer.sh writes each
+    report as '<candidate_id>.bw_report.txt'. The recovered id MUST be the
+    bare candidate id ('BersteEVm001t1'), NOT 'BersteEVm001t1.bw_report' --
+    os.path.splitext strips only the LAST extension, leaving the stray
+    '.bw_report' fragment, which then never matches a real candidate id in
+    the ranking df, so merge_evidence_channels joins ZERO rows and the whole
+    channel silently dies in production (the exact bug this guards)."""
+    align_dir = tmp_path / "alignments"
+    align_dir.mkdir()
+    _write_alignment(
+        align_dir, "BersteEVm001t1.bw_report.txt", 0.85, GOOD_ALIGNMENT_ROWS
+    )
+    resolved = resolve_alignment_paths([str(align_dir)])
+    assert set(resolved) == {"BersteEVm001t1"}
+    assert resolved["BersteEVm001t1"] == str(align_dir / "BersteEVm001t1.bw_report.txt")
+
+
+def test_resolve_alignment_paths_strips_bw_report_compound_suffix_from_explicit_file(tmp_path):
+    p = _write_alignment(
+        tmp_path, "BersteEVm001t1.bw_report.txt", 0.85, GOOD_ALIGNMENT_ROWS
+    )
+    resolved = resolve_alignment_paths([str(p)])
+    assert set(resolved) == {"BersteEVm001t1"}
+    assert resolved["BersteEVm001t1"] == str(p)
+
+
 # --------------------------------------------------------------------------- #
 # main() CLI
 # --------------------------------------------------------------------------- #
