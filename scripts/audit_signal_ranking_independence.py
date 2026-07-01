@@ -19,6 +19,14 @@ SIGNAL_COLUMNS = [
     "og_confidence_score",
 ]
 
+# Signals whose has_*_data flag does not follow the "<name>_score" ->
+# "has_<name>_data" suffix-swap. The production ranked CSV names these two
+# flags after the shorter data-source key, not the full score column.
+FLAG_OVERRIDES = {
+    "gprotein_coexpr_score": "has_gprotein_data",
+    "ecl_divergence_score": "has_ecl_data",
+}
+
 def load_signal_matrix(csv_path):
     df = pd.read_csv(csv_path)
     cols = [c for c in SIGNAL_COLUMNS if c in df.columns]
@@ -27,7 +35,7 @@ def load_signal_matrix(csv_path):
             print(f"[audit] warning: signal column {c} absent - skipped", file=sys.stderr)
     m = df[cols].astype(float).copy()
     for c in cols:
-        flag = "has_" + c.replace("_score", "_data")
+        flag = FLAG_OVERRIDES.get(c, "has_" + c.replace("_score", "_data"))
         if flag in df.columns:
             m.loc[~df[flag].astype(bool), c] = np.nan
     if "id" in df.columns:

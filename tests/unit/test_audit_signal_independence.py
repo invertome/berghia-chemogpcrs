@@ -46,3 +46,24 @@ def test_missing_signal_column_is_skipped(tmp_path):
     p = tmp_path / "sparse.csv"; df.to_csv(p, index=False)
     m = au.load_signal_matrix(str(p))
     assert "phylo_score" in m.columns
+
+def test_production_flag_names_mask_gprotein_and_ecl(tmp_path):
+    # regression: gprotein_coexpr_score / ecl_divergence_score pair with the
+    # REAL pipeline flags has_gprotein_data / has_ecl_data (NOT the naive
+    # has_<name>_data suffix-swap). Rows flagged False must become NaN, else
+    # their 0.0 no-data sentinels leak in as real scores.
+    df = pd.DataFrame({
+        "id": ["a", "b", "c", "d"],
+        "gprotein_coexpr_score": [0.0, 0.5, 0.0, 0.9],
+        "has_gprotein_data":     [False, True, False, True],
+        "ecl_divergence_score":  [0.0, 0.0, 0.7, 0.3],
+        "has_ecl_data":          [False, False, True, True],
+    })
+    p = tmp_path / "prod.csv"; df.to_csv(p, index=False)
+    m = au.load_signal_matrix(str(p))
+    g = m["gprotein_coexpr_score"]
+    e = m["ecl_divergence_score"]
+    assert np.isnan(g.loc["a"]) and np.isnan(g.loc["c"])   # flagged False -> NaN
+    assert g.loc["b"] == 0.5 and g.loc["d"] == 0.9          # flagged True -> kept
+    assert np.isnan(e.loc["a"]) and np.isnan(e.loc["b"])   # flagged False -> NaN
+    assert e.loc["c"] == 0.7 and e.loc["d"] == 0.3          # flagged True -> kept
