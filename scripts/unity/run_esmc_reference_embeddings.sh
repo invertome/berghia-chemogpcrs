@@ -1,7 +1,8 @@
 #!/bin/bash
 # run_esmc_reference_embeddings.sh — ESM-C (300M) forward pass over the
 # curated GPCR family reference set (references/anchors/anchor_set.fasta),
-# writing per-accession mean-pooled embeddings to a .npz for
+# writing mean-pooled embeddings (one array per anchor, keyed by the composite
+# FASTA header ANCHOR_<class>_<tier>_<accession>) to a .npz for
 # scripts/build_embedding_channel.py (Glue task G2, bead berghia-chemogpcrs-875).
 #
 # This is the REFERENCE-side counterpart to scripts/unity/run_esmc_embeddings.sh
@@ -75,8 +76,9 @@ echo "  output: ${OUT_NPZ}"
 
 # --- Forward pass over every reference sequence -------------------------------
 # Pure inline driver: reads the FASTA, embeds each sequence with ESM-C, mean-pools
-# over the sequence-length axis, and writes one .npz with one array per
-# accession. This is the ONLY place in the reference-embedding path that
+# over the sequence-length axis, and writes one .npz with one array per anchor
+# (keyed by the composite FASTA header, not the bare accession -- see read_fasta
+# below). This is the ONLY place in the reference-embedding path that
 # imports torch/esm -- scripts/build_embedding_channel.py (the tested glue)
 # and scripts/embedding_evidence.py (the scored/tested module) never do.
 REF_FAA="${REF_FAA}" OUT_NPZ="${OUT_NPZ}" ESMC_MODEL="${ESMC_MODEL}" DEVICE="${DEVICE}" \
@@ -97,8 +99,13 @@ device = os.environ["DEVICE"]
 
 def read_fasta(path):
     """Minimal FASTA reader: id = first whitespace-delimited token of the
-    header (matches anchor_set.tsv's `accession` column, e.g.
-    'ANCHOR_A_1_P31356'); trailing '*' stop codons are stripped
+    header. For anchor_set.fasta that token is the COMPOSITE anchor id
+    build_anchor_set.py writes -- ANCHOR_<class>_<tier>_<accession>, e.g.
+    'ANCHOR_A_1_P31356' -- NOT the bare accession. anchor_set.tsv stores the
+    bare accession ('P31356') in its `accession` column plus separate `class`
+    and `tier` columns; build_embedding_channel.load_ref_labels reconstructs
+    this exact composite id from those columns so its labels join against the
+    .npz keys this script emits. Trailing '*' stop codons are stripped
     (recover_cds_from_assemblies.py does the same on translated CDS)."""
     seqs = {}
     seq_id = None

@@ -48,7 +48,7 @@ from build_embedding_channel import (
     main,
     write_channel_tsv,
 )
-from embedding_evidence import centroid
+from embedding_evidence import centroid, load_embeddings
 
 
 # ---- family_to_class ---------------------------------------------------------
@@ -79,7 +79,12 @@ def test_load_ref_labels_missing_file_returns_empty_dict(tmp_path):
     assert load_ref_labels(str(tmp_path / "missing.tsv")) == {}
 
 
-def test_load_ref_labels_reads_accession_and_family_columns(tmp_path):
+def test_load_ref_labels_keys_by_composite_anchor_header(tmp_path):
+    """load_ref_labels must key by the COMPOSITE id that the reference .npz
+    is keyed by (the FASTA header build_anchor_set.anchor_header emits:
+    ANCHOR_<class>_<tier>_<accession>), NOT the bare `accession` column --
+    otherwise the reference-side join resolves 0/N and every centroid is a
+    zero vector (see test_reference_join_resolves_with_realistic_composite_ids)."""
     tsv = tmp_path / "labels.tsv"
     pd.DataFrame(
         {
@@ -90,7 +95,11 @@ def test_load_ref_labels_reads_accession_and_family_columns(tmp_path):
         }
     ).to_csv(tsv, sep="\t", index=False)
     labels = load_ref_labels(str(tsv))
-    assert labels == {"P1": "opsin", "P2": "peptide", "P3": "class-B-secretin"}
+    assert labels == {
+        "ANCHOR_A_1_P1": "opsin",
+        "ANCHOR_A_1_P2": "peptide",
+        "ANCHOR_B_2_P3": "class-B-secretin",
+    }
 
 
 # ---- build_family_centroids ----------------------------------------------------
@@ -146,6 +155,56 @@ def test_build_family_centroids_empty_ref_labels_returns_empty_and_zero_vector()
     assert np.array_equal(classA_centroid, np.zeros(2))
 
 
+def test_build_family_centroids_tolerates_nan_family_cell():
+    """A malformed custom --ref-labels with a missing (NaN) family cell must
+    not crash build_family_centroids on `family.lower()`; the well-formed
+    rows still yield a non-zero centroid. NOTE `family or ""` would NOT fix
+    this (NaN is truthy in Python), so the guard is an isinstance/str check."""
+    ref_embeddings = {"r1": np.array([1.0, 0.0]), "r2": np.array([0.0, 1.0])}
+    ref_labels = {"r1": float("nan"), "r2": "opsin"}
+    nonchemo, classA_centroid = build_family_centroids(ref_embeddings, ref_labels)
+    assert np.linalg.norm(nonchemo["opsin"]) > 0.0
+
+
+def test_reference_join_resolves_with_realistic_composite_ids(tmp_path):
+    """Regression (coordinator-caught BLOCKING bug): the reference .npz is
+    keyed by the FASTA COMPOSITE header run_esmc_reference_embeddings.sh emits
+    (ANCHOR_<class>_<tier>_<accession>, e.g. 'ANCHOR_A_1_P31356'), while
+    anchor_set.tsv's `accession` column is BARE ('P31356'). Verified against
+    source: bare-vs-composite overlap is 0/206. If load_ref_labels keyed by
+    the bare accession, build_family_centroids would resolve 0/N ids -> every
+    centroid a ZERO vector -> a silently dead channel (has_emb_data=True but
+    all sims 0.0). The earlier fixtures used matching ids on both sides, which
+    is exactly what hid this -- so this test keys the two sides REALISTICALLY."""
+    ref_npz = _write_npz(
+        tmp_path / "ref.npz",
+        {
+            "ANCHOR_A_1_P31356": np.array([1.0, 0.0]),
+            "ANCHOR_A_1_O15973": np.array([1.0, 0.0]),
+            "ANCHOR_B_2_Q99999": np.array([0.0, 1.0]),
+        },
+    )
+    tsv = tmp_path / "labels.tsv"
+    pd.DataFrame(
+        {
+            "accession": ["P31356", "O15973", "Q99999"],
+            "tier": [1, 1, 2],
+            "family": ["opsin", "opsin", "class-B-secretin"],
+            "class": ["A", "A", "B"],
+        }
+    ).to_csv(tsv, sep="\t", index=False)
+
+    ref_embeddings = load_embeddings(str(ref_npz))
+    ref_labels = load_ref_labels(str(tsv))
+    nonchemo, classA_centroid = build_family_centroids(ref_embeddings, ref_labels)
+
+    # the join MUST resolve -> non-zero centroids (the bug made these all-zero)
+    assert np.linalg.norm(nonchemo["opsin"]) > 0.0
+    assert np.linalg.norm(nonchemo["class-B-secretin"]) > 0.0
+    # classA centroid draws ONLY from the two class-A (opsin) refs, both [1,0]
+    assert np.allclose(classA_centroid, [1.0, 0.0])
+
+
 # ---- build_embedding_channel (end-to-end via .npz + TSV fixtures) --------------
 
 def _write_npz(path, vectors):
@@ -154,9 +213,13 @@ def _write_npz(path, vectors):
 
 
 def _write_labels_tsv(path, rows):
-    pd.DataFrame(rows, columns=["accession", "family", "class"]).to_csv(
-        path, sep="\t", index=False
-    )
+    # anchor_set.tsv-style: BARE accession + a tier column + class. All
+    # fixtures here are tier-1, so the composite id load_ref_labels
+    # reconstructs is ANCHOR_<class>_1_<accession> (see the composite-keyed
+    # ref .npz fixtures below).
+    df = pd.DataFrame(rows, columns=["accession", "family", "class"])
+    df.insert(1, "tier", 1)
+    df.to_csv(path, sep="\t", index=False)
     return str(path)
 
 
@@ -165,11 +228,13 @@ def test_build_embedding_channel_end_to_end(tmp_path):
         tmp_path / "candidates.npz",
         {"cand_1": np.array([1.0, 0.0]), "cand_2": np.array([0.0, 1.0])},
     )
+    # reference .npz keyed by the composite FASTA header (what
+    # run_esmc_reference_embeddings.sh emits), TSV by the bare accession
     ref_npz = _write_npz(
         tmp_path / "ref.npz",
         {
-            "P1": np.array([1.0, 0.0]),  # opsin
-            "P2": np.array([0.0, 1.0]),  # peptide
+            "ANCHOR_A_1_P1": np.array([1.0, 0.0]),  # opsin
+            "ANCHOR_A_1_P2": np.array([0.0, 1.0]),  # peptide
         },
     )
     ref_labels_tsv = _write_labels_tsv(
@@ -181,12 +246,15 @@ def test_build_embedding_channel_end_to_end(tmp_path):
 
     assert set(channel) == {"cand_1", "cand_2"}
     assert channel["cand_1"]["emb_nonchemo_family"] == "opsin"
+    # the join resolved -> a REAL (non-zero) similarity, not the all-zero
+    # tie-break the bug produced
+    assert channel["cand_1"]["emb_nonchemo_sim"] == pytest.approx(1.0)
     assert channel["cand_1"]["has_emb_data"] is True
     assert channel["cand_1"]["emb_leakage_flag"] is True
 
 
 def test_build_embedding_channel_missing_candidate_npz_is_empty_not_a_crash(tmp_path):
-    ref_npz = _write_npz(tmp_path / "ref.npz", {"P1": np.array([1.0, 0.0])})
+    ref_npz = _write_npz(tmp_path / "ref.npz", {"ANCHOR_A_1_P1": np.array([1.0, 0.0])})
     ref_labels_tsv = _write_labels_tsv(tmp_path / "labels.tsv", [["P1", "opsin", "A"]])
     channel = build_embedding_channel(
         str(tmp_path / "does_not_exist.npz"), ref_npz, ref_labels_tsv
@@ -251,7 +319,7 @@ def test_write_channel_tsv_interops_with_merge_evidence_channels(tmp_path):
         tmp_path / "candidates.npz",
         {"cand_1": np.array([1.0, 0.0]), "cand_2": np.array([0.0, 1.0])},
     )
-    ref_npz = _write_npz(tmp_path / "ref.npz", {"P1": np.array([1.0, 0.0])})
+    ref_npz = _write_npz(tmp_path / "ref.npz", {"ANCHOR_A_1_P1": np.array([1.0, 0.0])})
     ref_labels_tsv = _write_labels_tsv(tmp_path / "labels.tsv", [["P1", "opsin", "A"]])
     channel = build_embedding_channel(candidate_npz, ref_npz, ref_labels_tsv)
     emb_tsv = tmp_path / "emb_channel.tsv"
@@ -274,7 +342,7 @@ def test_no_chemoreceptor_sim_key_anywhere_in_channel_or_tsv(tmp_path):
     )
     ref_npz = _write_npz(
         tmp_path / "ref.npz",
-        {"P1": np.array([1.0, 0.0]), "P2": np.array([0.0, 1.0])},
+        {"ANCHOR_A_1_P1": np.array([1.0, 0.0]), "ANCHOR_A_1_P2": np.array([0.0, 1.0])},
     )
     ref_labels_tsv = _write_labels_tsv(
         tmp_path / "labels.tsv", [["P1", "opsin", "A"], ["P2", "peptide", "A"]]
@@ -302,7 +370,7 @@ def test_main_cli_writes_expected_tsv(tmp_path):
     candidate_npz = _write_npz(
         tmp_path / "candidates.npz", {"cand_1": np.array([1.0, 0.0])}
     )
-    ref_npz = _write_npz(tmp_path / "ref.npz", {"P1": np.array([1.0, 0.0])})
+    ref_npz = _write_npz(tmp_path / "ref.npz", {"ANCHOR_A_1_P1": np.array([1.0, 0.0])})
     ref_labels_tsv = _write_labels_tsv(tmp_path / "labels.tsv", [["P1", "opsin", "A"]])
     out = tmp_path / "out.tsv"
 

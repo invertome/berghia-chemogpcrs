@@ -93,18 +93,35 @@ def family_to_class(family: str) -> str:
 
 
 def load_ref_labels(path: str) -> Dict[str, str]:
-    """{accession: family} from a labeled reference TSV (e.g. anchor_set.tsv).
+    """{composite_id: family} from a labeled reference TSV (e.g. anchor_set.tsv).
 
-    Only the `accession` and `family` columns are used; any other columns
-    (tier, taxid, species, class, evidence, ...) are ignored, so this reads
-    anchor_set.tsv's full 7-column schema directly. Missing file -> {} (no
-    reference labels available), mirroring embedding_evidence.load_embeddings'
-    missing-file contract -- never a crash.
+    The reference embeddings .npz (scripts/unity/run_esmc_reference_embeddings.sh)
+    is keyed by each sequence's FASTA header, which build_anchor_set.py writes
+    as the COMPOSITE id ANCHOR_<class>_<tier>_<accession> (anchor_header(),
+    build_anchor_set.py:128) -- e.g. 'ANCHOR_A_1_P31356'. anchor_set.tsv's
+    `accession` column, by contrast, is the BARE accession ('P31356'). So this
+    reconstructs the composite id per row -- mirroring build_anchor_set.py's
+    anchor_header f-string VERBATIM -- so the keys match the .npz and
+    build_family_centroids' join actually resolves. (Verified against source:
+    bare accession vs the FASTA composite header overlaps 0/206; the
+    reconstructed composite overlaps 206/206.)
+
+    Uses the `accession`, `tier`, and `class` columns; any other columns
+    (taxid, species, evidence, ...) are ignored, so this reads anchor_set.tsv's
+    full schema directly. Missing file -> {} (no reference labels available),
+    mirroring embedding_evidence.load_embeddings' missing-file contract --
+    never a crash.
     """
     if not os.path.exists(path):
         return {}
     df = pd.read_csv(path, sep="\t")
-    return dict(zip(df["accession"], df["family"]))
+    return {
+        # mirrors build_anchor_set.anchor_header: f"ANCHOR_{klass}_{tier}_{accession}"
+        f"ANCHOR_{cls}_{tier}_{acc}": family
+        for acc, tier, cls, family in zip(
+            df["accession"], df["tier"], df["class"], df["family"]
+        )
+    }
 
 
 def build_family_centroids(
@@ -131,6 +148,12 @@ def build_family_centroids(
     """
     clean_labels: Dict[str, str] = {}
     for ref_id, family in ref_labels.items():
+        # Guard a malformed custom --ref-labels: a missing family cell reads as
+        # NaN (a float), and NaN is truthy in Python so `family or ""` would NOT
+        # catch it -- coerce any non-str to "" before .lower() to avoid an
+        # AttributeError (never expected to fire against the real anchor_set.tsv).
+        if not isinstance(family, str):
+            family = ""
         if "chemoreceptor" in family.lower():
             print(
                 f"[build_embedding_channel] WARNING: dropping ref {ref_id!r} "
