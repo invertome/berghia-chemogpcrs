@@ -68,8 +68,12 @@ def test_pick_representative_complete_short_beats_partial_long():
 
 
 def test_pick_representative_longest_among_completes():
-    small = _pm("s", complete=True, length=200)
-    big = _pm("b", complete=True, length=400)
+    # ONLY length may select the winner: the longer model has the
+    # lexically LARGER query, so a query-only tiebreak would (wrongly)
+    # pick the short one. Kills the "remove -m.length" mutant, under which
+    # both models are complete+txome and the min falls to query "a".
+    small = _pm("a", complete=True, length=200)
+    big = _pm("z", complete=True, length=400)
     locus = _locus([small, big])
     assert rc.pick_representative(locus) is big
 
@@ -157,6 +161,55 @@ def test_qc_chimeric_not_flagged_when_refseq_genes_none():
     assert "chimeric" not in rc.qc_flags(locus, refseq_genes=None)
 
 
+def test_qc_chimeric_via_two_distinct_genes_with_a_duplicate_listed():
+    # refseq_genes lists gene A twice plus a genuinely distinct gene B; the
+    # fused member straddles A and B, so it IS chimeric via the 2 DISTINCT
+    # genes (the duplicate is irrelevant).
+    fused = _pm("fused", start=100, end=900, complete=True, length=400)
+    locus = _locus([fused])
+    a = ("chr1", 100, 400, "+")
+    b = ("chr1", 500, 800, "+")
+    assert "chimeric" in rc.qc_flags(locus, refseq_genes=[a, a, b])
+
+
+def test_qc_not_chimeric_when_same_gene_interval_listed_twice():
+    # the ONLY overlapped gene is listed twice; de-dup collapses it to one,
+    # so the member overlaps just 1 DISTINCT gene -> NOT chimeric. Kills the
+    # "drop the set() de-dup" mutant, under which the duplicate is counted
+    # twice and fakes a 2-gene chimera.
+    m = _pm("m", start=100, end=400, complete=True, length=300)
+    locus = _locus([m])
+    a = ("chr1", 100, 400, "+")
+    assert "chimeric" not in rc.qc_flags(locus, refseq_genes=[a, a])
+
+
+def test_qc_chimeric_respects_chromosome_of_gene():
+    # member on chr1 overlaps a chr1 gene (1 distinct) and, by coordinate
+    # only, a chr2 gene. The chromosome check must reject the chr2 gene, so
+    # the member overlaps 1 distinct gene -> NOT chimeric. Kills the
+    # "drop m.chrom == gchrom" mutant, which would count the chr2 gene and
+    # flag a spurious chimera.
+    m = _pm("m", chrom="chr1", start=100, end=900, complete=True, length=400)
+    locus = _locus([m], chrom="chr1")
+    same_chrom = ("chr1", 100, 400, "+")
+    other_chrom = ("chr2", 200, 800, "+")   # overlaps m's coords, wrong chrom
+    assert "chimeric" not in rc.qc_flags(locus, refseq_genes=[same_chrom, other_chrom])
+
+
+def test_qc_not_chimeric_bookended_gene_half_open_boundary():
+    # member [100,500) overlaps gene A [100,300) (1 distinct) and is
+    # book-ended with gene B [500,900): B.start == member.end, so 0 shared
+    # bases under half-open [start, end). B must NOT count -> 1 distinct
+    # gene -> NOT chimeric. Kills a `gstart < m.end` -> `<=` boundary
+    # mutant, which would treat the book-end as an overlap (the Task-2
+    # gap-guard semantics).
+    m = _pm("m", start=100, end=500, complete=True, length=300)
+    locus = _locus([m])
+    a = ("chr1", 100, 300, "+")
+    bookend = ("chr1", 500, 900, "+")   # starts exactly at m.end
+    assert "chimeric" not in rc.qc_flags(locus, refseq_genes=[a, bookend])
+
+
 # ---- qc_flags: partial_only -----------------------------------------------
 
 def test_qc_partial_only_when_no_complete_member():
@@ -195,6 +248,46 @@ def test_qc_source_disagreement_requires_both_provenance():
     g2 = _pm("g2", source="genome", complete=True, length=10)
     locus = _locus([g1, g2])
     assert "source_disagreement" not in rc.qc_flags(locus)
+
+
+def test_qc_source_disagreement_uses_per_source_representatives():
+    # >=2 members per source, and the true representative is NOT the first
+    # member on either side (each side's partial is longer but loses to the
+    # complete ORF). The disagreement must come from the REAL per-source
+    # reps -- genome rep 850 vs txome rep 100 -> 750/850 = 0.88 > 0.20 ->
+    # flagged. Kills BOTH the `_representative(genome)->genome[0]` mutant
+    # (genome[0]=100 vs txome rep 100 -> 0.0, no fire) AND the
+    # `_representative(txome)->txome[0]` mutant (genome rep 850 vs
+    # txome[0]=900 -> 0.056, no fire).
+    genome = [_pm("g1", source="genome", complete=False, length=100),
+              _pm("g2", source="genome", complete=True, length=850)]
+    txome = [_pm("t1", source="txome", complete=False, length=900),
+             _pm("t2", source="txome", complete=True, length=100)]
+    locus = _locus([*genome, *txome])
+    assert "source_disagreement" in rc.qc_flags(locus)
+
+
+def test_qc_source_disagreement_flags_when_txome_rep_is_longer():
+    # txome rep (850) is LONGER than genome rep (100): dropping abs() makes
+    # (100 - 850)/850 negative, which is not > 0.20, so the flag would not
+    # fire. Pins abs() -- the existing >20% test has the genome side longer
+    # (a positive difference), so it survives an abs() deletion.
+    g = _pm("g", source="genome", complete=True, length=100)
+    t = _pm("t", source="txome", complete=True, length=850)
+    locus = _locus([g, t])
+    assert "source_disagreement" in rc.qc_flags(locus)
+
+
+def test_qc_source_disagreement_zero_length_reps_no_error():
+    # both-provenance locus whose two reps both have length 0 (unknown /
+    # missing length): the `longer <= 0` guard must short-circuit, giving
+    # no source_disagreement and, crucially, no ZeroDivisionError. Removing
+    # the guard makes qc_flags raise on the 0/0 division.
+    g = _pm("g", source="genome", complete=True, length=0)
+    t = _pm("t", source="txome", complete=True, length=0)
+    locus = _locus([g, t])
+    flags = rc.qc_flags(locus)
+    assert "source_disagreement" not in flags
 
 
 # ---- qc_flags: low_margin -------------------------------------------------
