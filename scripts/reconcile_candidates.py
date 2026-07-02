@@ -11,19 +11,25 @@ Task 1 (this pass) implements only the first stage of the pipeline:
 
 i.e. the ``Placement`` model, the four aligner-output parsers
 (minimap2 PAF, GMAP GFF3, miniprot GFF3, BLASTp outfmt6+qcovs), and
-the absolute + best-vs-second-margin gate functions. Locus grouping,
-isoform collapse, representative selection, the placement cascade,
-and the output writers are added in later tasks against this same
-module.
+the absolute + best-vs-second-margin gate functions. Task 2 adds
+locus grouping + isoform collapse (``PlacedModel``, ``Locus``,
+``group_into_loci``). Representative selection, the placement
+cascade, and the output writers are added in later tasks against
+this same module.
 
-All functions here are pure (stdlib only) beyond reading the given
-input file paths — no network access, no subprocess calls.
+All functions here are stdlib-only with no network access. The one
+optional subprocess is ``group_into_loci``'s ``bedtools merge`` fast
+path, used only when the binary is available and always backed by an
+equivalent pure-Python interval sweep (so the tests need no binary).
 
 Design spec: docs/plans/2026-06-30-berghia-genome-track-reconciliation-design.md
 """
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
+from collections import defaultdict
 from dataclasses import dataclass
 
 # miniprot's native GFF3 mRNA row has no coverage-equivalent attribute
@@ -298,3 +304,149 @@ def best_and_margin(placements: list[Placement | None]
     if len(ps) == 1:
         return ps[0], float("inf")
     return ps[0], ps[0].pct_identity - ps[1].pct_identity
+
+
+# ---- locus grouping + isoform collapse (Task 2) ------------------------------
+
+BEDTOOLS_DEFAULT = "bedtools"
+
+
+@dataclass(frozen=True)
+class PlacedModel:
+    """A candidate gene model positioned on the genome.
+
+    Distinct from ``Placement`` (which normalizes one aligner hit): a
+    ``PlacedModel`` is a candidate gene model with settled genomic
+    coordinates, tagged with the track it came from — ``source`` is a
+    free-form string whose downstream values are ``"genome"`` and
+    ``"txome"``. These are the units grouped into loci. Frozen +
+    hashable, matching the module's value-record convention; ``source``
+    must be carried through grouping unchanged (Task 3 reads it to
+    label provenance).
+    """
+    query: str
+    chrom: str
+    start: int
+    end: int
+    strand: str
+    source: str
+
+
+@dataclass(frozen=True)
+class Locus:
+    """One locus (= gene): a same-chromosome, same-strand overlap cluster
+    of ``PlacedModel``s. ``start``/``end`` span ``min(member starts)`` /
+    ``max(member ends)``; ``members`` is the list of models in the locus,
+    sorted by ``query`` for deterministic output.
+    """
+    chrom: str
+    start: int
+    end: int
+    strand: str
+    members: list[PlacedModel]
+
+
+def group_into_loci(records: list[PlacedModel]) -> list[Locus]:
+    """Group placed candidate models into loci (= genes) by same-strand
+    genomic overlap, collapsing isoforms.
+
+    Two ``PlacedModel``s share a locus iff they are on the same
+    chromosome and strand and share >0 bases under half-open
+    ``[start, end)`` semantics (``a.start < b.end and b.start < a.end``).
+    Grouping is transitive (connected components), so a chain of pairwise
+    overlaps forms one locus, while book-ended intervals (touching at a
+    boundary, 0 shared bases) stay separate.
+
+    Uses ``bedtools merge`` when the binary named by ``$BEDTOOLS``
+    (default ``"bedtools"``) is on PATH, else an equivalent pure-Python
+    interval sweep; both paths return identical loci. Output is
+    deterministic: loci sorted by ``(chrom, start, strand)`` and each
+    locus's ``members`` sorted by ``query``.
+    """
+    if not records:
+        return []
+    binary = os.environ.get("BEDTOOLS", BEDTOOLS_DEFAULT)
+    if shutil.which(binary) is not None:
+        clusters = _clusters_via_bedtools(records, binary)
+    else:
+        clusters = _clusters_via_sweep(records)
+    loci = [_locus_from_members(members) for members in clusters]
+    loci.sort(key=lambda locus: (locus.chrom, locus.start, locus.strand))
+    return loci
+
+
+def _locus_from_members(members: list[PlacedModel]) -> Locus:
+    """Build a Locus from a non-empty cluster of same-chrom/same-strand
+    models: span ``min(start)``/``max(end)`` with members sorted by query.
+    chrom/strand are taken from the first member (uniform by construction).
+    """
+    return Locus(chrom=members[0].chrom,
+                 start=min(m.start for m in members),
+                 end=max(m.end for m in members),
+                 strand=members[0].strand,
+                 members=sorted(members, key=lambda m: m.query))
+
+
+def _clusters_via_sweep(records: list[PlacedModel]) -> list[list[PlacedModel]]:
+    """Pure-Python clustering: within each ``(chrom, strand)`` group, sort
+    by start and sweep, folding in any model that overlaps the running
+    merged span (``model.start < cluster_end``). Half-open semantics — a
+    model whose start equals the cluster end (book-ended) opens a new
+    cluster. Equivalent to connected components of the overlap graph
+    because the swept span stays contiguous (each folded-in model starts
+    before the current right edge)."""
+    by_key: dict[tuple[str, str], list[PlacedModel]] = defaultdict(list)
+    for r in records:
+        by_key[(r.chrom, r.strand)].append(r)
+
+    clusters: list[list[PlacedModel]] = []
+    for key in by_key:
+        ordered = sorted(by_key[key], key=lambda r: (r.start, r.end))
+        cluster: list[PlacedModel] = []
+        cluster_end = 0
+        for r in ordered:
+            if cluster and r.start < cluster_end:
+                cluster.append(r)
+                cluster_end = max(cluster_end, r.end)
+            else:
+                if cluster:
+                    clusters.append(cluster)
+                cluster = [r]
+                cluster_end = r.end
+        if cluster:
+            clusters.append(cluster)
+    return clusters
+
+
+def _clusters_via_bedtools(records: list[PlacedModel], binary: str
+                            ) -> list[list[PlacedModel]]:
+    """bedtools clustering: emit each model as a 6-column BED row keyed by
+    its index (column 4), sorted by ``(chrom, start, end)``, and run
+    ``bedtools merge -s -d -1 -c 4 -o collapse``. ``-s`` merges within a
+    strand; ``-d -1`` requires >=1 bp of overlap so book-ended features
+    are NOT merged (bedtools' default ``-d 0`` would merge them, breaking
+    the gap guard); ``-c 4 -o collapse`` lists each merged interval's
+    member indices, which map back to the original records."""
+    indexed = sorted(enumerate(records),
+                     key=lambda t: (t[1].chrom, t[1].start, t[1].end))
+    bed = "".join(f"{r.chrom}\t{r.start}\t{r.end}\t{i}\t.\t{r.strand}\n"
+                  for i, r in indexed)
+    proc = subprocess.run(
+        [binary, "merge", "-s", "-d", "-1", "-c", "4", "-o", "collapse", "-i", "-"],
+        input=bed, capture_output=True, text=True, check=True)
+    return _clusters_from_merge_output(proc.stdout, records)
+
+
+def _clusters_from_merge_output(output: str, records: list[PlacedModel]
+                                 ) -> list[list[PlacedModel]]:
+    """Map ``bedtools merge -c 4 -o collapse`` output back to clusters.
+    The collapsed index list is the last tab field of each line (``-s``
+    may prepend a strand column, so read from the right); each non-blank
+    line becomes one cluster of the referenced records."""
+    clusters: list[list[PlacedModel]] = []
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        idx_field = line.split("\t")[-1]
+        clusters.append([records[int(x)] for x in idx_field.split(",")])
+    return clusters
