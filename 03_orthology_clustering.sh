@@ -27,8 +27,20 @@ log "Starting orthology clustering."
 
 # --- Prepare OrthoFinder input: one FASTA per species ---
 
-# Berghia chemoreceptor candidates (stage 02 output — unchanged)
-cp "${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa" "${RESULTS_DIR}/orthogroups/input/${BERGHIA_TAXID}_berghia.fa" || { log "Error: Failed to copy Berghia GPCR FASTA"; exit 1; }
+# Berghia chemoreceptor candidates: reconciled genome-track set when
+# RUN_GENOME_TRACK=1 and stage 02c has produced it, else the stage-02
+# transcriptome candidate set (byte-identical to legacy). Source is
+# toggle-driven via berghia_candidate_fasta (functions.sh).
+BERGHIA_CANDS="$(berghia_candidate_fasta)"
+# Anti-silent-degradation guard: if the genome track is ENABLED but stage 02c
+# never wrote reconciled_candidates.faa, berghia_candidate_fasta fell back to the
+# transcriptome-only set — an operator who skipped 02c would otherwise silently
+# lose the entire genome-track candidate contribution. Warn loudly; the fallback
+# behavior itself is unchanged (we still proceed with the legacy set).
+if [ "${RUN_GENOME_TRACK:-1}" != "0" ] && [ ! -f "${RESULTS_DIR}/reconciliation/reconciled_candidates.faa" ]; then
+    log --level=WARN "RUN_GENOME_TRACK is enabled but ${RESULTS_DIR}/reconciliation/reconciled_candidates.faa is missing; falling back to the transcriptome-only candidate set. Stage 02c was likely skipped or failed — run it (sbatch 02c_genome_reconcile.sh) first to include genome-track candidates."
+fi
+cp "${BERGHIA_CANDS}" "${RESULTS_DIR}/orthogroups/input/${BERGHIA_TAXID}_berghia.fa" || { log "Error: Failed to copy Berghia GPCR FASTA"; exit 1; }
 
 # --- Scan-derived candidates (P5 / P6) ---
 # SCAN_DERIVED_CANDIDATES_DIR must exist and contain at least one

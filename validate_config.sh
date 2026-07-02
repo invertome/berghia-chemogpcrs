@@ -60,12 +60,12 @@ print_ok() {
 
 print_error() {
     echo -e "  ${RED}✗${NC} $1"
-    ((ERRORS++))
+    ERRORS=$((ERRORS+1))
 }
 
 print_warning() {
     echo -e "  ${YELLOW}⚠${NC} $1"
-    ((WARNINGS++))
+    WARNINGS=$((WARNINGS+1))
 }
 
 print_fix() {
@@ -296,6 +296,39 @@ validate_input_files() {
 
     if [ -n "${LSE_HMM}" ] && [ -f "${LSE_HMM}" ]; then
         print_ok "Custom LSE HMM found"
+    fi
+}
+
+validate_genome_track() {
+    print_header "Validating Genome-Track Reconciliation (stage 02c)"
+
+    if [ "${RUN_GENOME_TRACK:-1}" != "1" ]; then
+        print_ok "RUN_GENOME_TRACK=${RUN_GENOME_TRACK:-1} (genome track off — transcriptome-only, no extra inputs needed)"
+        return
+    fi
+
+    # EvidentialGene nucleotide models (.mrna) — the NEW input stage 02c requires
+    # (type=mRNA, paired 1:1 with the .aa proteins); nothing else stages it.
+    print_check "BERGHIA_TRANSCRIPTOME_MRNA: ${BERGHIA_TRANSCRIPTOME_MRNA}"
+    if [ -f "${BERGHIA_TRANSCRIPTOME_MRNA}" ]; then
+        print_ok "Transcriptome nucleotide models present (.mrna)"
+    else
+        print_error "RUN_GENOME_TRACK=1 but nucleotide models not found: ${BERGHIA_TRANSCRIPTOME_MRNA}"
+        print_fix "Stage/symlink the EvidentialGene .mrna (lowercase) at ${TRANSCRIPTOME_DIR}/${BERGHIA_FILE_PREFIX}.mrna, or set RUN_GENOME_TRACK=0"
+    fi
+
+    # RefSeq proteins + GFF — the genome-track candidate source + coords.
+    if [ -f "${BERGHIA_GENOME_PROTEINS}" ]; then
+        print_ok "RefSeq proteins present: ${BERGHIA_GENOME_PROTEINS}"
+    else
+        print_error "RUN_GENOME_TRACK=1 but RefSeq proteins not found: ${BERGHIA_GENOME_PROTEINS}"
+        print_fix "Run scripts/fetch_berghia_genome.sh to stage the RefSeq proteins, or set RUN_GENOME_TRACK=0"
+    fi
+    if [ -f "${GENOME_GFF}" ]; then
+        print_ok "RefSeq GFF present: ${GENOME_GFF}"
+    else
+        print_error "RUN_GENOME_TRACK=1 but RefSeq GFF not found (needed for RefSeq gene coords/loci): ${GENOME_GFF}"
+        print_fix "Run scripts/fetch_berghia_genome.sh to stage the RefSeq GFF, or set RUN_GENOME_TRACK=0"
     fi
 }
 
@@ -660,6 +693,7 @@ validate_lse_taxonomy
 validate_reference_files
 validate_reference_structure
 validate_input_files
+validate_genome_track
 validate_local_databases
 validate_api_credentials
 validate_tools

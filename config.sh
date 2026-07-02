@@ -66,6 +66,18 @@ export FASTTREE="FastTree"
 export TRIMAL="trimal"
 export FASTML="fastml"
 export MINIMAP2="minimap2"
+export MINIPROT="${MINIPROT:-miniprot}"
+export GMAP="${GMAP:-gmap}"
+export GMAP_BUILD="${GMAP_BUILD:-gmap_build}"
+export GFFCOMPARE="${GFFCOMPARE:-gffcompare}"
+export BEDTOOLS="${BEDTOOLS:-bedtools}"
+export BLASTP="${BLASTP:-blastp}"
+export MAKEBLASTDB="${MAKEBLASTDB:-makeblastdb}"
+# Berghia RefSeq proteins + de novo transcript nucleotide models (genome-track inputs).
+# Built from BERGHIA_FILE_PREFIX (not hardcoded) to stay consistent with every other
+# Berghia path above (GENOME, GENOME_PROTEIN, TRANSCRIPTOME, ...).
+export BERGHIA_GENOME_PROTEINS="${BERGHIA_GENOME_PROTEINS:-${GENOME_DIR}/${BERGHIA_FILE_PREFIX}.proteins.fa}"
+export BERGHIA_TRANSCRIPTOME_MRNA="${BERGHIA_TRANSCRIPTOME_MRNA:-${TRANSCRIPTOME_DIR}/${BERGHIA_FILE_PREFIX}.mrna}"
 export SAMTOOLS="samtools"
 export MCSCANX="MCScanX"
 # Bead -e59: JCVI MCscan (Tang et al. 2024) entry point. Invoked as a Python
@@ -164,6 +176,18 @@ export ASR_BACKEND="${ASR_BACKEND:-iqtree}"
 export SYNTENY_BACKEND="${SYNTENY_BACKEND:-jcvi}"
 # Bead -6nh: TM predictor primary
 export TM_PREDICTOR_PRIMARY="${TM_PREDICTOR_PRIMARY:-tmbed}"
+# Genome track: identify candidates on the Berghia RefSeq proteins and reconcile
+# with the transcriptome candidates (stage 02c). 0 = transcriptome-only (legacy).
+export RUN_GENOME_TRACK="${RUN_GENOME_TRACK:-1}"
+# Genome-track %match gate (stage 02c reconcile_candidates.py). These are the
+# design-§4 WORKING HYPOTHESIS: a transcript is aligned to its OWN species'
+# genome, so a true same-gene match is near-identical — the accept bar sits
+# below the true-same-gene floor but above the paralog-family %id ceiling.
+# To be FINALIZED by scripts/calibrate_reconcile_thresholds.py on the Berghia
+# BUSCO single-copy set (run `--dry-run` for a worked example of the method).
+export GENOME_TRACK_MIN_ID="${GENOME_TRACK_MIN_ID:-95}"       # min transcript->genome %identity
+export GENOME_TRACK_MIN_COV="${GENOME_TRACK_MIN_COV:-90}"     # min transcript->genome %coverage
+export GENOME_TRACK_MIN_MARGIN="${GENOME_TRACK_MIN_MARGIN:-2}"  # min best-vs-second %id margin across distinct loci
 
 # --- Local overrides (gitignored) ---
 # Allow per-machine config (real SLURM_EMAIL, custom paths, etc.) without

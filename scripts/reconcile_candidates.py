@@ -1,0 +1,1299 @@
+#!/usr/bin/env python3
+"""reconcile_candidates.py — genome-track candidate reconciliation.
+
+Merges the genome-derived (Berghia RefSeq protein) chemoreceptor
+candidate track with the transcriptome-derived track into one
+non-redundant, genome-anchored, provenance-labeled gene set.
+
+The module implements the reconciliation pipeline end to end:
+
+    parse placements -> %match gate -> group loci / collapse isoforms
+    -> pick representatives + provenance + QC flags
+    -> placement cascade -> reconcile
+
+concretely: the ``Placement`` model + four aligner-output parsers
+(minimap2 PAF, GMAP GFF3, miniprot GFF3, BLASTp outfmt6+qcovs) and the
+absolute id+coverage gate ``pass_gate``; ``group_into_loci``
+(``PlacedModel``, ``Locus``) for same-strand overlap grouping + isoform
+collapse; representative selection (``pick_representative``), provenance
+labeling, and ``qc_flags``; and the placement cascade (``concordant`` /
+``place_transcript``), whose §4 best-vs-second-best margin gate is
+``_confident_placement`` (measured across distinct loci), feeding the
+top-level ``reconcile`` that emits one ``ReconciledGene`` per gene.
+``best_and_margin`` is a Task-1 best-vs-second helper retained for the API
+but not used by the cascade. The output writers (``write_tsv`` /
+``write_faa`` / ``write_report``) and the ``main`` argparse CLI that wires
+input files through ``reconcile`` into those writers close out the module.
+
+All functions here are stdlib-only with no network access. The one
+optional subprocess is ``group_into_loci``'s ``bedtools merge`` fast
+path, used only when the binary is available and always backed by an
+equivalent pure-Python interval sweep (so the tests need no binary).
+
+Design spec: docs/plans/2026-06-30-berghia-genome-track-reconciliation-design.md
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import shutil
+import subprocess
+import sys
+from collections import defaultdict, namedtuple
+from dataclasses import dataclass, fields
+
+# miniprot's native GFF3 mRNA row has no coverage-equivalent attribute
+# (the `Target=<id> <start> <end>` range alone doesn't reveal the full
+# query protein length, so %coverage isn't derivable from that row
+# alone). When no coverage attribute is present at all, pct_coverage
+# falls back to this sentinel. It is deliberately below any realistic
+# min_cov gate value, so a miniprot placement without corroborating
+# coverage information conservatively fails pass_gate() and the
+# placement cascade (Task 4) falls through to the next method rather
+# than trusting an unverified placement.
+MINIPROT_COVERAGE_SENTINEL = 0.0
+
+
+@dataclass(frozen=True)
+class Placement:
+    """A single candidate-to-genome placement from one aligner.
+
+    Frozen (immutable + hashable): a Placement is a value record, never
+    mutated after construction, and Task 2's locus dedup needs it
+    hashable — matching the repo's value-record convention.
+
+    ``score`` is parsed/collected by all four parsers (minimap2 mapq / GMAP
+    matches / miniprot score / BLASTp bitscore) but is currently unused by
+    any ranking or output — retained for debugging and possible future use.
+    """
+    query: str
+    chrom: str
+    start: int
+    end: int
+    strand: str
+    pct_identity: float
+    pct_coverage: float
+    method: str
+    score: float
+
+
+# ---- shared helpers --------------------------------------------------------
+
+def _parse_gff_attributes(field: str) -> dict[str, str]:
+    """Parse a GFF3 column-9 attribute string ("key=value;key=value")
+    into a dict. Tokens without '=' are ignored rather than raising."""
+    attrs: dict[str, str] = {}
+    for tok in field.split(";"):
+        tok = tok.strip()
+        if not tok or "=" not in tok:
+            continue
+        key, _, value = tok.partition("=")
+        attrs[key.strip()] = value.strip()
+    return attrs
+
+
+def _attr(attrs: dict[str, str], *names: str) -> str | None:
+    """Look up the first present key among `names` (case-sensitive
+    first, then a case-insensitive fallback pass), to tolerate minor
+    capitalization drift across tool versions without guessing at
+    unrelated synonyms."""
+    for name in names:
+        if name in attrs:
+            return attrs[name]
+    lowered = {k.lower(): v for k, v in attrs.items()}
+    for name in names:
+        if name.lower() in lowered:
+            return lowered[name.lower()]
+    return None
+
+
+# ---- parse_minimap2_paf -----------------------------------------------------
+
+def parse_minimap2_paf(path: str) -> list[Placement]:
+    """Parse minimap2 PAF output into Placements.
+
+    Column layout (0-based indices): qname[0] qlen[1] qstart[2] qend[3]
+    strand[4] tname[5] tlen[6] tstart[7] tend[8] nmatch[9] alen[10]
+    mapq[11] ...(optional SAM-like tags).
+
+    identity = 100 * nmatch / alen; coverage = 100 * (qend-qstart) / qlen.
+    """
+    if not os.path.exists(path):
+        return []
+
+    out: list[Placement] = []
+    with open(path) as fh:
+        for line in fh:
+            f = line.rstrip("\n").split("\t")
+            if len(f) < 12:
+                continue
+            try:
+                qlen, qs, qe = int(f[1]), int(f[2]), int(f[3])
+                tstart, tend = int(f[7]), int(f[8])
+                nmatch, alen = int(f[9]), int(f[10])
+                mapq = float(f[11])
+            except ValueError:
+                continue
+            pct_identity = 100.0 * nmatch / alen if alen else 0.0
+            pct_coverage = 100.0 * (qe - qs) / qlen if qlen else 0.0
+            out.append(Placement(query=f[0], chrom=f[5], start=tstart, end=tend,
+                                  strand=f[4], pct_identity=pct_identity,
+                                  pct_coverage=pct_coverage, method="minimap2",
+                                  score=mapq))
+    return out
+
+
+# ---- parse_gmap_gff ---------------------------------------------------------
+
+def parse_gmap_gff(path: str) -> list[Placement]:
+    """Parse GMAP GFF3 (gff3_gene format) output into Placements.
+
+    GMAP writes `coverage=` and `identity=` (both already percentages)
+    as attributes on the row that summarizes an alignment path — in
+    standard `gff3_gene` output that is the mRNA row; the parent gene
+    row does not carry them. Rather than special-case a feature-type
+    preference, this parser accepts either a `gene` or `mRNA` row and
+    only emits a Placement for rows that actually carry both
+    attributes — so gene summary rows (and exon/CDS detail rows) are
+    skipped naturally, without assuming a fixed row order.
+    """
+    if not os.path.exists(path):
+        return []
+
+    out: list[Placement] = []
+    with open(path) as fh:
+        for line in fh:
+            line = line.rstrip("\n")
+            if not line or line.startswith("#"):
+                continue
+            f = line.split("\t")
+            if len(f) < 9:
+                continue
+            feature = f[2]
+            if feature not in ("mRNA", "gene"):
+                continue
+            attrs = _parse_gff_attributes(f[8])
+            identity_s = _attr(attrs, "identity")
+            coverage_s = _attr(attrs, "coverage")
+            if identity_s is None or coverage_s is None:
+                continue
+            try:
+                start, end = int(f[3]), int(f[4])
+                pct_identity = float(identity_s)
+                pct_coverage = float(coverage_s)
+            except ValueError:
+                continue
+            # Fail closed on the join key: use the bare transcript id from
+            # Name= or Target=; never fall back to ID= (which is
+            # `<id>.pathN.mrnaN` — a silently-wrong key that would break
+            # Task 4 concordance). No usable id -> skip the row (the
+            # cascade then falls through to miniprot).
+            query = _attr(attrs, "Name") or _attr(attrs, "Target")
+            if query is None:
+                continue
+            query = query.split()[0]  # Target="<id> start end [strand]" -> id
+            score_s = _attr(attrs, "matches")
+            try:
+                score = float(score_s) if score_s is not None else 0.0
+            except ValueError:
+                score = 0.0
+            out.append(Placement(query=query, chrom=f[0], start=start, end=end,
+                                  strand=f[6], pct_identity=pct_identity,
+                                  pct_coverage=pct_coverage, method="gmap",
+                                  score=score))
+    return out
+
+
+# ---- parse_miniprot_gff ------------------------------------------------------
+
+def parse_miniprot_gff(path: str) -> list[Placement]:
+    """Parse miniprot GFF3 output into Placements.
+
+    miniprot emits `Identity=` (a 0-1 fraction, converted to percent
+    here) and `Target=<protein_id> <start> <end> [strand]` on its
+    mRNA row; column 6 carries a numeric alignment score. It has no
+    native coverage-equivalent attribute, so pct_coverage uses an
+    explicit `Coverage=`/`coverage=` attribute when present (not part
+    of stock miniprot output, but tolerated for forward-compat), else
+    the documented MINIPROT_COVERAGE_SENTINEL (see module docstring)
+    so unverified placements conservatively fail the %match gate.
+    """
+    if not os.path.exists(path):
+        return []
+
+    out: list[Placement] = []
+    with open(path) as fh:
+        for line in fh:
+            line = line.rstrip("\n")
+            if not line or line.startswith("#"):
+                continue
+            f = line.split("\t")
+            if len(f) < 9:
+                continue
+            if f[2] != "mRNA":
+                continue
+            attrs = _parse_gff_attributes(f[8])
+            identity_s = _attr(attrs, "Identity")
+            target = _attr(attrs, "Target")
+            if identity_s is None or not target:
+                continue
+            try:
+                start, end = int(f[3]), int(f[4])
+                pct_identity = 100.0 * float(identity_s)
+            except ValueError:
+                continue
+            query = target.split()[0]
+            coverage_s = _attr(attrs, "Coverage", "coverage")
+            try:
+                pct_coverage = (float(coverage_s) if coverage_s is not None
+                                 else MINIPROT_COVERAGE_SENTINEL)
+            except ValueError:
+                pct_coverage = MINIPROT_COVERAGE_SENTINEL
+            try:
+                score = float(f[5])
+            except ValueError:
+                score = 0.0
+            out.append(Placement(query=query, chrom=f[0], start=start, end=end,
+                                  strand=f[6], pct_identity=pct_identity,
+                                  pct_coverage=pct_coverage, method="miniprot",
+                                  score=score))
+    return out
+
+
+# ---- parse_blastp_tab --------------------------------------------------------
+
+def parse_blastp_tab(path: str, coords: dict[str, tuple[str, int, int, str]]
+                      ) -> list[Placement]:
+    """Parse BLASTp outfmt6 (+ qcovs) output into Placements.
+
+    Columns: qseqid sseqid pident length mismatch gapopen qstart qend
+    sstart send evalue bitscore qcovs (13 tab-separated fields).
+
+    `coords` maps a subject RefSeq protein id to its gene locus
+    `(chrom, start, end, strand)`. A subject id absent from `coords`
+    is skipped (conservative — no genomic coordinates to place at).
+
+    RBH CONTRACT: the input file MUST already be filtered to
+    reciprocal-best-hit (RBH) pairs. This module does NOT enforce
+    reciprocity — it labels every gate-passing hit ``rbh`` (design §3/§6
+    require reciprocal-best-hit) without re-checking it. Establishing
+    reciprocity is the stage's responsibility: run BLASTp in both
+    directions and keep only the pairs that are each other's best hit
+    before passing the file here.
+    """
+    if not os.path.exists(path):
+        return []
+
+    out: list[Placement] = []
+    with open(path) as fh:
+        for line in fh:
+            f = line.rstrip("\n").split("\t")
+            if len(f) < 13:
+                continue
+            qseqid, sseqid = f[0], f[1]
+            locus = coords.get(sseqid)
+            if locus is None:
+                continue
+            try:
+                pident = float(f[2])
+                bitscore = float(f[11])
+                qcovs = float(f[12])
+            except ValueError:
+                continue
+            chrom, start, end, strand = locus
+            out.append(Placement(query=qseqid, chrom=chrom, start=start, end=end,
+                                  strand=strand, pct_identity=pident,
+                                  pct_coverage=qcovs, method="blastp",
+                                  score=bitscore))
+    return out
+
+
+# ---- %match gate -------------------------------------------------------------
+
+def pass_gate(p: Placement | None, min_id: float, min_cov: float) -> bool:
+    """True iff `p` clears both the identity and coverage bars."""
+    return p is not None and p.pct_identity >= min_id and p.pct_coverage >= min_cov
+
+
+def best_and_margin(placements: list[Placement | None]
+                     ) -> tuple[Placement | None, float]:
+    """Return the best placement (by pct_identity) and its margin over
+    the runner-up. margin = inf when there is exactly one placement;
+    (None, 0.0) when there are none.
+
+    WARNING: this is a NAIVE per-placement best-vs-second margin over a raw
+    Placement list — it is NOT the §4 distinct-locus placement-gate margin.
+    That gate is ``_confident_placement`` (which first clusters placements
+    into distinct loci), and its margin is what the cascade and
+    ``ReconciledGene.best_vs_second_margin`` actually use. This helper does
+    NOT cluster by locus, so two placements of one transcript at the SAME
+    locus look like a spurious runner-up here. It is retained for the Task-1
+    API but is unused by the cascade — do not use it as the placement gate.
+    """
+    ps = sorted([p for p in placements if p], key=lambda p: p.pct_identity, reverse=True)
+    if not ps:
+        return None, 0.0
+    if len(ps) == 1:
+        return ps[0], float("inf")
+    return ps[0], ps[0].pct_identity - ps[1].pct_identity
+
+
+# ---- locus grouping + isoform collapse (Task 2) ------------------------------
+
+BEDTOOLS_DEFAULT = "bedtools"
+
+
+@dataclass(frozen=True)
+class PlacedModel:
+    """A candidate gene model positioned on the genome.
+
+    Distinct from ``Placement`` (which normalizes one aligner hit): a
+    ``PlacedModel`` is a candidate gene model with settled genomic
+    coordinates, tagged with the track it came from — ``source`` is a
+    free-form string whose downstream values are ``"genome"`` and
+    ``"txome"``. These are the units grouped into loci. Frozen +
+    hashable, matching the module's value-record convention; ``source``
+    must be carried through grouping unchanged (Task 3 reads it to
+    label provenance).
+
+    ``complete`` (True = complete ORF) and ``length`` (protein length in
+    aa) are the two axes Task 3's representative selection ranks on.
+    ``n_tm`` (predicted transmembrane-region count) is carried through to
+    the Task-4 output row. All three are appended with defaults so every
+    Task-2/3 construction (which omits them) stays valid and unchanged.
+    """
+    query: str
+    chrom: str
+    start: int
+    end: int
+    strand: str
+    source: str
+    complete: bool = False
+    length: int = 0
+    n_tm: int = 0
+
+
+@dataclass(frozen=True)
+class Locus:
+    """One locus (= gene): a same-chromosome, same-strand overlap cluster
+    of ``PlacedModel``s. ``start``/``end`` span ``min(member starts)`` /
+    ``max(member ends)``; ``members`` is the tuple of models in the locus,
+    sorted by ``query`` for deterministic output. A tuple (not a list)
+    keeps ``Locus`` genuinely immutable and hashable — matching the
+    ``Placement``/``PlacedModel`` value-record contract, so Tasks 3-4 can
+    use loci in sets/dicts.
+    """
+    chrom: str
+    start: int
+    end: int
+    strand: str
+    members: tuple[PlacedModel, ...]
+
+
+def group_into_loci(records: list[PlacedModel]) -> list[Locus]:
+    """Group placed candidate models into loci (= genes) by same-strand
+    genomic overlap, collapsing isoforms.
+
+    Two ``PlacedModel``s share a locus iff they are on the same
+    chromosome and strand and share >0 bases under half-open
+    ``[start, end)`` semantics (``a.start < b.end and b.start < a.end``).
+    Grouping is transitive (connected components), so a chain of pairwise
+    overlaps forms one locus, while book-ended intervals (touching at a
+    boundary, 0 shared bases) stay separate.
+
+    Uses ``bedtools merge`` when the binary named by ``$BEDTOOLS``
+    (default ``"bedtools"``) is on PATH, else an equivalent pure-Python
+    interval sweep; both paths return identical loci. Output is
+    deterministic: loci sorted by ``(chrom, start, strand)`` and each
+    locus's ``members`` sorted by ``query``.
+    """
+    if not records:
+        return []
+    binary = os.environ.get("BEDTOOLS", BEDTOOLS_DEFAULT)
+    if shutil.which(binary) is not None:
+        clusters = _clusters_via_bedtools(records, binary)
+    else:
+        clusters = _clusters_via_sweep(records)
+    loci = [_locus_from_members(members) for members in clusters]
+    loci.sort(key=lambda locus: (locus.chrom, locus.start, locus.strand))
+    return loci
+
+
+def _locus_from_members(members: list[PlacedModel]) -> Locus:
+    """Build a Locus from a non-empty cluster of same-chrom/same-strand
+    models: span ``min(start)``/``max(end)`` with members sorted by query.
+    chrom/strand are taken from the first member (uniform by construction).
+    """
+    return Locus(chrom=members[0].chrom,
+                 start=min(m.start for m in members),
+                 end=max(m.end for m in members),
+                 strand=members[0].strand,
+                 members=tuple(sorted(members, key=lambda m: m.query)))
+
+
+def _clusters_via_sweep(records: list[PlacedModel]) -> list[list[PlacedModel]]:
+    """Pure-Python clustering: within each ``(chrom, strand)`` group, sort
+    by start and sweep, folding in any model that overlaps the running
+    merged span (``model.start < cluster_end``). Half-open semantics — a
+    model whose start equals the cluster end (book-ended) opens a new
+    cluster. Equivalent to connected components of the overlap graph
+    because the swept span stays contiguous (each folded-in model starts
+    before the current right edge)."""
+    by_key: dict[tuple[str, str], list[PlacedModel]] = defaultdict(list)
+    for r in records:
+        by_key[(r.chrom, r.strand)].append(r)
+
+    clusters: list[list[PlacedModel]] = []
+    for key in by_key:
+        ordered = sorted(by_key[key], key=lambda r: (r.start, r.end))
+        cluster: list[PlacedModel] = []
+        cluster_end = 0
+        for r in ordered:
+            if cluster and r.start < cluster_end:
+                cluster.append(r)
+                cluster_end = max(cluster_end, r.end)
+            else:
+                if cluster:
+                    clusters.append(cluster)
+                cluster = [r]
+                cluster_end = r.end
+        if cluster:
+            clusters.append(cluster)
+    return clusters
+
+
+def _clusters_via_bedtools(records: list[PlacedModel], binary: str
+                            ) -> list[list[PlacedModel]]:
+    """bedtools clustering: emit each model as a 6-column BED row keyed by
+    its index (column 4), sorted by ``(chrom, start, end)``, and run
+    ``bedtools merge -s -d -1 -c 4 -o collapse``. ``-s`` merges within a
+    strand; ``-d -1`` requires >=1 bp of overlap so book-ended features
+    are NOT merged (bedtools' default ``-d 0`` would merge them, breaking
+    the gap guard); ``-c 4 -o collapse`` lists each merged interval's
+    member indices, which map back to the original records."""
+    indexed = sorted(enumerate(records),
+                     key=lambda t: (t[1].chrom, t[1].start, t[1].end))
+    bed = "".join(f"{r.chrom}\t{r.start}\t{r.end}\t{i}\t.\t{r.strand}\n"
+                  for i, r in indexed)
+    proc = subprocess.run(
+        [binary, "merge", "-s", "-d", "-1", "-c", "4", "-o", "collapse", "-i", "-"],
+        input=bed, capture_output=True, text=True, check=True)
+    return _clusters_from_merge_output(proc.stdout, records)
+
+
+def _clusters_from_merge_output(output: str, records: list[PlacedModel]
+                                 ) -> list[list[PlacedModel]]:
+    """Map ``bedtools merge -c 4 -o collapse`` output back to clusters.
+    The collapsed index list is the last tab field of each line (``-s``
+    may prepend a strand column, so read from the right); each non-blank
+    line becomes one cluster of the referenced records."""
+    clusters: list[list[PlacedModel]] = []
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        idx_field = line.split("\t")[-1]
+        clusters.append([records[int(x)] for x in idx_field.split(",")])
+    return clusters
+
+
+# ---- representative + provenance + QC flags (Task 3) -------------------------
+
+# Placeholder QC thresholds. These are NOT final scientific values — they
+# are CALIBRATED IN TASK 8 against the positive-control set and BUSCO
+# single-copy genes. They are surfaced as qc_flags() parameters so Task 8
+# can retune them without touching any call site; the defaults below only
+# make the function usable in isolation.
+LOW_MARGIN_THRESHOLD_DEFAULT = 2.0        # best-vs-second %identity margin (percentage points)
+SOURCE_DISAGREEMENT_FRAC_DEFAULT = 0.20   # >20% length divergence between source reps (design §5)
+
+
+def _representative(members) -> PlacedModel:
+    """Pick the representative model from a non-empty group of members.
+
+    Preference order (design §5): a complete ORF before a partial one
+    (so a complete SHORT model beats a partial LONG one); then greatest
+    protein ``length``; then the genome-anchored (RefSeq) model over a
+    transcriptome one; then the smallest ``query`` id for full
+    determinism. Expressed as the ``min`` under a composite key whose
+    every component sorts the preferred model first.
+    """
+    return min(members, key=lambda m: (not m.complete, -m.length,
+                                       m.source != "genome", m.query))
+
+
+def pick_representative(locus: Locus) -> PlacedModel:
+    """Representative ``PlacedModel`` for a locus (= gene). See
+    ``_representative`` for the preference order."""
+    return _representative(locus.members)
+
+
+def provenance(locus: Locus) -> str:
+    """Label a locus ``both`` / ``genome_only`` / ``transcriptome_only``
+    from the source tracks present among its members: ``both`` iff a
+    genome (RefSeq) model AND a transcriptome model share the locus; an
+    all-txome group (including the unplaced bucket) is
+    ``transcriptome_only``."""
+    sources = {m.source for m in locus.members}
+    if "genome" in sources and "txome" in sources:
+        return "both"
+    if "genome" in sources:
+        return "genome_only"
+    return "transcriptome_only"
+
+
+def _gene_interval(gene) -> tuple[str, int, int, str]:
+    """Normalize a RefSeq gene interval to ``(chrom, start, end, strand)``,
+    accepting either a 4-tuple or any object exposing
+    ``.chrom/.start/.end/.strand`` (e.g. a ``Locus`` or ``PlacedModel``)."""
+    if isinstance(gene, tuple):
+        return gene
+    return (gene.chrom, gene.start, gene.end, gene.strand)
+
+
+def _member_overlaps_gene(m: PlacedModel, gene: tuple[str, int, int, str]) -> bool:
+    """Same-chromosome, same-strand, half-open ``[start, end)`` overlap
+    (the Task-2 overlap contract) between a member and a gene interval."""
+    gchrom, gstart, gend, gstrand = gene
+    return (m.chrom == gchrom and m.strand == gstrand
+            and m.start < gend and gstart < m.end)
+
+
+def _is_chimeric(locus: Locus, refseq_genes) -> bool:
+    """True iff any single member overlaps >=2 DISTINCT RefSeq genes — the
+    fused-model failure mode. Gene intervals are de-duplicated (a set of
+    normalized tuples) so an identical interval listed twice can't fake a
+    chimera."""
+    genes = {_gene_interval(g) for g in refseq_genes}
+    for m in locus.members:
+        hits = sum(1 for gene in genes if _member_overlaps_gene(m, gene))
+        if hits >= 2:
+            return True
+    return False
+
+
+def _source_disagreement(locus: Locus, frac: float) -> bool:
+    """True iff the genome-side and txome-side representatives differ in
+    protein ``length`` by more than ``frac`` (relative to the longer of
+    the two). The caller only invokes this on ``both`` provenance, so each
+    side is non-empty; a defensive guard still returns False if either
+    side is missing or neither carries a length."""
+    genome = [m for m in locus.members if m.source == "genome"]
+    txome = [m for m in locus.members if m.source == "txome"]
+    if not genome or not txome:
+        return False
+    g_rep = _representative(genome)
+    t_rep = _representative(txome)
+    longer = max(g_rep.length, t_rep.length)
+    if longer <= 0:
+        return False    # no length information -> cannot judge disagreement
+    return abs(g_rep.length - t_rep.length) / longer > frac
+
+
+def qc_flags(locus: Locus, *, refseq_genes=None, margin: float | None = None,
+             low_margin_threshold: float = LOW_MARGIN_THRESHOLD_DEFAULT,
+             multi_mapping: bool = False,
+             source_disagreement_frac: float = SOURCE_DISAGREEMENT_FRAC_DEFAULT
+             ) -> tuple[str, ...]:
+    """Deterministic (sorted) tuple of QC flags for a locus.
+
+    Each flag isolates one failure mode; the caller supplies exactly the
+    context each needs (design §8):
+
+    * ``chimeric`` — a member overlaps >=2 distinct ``refseq_genes``
+      (a list of ``Locus`` / ``(chrom, start, end, strand)`` intervals);
+      skipped entirely when ``refseq_genes`` is None.
+    * ``partial_only`` — no member has a complete ORF.
+    * ``source_disagreement`` — a ``both`` locus whose genome-side and
+      txome-side representatives differ in length by more than
+      ``source_disagreement_frac``.
+    * ``low_margin`` — the SOFTER of the two-tier margin control (design §4):
+      the distinct-locus best-vs-second ``margin`` is below
+      ``low_margin_threshold``. The HARD tier (``min_margin``) is enforced
+      earlier by ``place_transcript`` — a placement below ``min_margin`` is
+      rejected as ambiguous and never reaches here — so this flags a gene
+      that WAS placed (cleared ``min_margin``) but whose margin is still
+      thin. Ignored when ``margin`` is None (a single unambiguous placement,
+      or a RefSeq-native / unplaced gene with no margin). With the default
+      ``min_margin == low_margin_threshold`` it never fires on a placed gene.
+    * ``multi_mapping`` — caller-supplied: the transcript had >=2 distinct
+      gate-passing loci. This can be True even on a CONFIDENT placement (the
+      top locus beat the runner-up by >= ``min_margin``); it is passed in
+      because only Task 4's cascade knows the distinct-locus count.
+
+    ``low_margin_threshold`` (and the margin scale generally) is a
+    Task-8-calibrated placeholder — see the module-level constants.
+    """
+    flags: set[str] = set()
+    if refseq_genes is not None and _is_chimeric(locus, refseq_genes):
+        flags.add("chimeric")
+    if not any(m.complete for m in locus.members):
+        flags.add("partial_only")
+    if provenance(locus) == "both" and _source_disagreement(locus, source_disagreement_frac):
+        flags.add("source_disagreement")
+    if margin is not None and margin < low_margin_threshold:
+        flags.add("low_margin")
+    if multi_mapping:
+        flags.add("multi_mapping")
+    return tuple(sorted(flags))
+
+
+# ---- placement cascade + reconcile (Task 4) ---------------------------------
+
+@dataclass(frozen=True)
+class Candidate:
+    """A pre-placement transcriptome candidate: a transcript to be located
+    on the genome, with no coordinates yet. ``source`` is implicitly
+    ``"txome"`` (only transcriptome candidates go through the cascade;
+    RefSeq models arrive already placed as ``PlacedModel``s). ``complete``/
+    ``length``/``n_tm`` mirror ``PlacedModel``'s ranking/output axes and are
+    copied onto the built ``PlacedModel`` once a placement is found.
+    """
+    query: str
+    complete: bool = False
+    length: int = 0
+    n_tm: int = 0
+
+
+@dataclass(frozen=True)
+class Thresholds:
+    """The %match gate + margin cutoffs (design §4).
+
+    ``min_id``/``min_cov`` are the absolute pct_identity / pct_coverage bars
+    every placement must clear (``pass_gate``).
+
+    The best-vs-second-best margin is a TWO-TIER control, both measured
+    across DISTINCT LOCI (top-locus identity minus the runner-up distinct
+    locus's identity — never within a single locus):
+
+    * ``min_margin`` — the HARD gate (design §4): when a cascade step places
+      a transcript at >=2 distinct loci and the top locus does NOT beat the
+      runner-up by at least ``min_margin``, the placement is AMBIGUOUS and
+      the step yields nothing (the cascade falls through, and the transcript
+      is left unplaced if no method resolves it). A single distinct locus
+      has infinite margin and always clears this gate.
+    * ``low_margin_threshold`` — the softer ADVISORY tier: a transcript that
+      cleared ``min_margin`` but whose distinct-locus margin is still below
+      ``low_margin_threshold`` is *placed* and merely *flagged* ``low_margin``
+      (design §8). With the default ``min_margin == low_margin_threshold``
+      this never fires on a placed gene; Task 8 may raise
+      ``low_margin_threshold`` above ``min_margin`` to surface thin-but-kept
+      placements.
+
+    All four are Task-8-calibrated placeholders (mirroring the module-level
+    threshold constants); the defaults only make the type usable in
+    isolation.
+    """
+    min_id: float = 95.0
+    min_cov: float = 90.0
+    min_margin: float = 2.0
+    low_margin_threshold: float = 2.0
+
+
+# The cascade's per-transcript verdict. ``placement`` is the chosen
+# ``Placement`` (None when unplaced); ``method``/``confidence`` name the
+# cascade step that won; ``margin`` is the best-vs-second-best identity
+# margin measured across DISTINCT LOCI (inf for a single distinct locus,
+# None when unplaced) — the same value the §4 hard gate is applied to;
+# ``multi_mapping`` (>=2 distinct gate-passing loci) feeds qc_flags.
+PlacementResult = namedtuple(
+    "PlacementResult",
+    ["placement", "method", "confidence", "margin", "multi_mapping"])
+
+
+def _intervals_overlap(a, b) -> bool:
+    """Same-chromosome, same-strand, half-open ``[start, end)`` >0-base
+    overlap between two records exposing ``.chrom/.start/.end/.strand`` —
+    the Task-2 overlap contract, applied here to two ``Placement``s."""
+    return (a.chrom == b.chrom and a.strand == b.strand
+            and a.start < b.end and b.start < a.end)
+
+
+def concordant(mm: Placement, gmap: Placement, min_id: float, min_cov: float
+               ) -> Placement | None:
+    """The agreed placement from a minimap2 + GMAP pair, or None.
+
+    Two independent spliced aligners agreeing is the robust signal on
+    near-identical LSE paralogs (design §3). A pair is concordant only when
+    BOTH placements clear the %match gate AND their loci overlap (same
+    chrom/strand, >0 bases). The agreed placement is the higher-identity of
+    the two (ties -> the minimap2 side)."""
+    if not (pass_gate(mm, min_id, min_cov) and pass_gate(gmap, min_id, min_cov)):
+        return None
+    if not _intervals_overlap(mm, gmap):
+        return None
+    return mm if mm.pct_identity >= gmap.pct_identity else gmap
+
+
+def _concordant_placements(mm: list[Placement], gmap: list[Placement],
+                           min_id: float, min_cov: float) -> list[Placement]:
+    """Every distinct agreed placement over the minimap2 x GMAP
+    cross-product (order-preserving, de-duped on exact equality).
+
+    Note the agreed placement of a pair is the higher-identity side, so a
+    single minimap2 hit that agrees with several *higher-identity* GMAP hits
+    at ONE locus yields several DISTINCT agreed placements at that same
+    locus (each GMAP hit), not one — exact-equality de-dup does not collapse
+    them. That is harmless: the distinct-locus clustering in
+    ``_confident_placement`` folds those co-located placements back into a
+    single locus, so the §4 margin gate sees one locus (margin inf), never a
+    spurious within-locus runner-up."""
+    agreed: list[Placement] = []
+    for m in mm:
+        for g in gmap:
+            c = concordant(m, g, min_id, min_cov)
+            if c is not None and c not in agreed:
+                agreed.append(c)
+    return agreed
+
+
+def _cluster_placements(placements: list[Placement]) -> list[list[Placement]]:
+    """Cluster placements into DISTINCT genomic loci: same chrom+strand and
+    >0-base overlap (Task-2 half-open contract) fold into one locus. Used
+    both to count loci (``multi_mapping`` = >=2) and to compute the
+    distinct-locus margin the §4 gate is applied to.
+
+    Delegates to the Task-2 ``_clusters_via_sweep``, which clusters on the
+    ``.chrom/.strand/.start/.end`` fields ``Placement`` also exposes — one
+    clustering implementation shared by both tracks (the placement-typed name
+    is kept as the cascade's entry point)."""
+    return _clusters_via_sweep(placements)
+
+
+def _identity_rank(p: Placement) -> tuple:
+    """Deterministic ordering key: highest pct_identity first, then a stable
+    coordinate/method tiebreak so ties never depend on input order."""
+    return (-p.pct_identity, p.chrom, p.start, p.end, p.strand, p.method)
+
+
+def _confident_placement(candidates: list[Placement], method: str,
+                         confidence: str, min_margin: float
+                         ) -> PlacementResult | None:
+    """Turn one cascade step's gate-passing placements into a CONFIDENT
+    PlacementResult, or None when the step cannot confidently place.
+
+    Placements are clustered into distinct loci (``_cluster_placements``);
+    each locus is represented by its highest-identity placement. The step's
+    ``placement`` is the top locus's best placement and ``margin`` is the
+    top-vs-second-best DISTINCT-LOCUS identity margin (inf for a single
+    locus). The step is confident only when a gate-passing best exists AND
+    (there is a single distinct locus OR the margin clears ``min_margin``,
+    the §4 hard gate). Otherwise — no candidates, or >=2 distinct loci whose
+    margin is below ``min_margin`` (ambiguous) — it returns None so the
+    caller falls through to the next method."""
+    if not candidates:
+        return None
+    clusters = _cluster_placements(candidates)
+    ranked = sorted((min(c, key=_identity_rank) for c in clusters),
+                    key=_identity_rank)
+    best = ranked[0]
+    margin = (float("inf") if len(ranked) == 1
+              else ranked[0].pct_identity - ranked[1].pct_identity)
+    multi = len(ranked) >= 2
+    if multi and margin < min_margin:
+        return None
+    return PlacementResult(placement=best, method=method, confidence=confidence,
+                           margin=margin, multi_mapping=multi)
+
+
+def place_transcript(query: str, mm: list[Placement], gmap: list[Placement],
+                     miniprot: list[Placement], rbh: list[Placement],
+                     thresholds: Thresholds) -> PlacementResult:
+    """Run the placement cascade for one transcript (design §3), stopping at
+    the first step that places it CONFIDENTLY:
+
+      1. concordant minimap2 + GMAP  -> confidence "high"
+      2. gate-passing miniprot       -> confidence "medium"
+      3. gate-passing RBH (BLASTp)   -> confidence "low"
+      4. none of the above           -> unplaced (never dropped)
+
+    A step is confident only when it clears the %match gate AND the §4
+    distinct-locus margin gate (``_confident_placement``): if a step places
+    the transcript at >=2 distinct loci whose top-vs-second identity margin
+    is below ``thresholds.min_margin``, the placement is AMBIGUOUS and the
+    cascade falls through to the next method rather than committing to an
+    arbitrary locus. If every method is empty or ambiguous the transcript is
+    unplaced (retained, never dropped).
+
+    ``query`` names the transcript being placed — the four lists are its
+    per-method hits; coordinates come from the ``Placement`` objects, so the
+    body does not otherwise consult ``query`` (it keeps the call site
+    self-documenting and the API stable for the reconcile step)."""
+    t = thresholds
+    agreed = _concordant_placements(mm, gmap, t.min_id, t.min_cov)
+    res = _confident_placement(agreed, "minimap2+gmap_concordant", "high", t.min_margin)
+    if res is not None:
+        return res
+    mp = [p for p in miniprot if pass_gate(p, t.min_id, t.min_cov)]
+    res = _confident_placement(mp, "miniprot", "medium", t.min_margin)
+    if res is not None:
+        return res
+    rb = [p for p in rbh if pass_gate(p, t.min_id, t.min_cov)]
+    res = _confident_placement(rb, "rbh", "low", t.min_margin)
+    if res is not None:
+        return res
+    return PlacementResult(placement=None, method="unplaced", confidence="none",
+                           margin=None, multi_mapping=False)
+
+
+@dataclass(frozen=True)
+class ReconciledGene:
+    """One reconciled gene = one output row (design §8). ``gene_id`` is the
+    ``genome_locus`` string (``chrom:start-end:strand``) for placed genes and
+    ``unplaced:<representative_id>`` for unplaced ones. ``pct_identity``/
+    ``pct_coverage``/``best_vs_second_margin`` are None when there is no
+    txome placement to describe (a ``genome_only`` RefSeq-native locus, or an
+    unplaced candidate). ``transcriptome_isoform_ids``/``genome_isoform_ids``
+    are the per-source member queries (sorted)."""
+    gene_id: str
+    representative_id: str
+    representative_source: str
+    provenance: str
+    genome_locus: str
+    placement_method: str
+    placement_confidence: str
+    pct_identity: float | None
+    pct_coverage: float | None
+    best_vs_second_margin: float | None
+    transcriptome_isoform_ids: tuple[str, ...]
+    genome_isoform_ids: tuple[str, ...]
+    n_tm: int
+    completeness: str
+    qc_flags: tuple[str, ...]
+
+
+def _reconciled_gene_for_locus(locus: Locus,
+                               result_by_query: dict[str, PlacementResult],
+                               refseq_loci, thresholds: Thresholds
+                               ) -> ReconciledGene:
+    """Build the ReconciledGene for one grouped locus (>=1 member, guaranteed
+    by ``group_into_loci``). The placement_* fields describe how the txome
+    evidence reached this locus (the txome-side representative's cascade
+    result); a ``genome_only`` locus has no txome side, so it is reported as
+    a native RefSeq gene."""
+    rep = pick_representative(locus)
+    txome_members = [m for m in locus.members if m.source == "txome"]
+    if txome_members:
+        res = result_by_query[_representative(txome_members).query]
+        method, confidence = res.method, res.confidence
+        pct_id, pct_cov = res.placement.pct_identity, res.placement.pct_coverage
+        margin, multi = res.margin, res.multi_mapping
+    else:
+        method, confidence = "refseq_native", "high"
+        pct_id = pct_cov = margin = None
+        multi = False
+    genome_locus = f"{locus.chrom}:{locus.start}-{locus.end}:{locus.strand}"
+    return ReconciledGene(
+        gene_id=genome_locus,
+        representative_id=rep.query,
+        representative_source=rep.source,
+        provenance=provenance(locus),
+        genome_locus=genome_locus,
+        placement_method=method,
+        placement_confidence=confidence,
+        pct_identity=pct_id,
+        pct_coverage=pct_cov,
+        best_vs_second_margin=margin,
+        transcriptome_isoform_ids=tuple(sorted(m.query for m in txome_members)),
+        genome_isoform_ids=tuple(sorted(m.query for m in locus.members
+                                        if m.source == "genome")),
+        n_tm=rep.n_tm,
+        completeness="complete" if rep.complete else "partial",
+        qc_flags=qc_flags(locus, refseq_genes=refseq_loci, margin=margin,
+                          low_margin_threshold=thresholds.low_margin_threshold,
+                          multi_mapping=multi))
+
+
+def _reconciled_gene_unplaced(c: Candidate) -> ReconciledGene:
+    """Build the ReconciledGene for a transcript no aligner could place. It
+    is never dropped: it becomes its own ``transcriptome_only`` gene flagged
+    ``unplaced`` (design §3)."""
+    flag_set = {"unplaced"}
+    if not c.complete:
+        flag_set.add("partial_only")
+    return ReconciledGene(
+        gene_id=f"unplaced:{c.query}",
+        representative_id=c.query,
+        representative_source="txome",
+        provenance="transcriptome_only",
+        genome_locus="unplaced",
+        placement_method="unplaced",
+        placement_confidence="none",
+        pct_identity=None,
+        pct_coverage=None,
+        best_vs_second_margin=None,
+        transcriptome_isoform_ids=(c.query,),
+        genome_isoform_ids=(),
+        n_tm=c.n_tm,
+        completeness="complete" if c.complete else "partial",
+        qc_flags=tuple(sorted(flag_set)))
+
+
+def reconcile(txome_candidates: list[Candidate],
+              refseq_candidates: list[PlacedModel],
+              placements: dict[str, dict[str, list[Placement]]],
+              refseq_loci, thresholds: Thresholds) -> list[ReconciledGene]:
+    """Merge the transcriptome and genome (RefSeq) chemoreceptor tracks into
+    one genome-anchored, provenance-labeled gene set (design §3-§5, §8).
+
+    * ``txome_candidates`` — transcriptome ``Candidate``s to place.
+    * ``refseq_candidates`` — RefSeq gene models, already placed
+      (``PlacedModel``, source ``"genome"``, native coords).
+    * ``placements`` — per-candidate aligner hits:
+      ``{query: {"minimap2": [...], "gmap": [...], "miniprot": [...],
+      "rbh": [...]}}``. A candidate absent from this map (or with only
+      sub-threshold hits) is unplaced.
+    * ``refseq_loci`` — RefSeq gene intervals (``Locus`` or
+      ``(chrom, start, end, strand)``) for the ``chimeric`` QC flag.
+
+    Each placed transcript is realized as a txome ``PlacedModel`` at its
+    placement's coordinates and grouped together with the RefSeq models into
+    loci (= genes; isoforms collapse, paralogs stay separate). Every locus
+    yields one ``ReconciledGene``; every unplaced transcript yields its own.
+    Output is sorted by ``gene_id`` for determinism."""
+    placed_models: list[PlacedModel] = []
+    result_by_query: dict[str, PlacementResult] = {}
+    unplaced: list[Candidate] = []
+    for c in txome_candidates:
+        bundle = placements.get(c.query, {})
+        res = place_transcript(c.query, bundle.get("minimap2", []),
+                               bundle.get("gmap", []), bundle.get("miniprot", []),
+                               bundle.get("rbh", []), thresholds)
+        if res.placement is None:
+            unplaced.append(c)
+            continue
+        p = res.placement
+        placed_models.append(PlacedModel(query=c.query, chrom=p.chrom,
+                                         start=p.start, end=p.end, strand=p.strand,
+                                         source="txome", complete=c.complete,
+                                         length=c.length, n_tm=c.n_tm))
+        result_by_query[c.query] = res
+
+    loci = group_into_loci(placed_models + list(refseq_candidates))
+    genes = [_reconciled_gene_for_locus(locus, result_by_query, refseq_loci,
+                                        thresholds) for locus in loci]
+    genes.extend(_reconciled_gene_unplaced(c) for c in unplaced)
+    genes.sort(key=lambda g: g.gene_id)
+    return genes
+
+
+# ---- output writers (Task 5) ------------------------------------------------
+
+# Tuple-valued ReconciledGene fields are serialized as ";"-joined lists;
+# the float-or-None fields use %g with a "" sentinel for None (and a
+# literal "inf" for a single-locus unambiguous placement).
+_TUPLE_FIELDS = ("transcriptome_isoform_ids", "genome_isoform_ids", "qc_flags")
+_FLOAT_FIELDS = ("pct_identity", "pct_coverage", "best_vs_second_margin")
+
+
+def _write_text(path: str, text: str) -> None:
+    """Write `text` verbatim with LF line endings, regardless of platform
+    (``newline="\\n"`` disables the default os.linesep translation)."""
+    with open(path, "w", newline="\n") as fh:
+        fh.write(text)
+
+
+def _fmt_tsv_value(name: str, value) -> str:
+    """Serialize one ReconciledGene field to its TSV cell (design §8).
+
+    tuple fields -> ";"-joined (empty tuple -> ""); pct_identity/
+    pct_coverage -> "" if None else %g; best_vs_second_margin -> "" if
+    None, "inf" for a single-locus unambiguous placement, else %g; n_tm ->
+    the integer; every other (str) field verbatim.
+    """
+    if name in _TUPLE_FIELDS:
+        return ";".join(value)
+    if name in _FLOAT_FIELDS:
+        if value is None:
+            return ""
+        if value == float("inf"):
+            return "inf"
+        return f"{value:g}"
+    if name == "n_tm":
+        return str(int(value))
+    return str(value)
+
+
+def write_tsv(genes: list[ReconciledGene], path: str) -> None:
+    """Write the reconciled gene set as a TSV (``reconciled_candidates.tsv``).
+
+    Header row = the ``ReconciledGene`` field names in §8 order (read off
+    the dataclass, so it can never drift from the schema); one row per gene
+    in the given order (``reconcile`` already sorts by ``gene_id``). LF line
+    endings; cells serialized by ``_fmt_tsv_value``.
+    """
+    names = [f.name for f in fields(ReconciledGene)]
+    lines = ["\t".join(names)]
+    for g in genes:
+        lines.append("\t".join(_fmt_tsv_value(n, getattr(g, n)) for n in names))
+    _write_text(path, "\n".join(lines) + "\n")
+
+
+def write_faa(genes: list[ReconciledGene], seqs: dict[str, str], path: str
+              ) -> list[str]:
+    """Write the representative protein FASTA (``reconciled_candidates.faa``).
+
+    ``seqs`` maps ``representative_id`` -> protein sequence. One record per
+    gene whose ``representative_id`` is present in ``seqs`` (header
+    ``>{representative_id}``, sequence on the next line); genes whose
+    representative is absent are skipped rather than raising. Records follow
+    the given gene order; an all-missing set writes an empty file.
+
+    Returns the list of representative ids that had NO sequence in ``seqs``
+    (in gene order). The ``.faa`` is the actual downstream input (stage 03
+    orthology -> 04 phylogeny), so a representative missing from
+    ``--proteins`` would otherwise vanish with no signal — most dangerous for
+    exactly the recovered/unplaced genes this feature exists to surface.
+    ``main`` warns on a non-empty return; supplying a complete ``--proteins``
+    is the stage's responsibility, so the omission is surfaced, not fatal.
+    """
+    lines: list[str] = []
+    skipped: list[str] = []
+    for g in genes:
+        seq = seqs.get(g.representative_id)
+        if seq is None:
+            skipped.append(g.representative_id)
+            continue
+        lines.append(f">{g.representative_id}")
+        lines.append(seq)
+    _write_text(path, "\n".join(lines) + "\n" if lines else "")
+    return skipped
+
+
+def write_report(genes: list[ReconciledGene], path: str) -> None:
+    """Write the human-readable Markdown reconciliation report
+    (``reconciliation_report.md``): a total, per-case provenance counts, QC
+    flag counts, and flagged review lists. Deterministic (preserves the
+    given gene order, which ``reconcile`` has already sorted by ``gene_id``).
+    """
+    total = len(genes)
+    both = sum(1 for g in genes if g.provenance == "both")
+    genome_only = sum(1 for g in genes if g.provenance == "genome_only")
+    tx_placed = sum(1 for g in genes if g.provenance == "transcriptome_only"
+                    and g.genome_locus != "unplaced")
+    tx_unplaced = sum(1 for g in genes if g.provenance == "transcriptome_only"
+                      and g.genome_locus == "unplaced")
+
+    flag_names = ("chimeric", "source_disagreement", "partial_only",
+                  "low_margin", "multi_mapping", "unplaced")
+    flag_counts = {f: sum(1 for g in genes if f in g.qc_flags) for f in flag_names}
+
+    chimeric_ids = [g.gene_id for g in genes if "chimeric" in g.qc_flags]
+    ambiguous_ids = [g.gene_id for g in genes
+                     if "low_margin" in g.qc_flags or "multi_mapping" in g.qc_flags]
+    disagreement_ids = [g.gene_id for g in genes
+                        if "source_disagreement" in g.qc_flags]
+
+    lines: list[str] = ["# Genome-track reconciliation report", ""]
+    lines.append(f"Total reconciled genes: {total}")
+    lines += ["", "## Provenance",
+              f"- both (shared): {both}",
+              f"- genome_only (recovered): {genome_only}",
+              f"- transcriptome_only, placed: {tx_placed}",
+              f"- transcriptome_only, unplaced: {tx_unplaced}",
+              "", "## QC flags"]
+    lines += [f"- {f}: {flag_counts[f]}" for f in flag_names]
+    lines += ["", "## Review lists", ""]
+    for title, ids in (("chimeric", chimeric_ids),
+                       ("ambiguous (low_margin or multi_mapping)", ambiguous_ids),
+                       ("source_disagreement", disagreement_ids)):
+        lines.append(f"### {title} ({len(ids)})")
+        lines += [f"- {gid}" for gid in ids]
+        lines.append("")
+    _write_text(path, "\n".join(lines) + "\n")
+
+
+# ---- CLI (Task 5) -----------------------------------------------------------
+
+def _read_tsv_rows(path: str):
+    """Yield tab-split field lists from a TSV, skipping blank and
+    ``#``-commented lines (so a ``#``-prefixed header is tolerated).
+    ``rstrip("\\r\\n")`` keeps the parser CRLF-safe (an unstripped ``\\r``
+    would otherwise ride the last field into ``int()`` or a strand)."""
+    with open(path) as fh:
+        for line in fh:
+            line = line.rstrip("\r\n")
+            if not line or line.startswith("#"):
+                continue
+            yield line.split("\t")
+
+
+def _parse_bool(token: str) -> bool:
+    """Parse a completeness flag cell. True for the common truthy encodings
+    (case-insensitive); anything else (incl. "partial", "0", "") is False."""
+    return token.strip().lower() in ("1", "true", "t", "yes", "y", "complete")
+
+
+def _read_candidates(path: str) -> list[Candidate]:
+    """Read ``--txome-candidates`` (``query, complete, length, n_tm``).
+
+    A wrong-arity row RAISES (never silently skipped) — dropping a
+    candidate row would violate the pipeline's "never drop a candidate"
+    contract: it would vanish entirely rather than surface as ``unplaced``.
+    Numeric conversions likewise raise, so both malformation modes fail
+    loud and consistently. Extra trailing fields are tolerated.
+    """
+    out: list[Candidate] = []
+    for row in _read_tsv_rows(path):
+        if len(row) < 4:
+            raise ValueError(
+                f"{path}: expected >= 4 fields, got {len(row)}: {row!r}")
+        out.append(Candidate(query=row[0], complete=_parse_bool(row[1]),
+                             length=int(row[2]), n_tm=int(row[3])))
+    return out
+
+
+def _read_refseq_models(path: str) -> list[PlacedModel]:
+    """Read ``--refseq-models`` (``query, chrom, start, end, strand, complete,
+    length, n_tm``) as source-``"genome"`` PlacedModels. A wrong-arity row
+    RAISES (fail loud, consistent with the numeric conversions); extra
+    trailing fields are tolerated."""
+    out: list[PlacedModel] = []
+    for row in _read_tsv_rows(path):
+        if len(row) < 8:
+            raise ValueError(
+                f"{path}: expected >= 8 fields, got {len(row)}: {row!r}")
+        out.append(PlacedModel(query=row[0], chrom=row[1], start=int(row[2]),
+                              end=int(row[3]), strand=row[4], source="genome",
+                              complete=_parse_bool(row[5]), length=int(row[6]),
+                              n_tm=int(row[7])))
+    return out
+
+
+def _read_loci(path: str) -> list[tuple[str, int, int, str]]:
+    """Read ``--refseq-loci`` (4-column tab-separated
+    ``chrom<TAB>start<TAB>end<TAB>strand``) gene intervals for the
+    ``chimeric`` QC flag. A wrong-arity row RAISES (fail loud): silently
+    dropping a short row would empty ``refseq_loci`` and the ``chimeric``
+    flag would never be raised. Extra trailing fields are tolerated."""
+    out: list[tuple[str, int, int, str]] = []
+    for row in _read_tsv_rows(path):
+        if len(row) < 4:
+            raise ValueError(
+                f"{path}: expected >= 4 fields, got {len(row)}: {row!r}")
+        out.append((row[0], int(row[1]), int(row[2]), row[3]))
+    return out
+
+
+def _read_fasta(path: str) -> dict[str, str]:
+    """Minimal stdlib FASTA reader -> ``{first-token-of-header: sequence}``,
+    the ``seqs`` map ``write_faa`` consumes (keyed by representative id)."""
+    seqs: dict[str, str] = {}
+    name: str | None = None
+    chunks: list[str] = []
+    with open(path) as fh:
+        for line in fh:
+            line = line.rstrip("\n")
+            if line.startswith(">"):
+                if name is not None:
+                    seqs[name] = "".join(chunks)
+                header = line[1:].strip()
+                name = header.split()[0] if header else header
+                chunks = []
+            elif name is not None:
+                chunks.append(line.strip())
+    if name is not None:
+        seqs[name] = "".join(chunks)
+    return seqs
+
+
+def _group_placements(*method_groups) -> dict[str, dict[str, list[Placement]]]:
+    """Bucket parsed Placements into the per-query ``{query: {method: [...]}}``
+    map ``reconcile`` expects. Each argument is a ``(bundle_key, placements)``
+    pair; note the BLASTp parser's ``method="blastp"`` hits are bucketed under
+    the cascade's ``"rbh"`` key (the caller supplies the mapping)."""
+    placements: dict[str, dict[str, list[Placement]]] = {}
+    for key, plist in method_groups:
+        for p in plist:
+            placements.setdefault(p.query, {}).setdefault(key, []).append(p)
+    return placements
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="reconcile_candidates.py",
+        description="Reconcile the genome (RefSeq) and transcriptome "
+                    "chemoreceptor candidate tracks into one genome-anchored, "
+                    "provenance-labeled gene set.")
+    # Placement inputs — each optional; an absent method contributes no hits.
+    p.add_argument("--minimap2-paf", help="minimap2 PAF (spliced) placements")
+    p.add_argument("--gmap-gff", help="GMAP gff3_gene placements")
+    p.add_argument("--miniprot-gff", help="miniprot GFF3 placements")
+    p.add_argument("--blastp-tab",
+                   help="BLASTp outfmt6+qcovs placements. The file MUST "
+                        "already be filtered to reciprocal-best-hit (RBH) "
+                        "pairs: reciprocity is the stage's responsibility (run "
+                        "BLASTp both directions, keep only reciprocal bests). "
+                        "This module labels every gate-passing hit 'rbh' "
+                        "without re-checking reciprocity.")
+    # Candidate / gene-model inputs.
+    p.add_argument("--txome-candidates", required=True,
+                   help="TSV: query, complete, length, n_tm")
+    p.add_argument("--refseq-models",
+                   help="TSV: query, chrom, start, end, strand, complete, "
+                        "length, n_tm (source genome)")
+    p.add_argument("--refseq-loci",
+                   help="4-column tab-separated file "
+                        "(chrom<TAB>start<TAB>end<TAB>strand) of RefSeq gene "
+                        "intervals, for the chimeric flag")
+    p.add_argument("--proteins",
+                   help="FASTA of representative protein sequences (for the .faa)")
+    # Thresholds (defaults from Thresholds()).
+    defaults = Thresholds()
+    p.add_argument("--min-id", type=float, default=defaults.min_id)
+    p.add_argument("--min-cov", type=float, default=defaults.min_cov)
+    p.add_argument("--min-margin", type=float, default=defaults.min_margin)
+    p.add_argument("--low-margin-threshold", type=float,
+                   default=defaults.low_margin_threshold)
+    p.add_argument("--out-dir", required=True,
+                   help="output directory for the .tsv / .faa / report.md")
+    return p
+
+
+def main(argv=None) -> int:
+    """CLI: wire input files through ``reconcile`` into the three writers.
+
+    Parses the placement files (each optional), the txome candidates, the
+    RefSeq models + intervals, builds the ``coords`` map (RefSeq protein ->
+    its gene locus, for the BLASTp parser) and the per-query ``placements``
+    bundle, runs ``reconcile``, and writes ``reconciled_candidates.tsv`` /
+    ``reconciled_candidates.faa`` / ``reconciliation_report.md`` under
+    ``--out-dir``. A thin orchestrator; the parsing/scoring lives above.
+    """
+    args = _build_arg_parser().parse_args(argv)
+    thresholds = Thresholds(min_id=args.min_id, min_cov=args.min_cov,
+                            min_margin=args.min_margin,
+                            low_margin_threshold=args.low_margin_threshold)
+
+    txome_candidates = _read_candidates(args.txome_candidates)
+    refseq_models = _read_refseq_models(args.refseq_models) if args.refseq_models else []
+    refseq_loci = _read_loci(args.refseq_loci) if args.refseq_loci else []
+    # coords: subject RefSeq protein id -> its gene locus, for parse_blastp_tab.
+    coords = {m.query: (m.chrom, m.start, m.end, m.strand) for m in refseq_models}
+
+    mm = parse_minimap2_paf(args.minimap2_paf) if args.minimap2_paf else []
+    gmap = parse_gmap_gff(args.gmap_gff) if args.gmap_gff else []
+    miniprot = parse_miniprot_gff(args.miniprot_gff) if args.miniprot_gff else []
+    rbh = parse_blastp_tab(args.blastp_tab, coords) if args.blastp_tab else []
+    placements = _group_placements(("minimap2", mm), ("gmap", gmap),
+                                   ("miniprot", miniprot), ("rbh", rbh))
+
+    genes = reconcile(txome_candidates, refseq_models, placements, refseq_loci,
+                      thresholds)
+    seqs = _read_fasta(args.proteins) if args.proteins else {}
+
+    os.makedirs(args.out_dir, exist_ok=True)
+    write_tsv(genes, os.path.join(args.out_dir, "reconciled_candidates.tsv"))
+    skipped = write_faa(genes, seqs,
+                        os.path.join(args.out_dir, "reconciled_candidates.faa"))
+    if skipped:
+        # Non-fatal, but loud: a representative absent from --proteins is
+        # omitted from the .faa (the stage-03/04 input). Never silent.
+        print(f"WARNING: {len(skipped)} representative(s) had no sequence in "
+              f"--proteins and were omitted from reconciled_candidates.faa: "
+              f"{', '.join(skipped)}", file=sys.stderr)
+    write_report(genes, os.path.join(args.out_dir, "reconciliation_report.md"))
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())
