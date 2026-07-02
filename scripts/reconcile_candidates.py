@@ -29,7 +29,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 from dataclasses import dataclass
 
 # miniprot's native GFF3 mRNA row has no coverage-equivalent attribute
@@ -325,9 +325,10 @@ class PlacedModel:
     label provenance).
 
     ``complete`` (True = complete ORF) and ``length`` (protein length in
-    aa) are the two axes Task 3's representative selection ranks on. Both
-    are appended with defaults so every Task-2 construction (which omits
-    them) stays valid and unchanged.
+    aa) are the two axes Task 3's representative selection ranks on.
+    ``n_tm`` (predicted transmembrane-region count) is carried through to
+    the Task-4 output row. All three are appended with defaults so every
+    Task-2/3 construction (which omits them) stays valid and unchanged.
     """
     query: str
     chrom: str
@@ -337,6 +338,7 @@ class PlacedModel:
     source: str
     complete: bool = False
     length: int = 0
+    n_tm: int = 0
 
 
 @dataclass(frozen=True)
@@ -594,3 +596,294 @@ def qc_flags(locus: Locus, *, refseq_genes=None, margin: float | None = None,
     if multi_mapping:
         flags.add("multi_mapping")
     return tuple(sorted(flags))
+
+
+# ---- placement cascade + reconcile (Task 4) ---------------------------------
+
+@dataclass(frozen=True)
+class Candidate:
+    """A pre-placement transcriptome candidate: a transcript to be located
+    on the genome, with no coordinates yet. ``source`` is implicitly
+    ``"txome"`` (only transcriptome candidates go through the cascade;
+    RefSeq models arrive already placed as ``PlacedModel``s). ``complete``/
+    ``length``/``n_tm`` mirror ``PlacedModel``'s ranking/output axes and are
+    copied onto the built ``PlacedModel`` once a placement is found.
+    """
+    query: str
+    complete: bool = False
+    length: int = 0
+    n_tm: int = 0
+
+
+@dataclass(frozen=True)
+class Thresholds:
+    """The %match gate + margin cutoffs (design §4).
+
+    ``min_id``/``min_cov`` are the absolute pct_identity / pct_coverage bars
+    every placement must clear (``pass_gate``). ``low_margin_threshold`` is
+    the best-vs-second %identity margin below which a placement is *flagged*
+    ``low_margin`` (a soft QC signal — a thin margin between near-identical
+    LSE paralogs must NOT drop a real placement, so the cascade gates on
+    id+cov only and surfaces the margin rather than hard-filtering on it).
+    ``min_margin`` is reserved for the design-§4 hard-margin option and is
+    not enforced by the current cascade.
+
+    All four are Task-8-calibrated placeholders (mirroring the module-level
+    threshold constants); the defaults only make the type usable in
+    isolation.
+    """
+    min_id: float = 95.0
+    min_cov: float = 90.0
+    min_margin: float = 2.0
+    low_margin_threshold: float = 2.0
+
+
+# The cascade's per-transcript verdict. ``placement`` is the chosen
+# ``Placement`` (None when unplaced); ``method``/``confidence`` name the
+# cascade step that won; ``margin`` (best-vs-second %identity over that
+# step's gate-passing placements) and ``multi_mapping`` (>=2 distinct
+# gate-passing loci) feed qc_flags downstream.
+PlacementResult = namedtuple(
+    "PlacementResult",
+    ["placement", "method", "confidence", "margin", "multi_mapping"])
+
+
+def _intervals_overlap(a, b) -> bool:
+    """Same-chromosome, same-strand, half-open ``[start, end)`` >0-base
+    overlap between two records exposing ``.chrom/.start/.end/.strand`` —
+    the Task-2 overlap contract, applied here to two ``Placement``s."""
+    return (a.chrom == b.chrom and a.strand == b.strand
+            and a.start < b.end and b.start < a.end)
+
+
+def concordant(mm: Placement, gmap: Placement, min_id: float, min_cov: float
+               ) -> Placement | None:
+    """The agreed placement from a minimap2 + GMAP pair, or None.
+
+    Two independent spliced aligners agreeing is the robust signal on
+    near-identical LSE paralogs (design §3). A pair is concordant only when
+    BOTH placements clear the %match gate AND their loci overlap (same
+    chrom/strand, >0 bases). The agreed placement is the higher-identity of
+    the two (ties -> the minimap2 side)."""
+    if not (pass_gate(mm, min_id, min_cov) and pass_gate(gmap, min_id, min_cov)):
+        return None
+    if not _intervals_overlap(mm, gmap):
+        return None
+    return mm if mm.pct_identity >= gmap.pct_identity else gmap
+
+
+def _concordant_placements(mm: list[Placement], gmap: list[Placement],
+                           min_id: float, min_cov: float) -> list[Placement]:
+    """Every distinct agreed placement over the minimap2 x GMAP
+    cross-product. De-duped (order-preserving) so a single minimap2 hit that
+    agrees with several GMAP hits at one locus contributes ONE agreed
+    placement, not a spurious cluster that would fake a low margin."""
+    agreed: list[Placement] = []
+    for m in mm:
+        for g in gmap:
+            c = concordant(m, g, min_id, min_cov)
+            if c is not None and c not in agreed:
+                agreed.append(c)
+    return agreed
+
+
+def _distinct_locus_count(placements: list[Placement]) -> int:
+    """Number of distinct genomic loci spanned by ``placements``: same
+    chrom+strand and >0-base overlap (Task-2 half-open contract) cluster
+    into one locus. >=2 distinct loci means the transcript mapped
+    ambiguously (the ``multi_mapping`` QC flag). Mirrors
+    ``_clusters_via_sweep`` but only counts, and works on ``Placement``s."""
+    by_key: dict[tuple[str, str], list[Placement]] = defaultdict(list)
+    for p in placements:
+        by_key[(p.chrom, p.strand)].append(p)
+    count = 0
+    for key in by_key:
+        cluster_end: int | None = None
+        for p in sorted(by_key[key], key=lambda p: (p.start, p.end)):
+            if cluster_end is not None and p.start < cluster_end:
+                cluster_end = max(cluster_end, p.end)
+            else:
+                count += 1
+                cluster_end = p.end
+    return count
+
+
+def _result_from(candidates: list[Placement], method: str, confidence: str
+                 ) -> PlacementResult:
+    """Assemble a PlacementResult from a non-empty list of confident,
+    gate-passing placements at one cascade step: best by pct_identity,
+    margin over the runner-up, and the multi-mapping determination."""
+    best, margin = best_and_margin(candidates)
+    return PlacementResult(placement=best, method=method, confidence=confidence,
+                           margin=margin,
+                           multi_mapping=_distinct_locus_count(candidates) >= 2)
+
+
+def place_transcript(query: str, mm: list[Placement], gmap: list[Placement],
+                     miniprot: list[Placement], rbh: list[Placement],
+                     thresholds: Thresholds) -> PlacementResult:
+    """Run the placement cascade for one transcript (design §3), stopping at
+    the first confident step:
+
+      1. concordant minimap2 + GMAP  -> confidence "high"
+      2. gate-passing miniprot       -> confidence "medium"
+      3. gate-passing RBH (BLASTp)   -> confidence "low"
+      4. none of the above           -> unplaced (never dropped)
+
+    ``query`` names the transcript being placed — the four lists are its
+    per-method hits; coordinates come from the ``Placement`` objects, so the
+    body does not otherwise consult ``query`` (it keeps the call site
+    self-documenting and the API stable for the reconcile step)."""
+    t = thresholds
+    agreed = _concordant_placements(mm, gmap, t.min_id, t.min_cov)
+    if agreed:
+        return _result_from(agreed, "minimap2+gmap_concordant", "high")
+    mp = [p for p in miniprot if pass_gate(p, t.min_id, t.min_cov)]
+    if mp:
+        return _result_from(mp, "miniprot", "medium")
+    rb = [p for p in rbh if pass_gate(p, t.min_id, t.min_cov)]
+    if rb:
+        return _result_from(rb, "rbh", "low")
+    return PlacementResult(placement=None, method="unplaced", confidence="none",
+                           margin=None, multi_mapping=False)
+
+
+@dataclass(frozen=True)
+class ReconciledGene:
+    """One reconciled gene = one output row (design §8). ``gene_id`` is the
+    ``genome_locus`` string (``chrom:start-end:strand``) for placed genes and
+    ``unplaced:<representative_id>`` for unplaced ones. ``pct_identity``/
+    ``pct_coverage``/``best_vs_second_margin`` are None when there is no
+    txome placement to describe (a ``genome_only`` RefSeq-native locus, or an
+    unplaced candidate). ``transcriptome_isoform_ids``/``genome_isoform_ids``
+    are the per-source member queries (sorted)."""
+    gene_id: str
+    representative_id: str
+    representative_source: str
+    provenance: str
+    genome_locus: str
+    placement_method: str
+    placement_confidence: str
+    pct_identity: float | None
+    pct_coverage: float | None
+    best_vs_second_margin: float | None
+    transcriptome_isoform_ids: tuple[str, ...]
+    genome_isoform_ids: tuple[str, ...]
+    n_tm: int
+    completeness: str
+    qc_flags: tuple[str, ...]
+
+
+def _reconciled_gene_for_locus(locus: Locus,
+                               result_by_query: dict[str, PlacementResult],
+                               refseq_loci, thresholds: Thresholds
+                               ) -> ReconciledGene:
+    """Build the ReconciledGene for one grouped locus (>=1 member, guaranteed
+    by ``group_into_loci``). The placement_* fields describe how the txome
+    evidence reached this locus (the txome-side representative's cascade
+    result); a ``genome_only`` locus has no txome side, so it is reported as
+    a native RefSeq gene."""
+    rep = pick_representative(locus)
+    txome_members = [m for m in locus.members if m.source == "txome"]
+    if txome_members:
+        res = result_by_query[_representative(txome_members).query]
+        method, confidence = res.method, res.confidence
+        pct_id, pct_cov = res.placement.pct_identity, res.placement.pct_coverage
+        margin, multi = res.margin, res.multi_mapping
+    else:
+        method, confidence = "refseq_native", "high"
+        pct_id = pct_cov = margin = None
+        multi = False
+    genome_locus = f"{locus.chrom}:{locus.start}-{locus.end}:{locus.strand}"
+    return ReconciledGene(
+        gene_id=genome_locus,
+        representative_id=rep.query,
+        representative_source=rep.source,
+        provenance=provenance(locus),
+        genome_locus=genome_locus,
+        placement_method=method,
+        placement_confidence=confidence,
+        pct_identity=pct_id,
+        pct_coverage=pct_cov,
+        best_vs_second_margin=margin,
+        transcriptome_isoform_ids=tuple(sorted(m.query for m in txome_members)),
+        genome_isoform_ids=tuple(sorted(m.query for m in locus.members
+                                        if m.source == "genome")),
+        n_tm=rep.n_tm,
+        completeness="complete" if rep.complete else "partial",
+        qc_flags=qc_flags(locus, refseq_genes=refseq_loci, margin=margin,
+                          low_margin_threshold=thresholds.low_margin_threshold,
+                          multi_mapping=multi))
+
+
+def _reconciled_gene_unplaced(c: Candidate) -> ReconciledGene:
+    """Build the ReconciledGene for a transcript no aligner could place. It
+    is never dropped: it becomes its own ``transcriptome_only`` gene flagged
+    ``unplaced`` (design §3)."""
+    flag_set = {"unplaced"}
+    if not c.complete:
+        flag_set.add("partial_only")
+    return ReconciledGene(
+        gene_id=f"unplaced:{c.query}",
+        representative_id=c.query,
+        representative_source="txome",
+        provenance="transcriptome_only",
+        genome_locus="unplaced",
+        placement_method="unplaced",
+        placement_confidence="none",
+        pct_identity=None,
+        pct_coverage=None,
+        best_vs_second_margin=None,
+        transcriptome_isoform_ids=(c.query,),
+        genome_isoform_ids=(),
+        n_tm=c.n_tm,
+        completeness="complete" if c.complete else "partial",
+        qc_flags=tuple(sorted(flag_set)))
+
+
+def reconcile(txome_candidates: list[Candidate],
+              refseq_candidates: list[PlacedModel],
+              placements: dict[str, dict[str, list[Placement]]],
+              refseq_loci, thresholds: Thresholds) -> list[ReconciledGene]:
+    """Merge the transcriptome and genome (RefSeq) chemoreceptor tracks into
+    one genome-anchored, provenance-labeled gene set (design §3-§5, §8).
+
+    * ``txome_candidates`` — transcriptome ``Candidate``s to place.
+    * ``refseq_candidates`` — RefSeq gene models, already placed
+      (``PlacedModel``, source ``"genome"``, native coords).
+    * ``placements`` — per-candidate aligner hits:
+      ``{query: {"minimap2": [...], "gmap": [...], "miniprot": [...],
+      "rbh": [...]}}``. A candidate absent from this map (or with only
+      sub-threshold hits) is unplaced.
+    * ``refseq_loci`` — RefSeq gene intervals (``Locus`` or
+      ``(chrom, start, end, strand)``) for the ``chimeric`` QC flag.
+
+    Each placed transcript is realized as a txome ``PlacedModel`` at its
+    placement's coordinates and grouped together with the RefSeq models into
+    loci (= genes; isoforms collapse, paralogs stay separate). Every locus
+    yields one ``ReconciledGene``; every unplaced transcript yields its own.
+    Output is sorted by ``gene_id`` for determinism."""
+    placed_models: list[PlacedModel] = []
+    result_by_query: dict[str, PlacementResult] = {}
+    unplaced: list[Candidate] = []
+    for c in txome_candidates:
+        bundle = placements.get(c.query, {})
+        res = place_transcript(c.query, bundle.get("minimap2", []),
+                               bundle.get("gmap", []), bundle.get("miniprot", []),
+                               bundle.get("rbh", []), thresholds)
+        if res.placement is None:
+            unplaced.append(c)
+            continue
+        p = res.placement
+        placed_models.append(PlacedModel(query=c.query, chrom=p.chrom,
+                                         start=p.start, end=p.end, strand=p.strand,
+                                         source="txome", complete=c.complete,
+                                         length=c.length, n_tm=c.n_tm))
+        result_by_query[c.query] = res
+
+    loci = group_into_loci(placed_models + list(refseq_candidates))
+    genes = [_reconciled_gene_for_locus(locus, result_by_query, refseq_loci,
+                                        thresholds) for locus in loci]
+    genes.extend(_reconciled_gene_unplaced(c) for c in unplaced)
+    genes.sort(key=lambda g: g.gene_id)
+    return genes
