@@ -13,13 +13,16 @@ The module implements the reconciliation pipeline end to end:
 
 concretely: the ``Placement`` model + four aligner-output parsers
 (minimap2 PAF, GMAP GFF3, miniprot GFF3, BLASTp outfmt6+qcovs) and the
-absolute + best-vs-second-margin gate functions (``pass_gate`` /
-``best_and_margin``); ``group_into_loci`` (``PlacedModel``, ``Locus``)
-for same-strand overlap grouping + isoform collapse; representative
-selection (``pick_representative``), provenance labeling, and ``qc_flags``;
-and the placement cascade (``concordant`` / ``place_transcript``) feeding
-the top-level ``reconcile`` that emits one ``ReconciledGene`` per gene.
-The output writers are added in a later task against this same module.
+absolute id+coverage gate ``pass_gate``; ``group_into_loci``
+(``PlacedModel``, ``Locus``) for same-strand overlap grouping + isoform
+collapse; representative selection (``pick_representative``), provenance
+labeling, and ``qc_flags``; and the placement cascade (``concordant`` /
+``place_transcript``), whose §4 best-vs-second-best margin gate is
+``_confident_placement`` (measured across distinct loci), feeding the
+top-level ``reconcile`` that emits one ``ReconciledGene`` per gene.
+``best_and_margin`` is a Task-1 best-vs-second helper retained for the API
+but not used by the cascade. The output writers are added in a later task
+against this same module.
 
 All functions here are stdlib-only with no network access. The one
 optional subprocess is ``group_into_loci``'s ``bedtools merge`` fast
@@ -720,29 +723,15 @@ def _concordant_placements(mm: list[Placement], gmap: list[Placement],
 
 def _cluster_placements(placements: list[Placement]) -> list[list[Placement]]:
     """Cluster placements into DISTINCT genomic loci: same chrom+strand and
-    >0-base overlap (Task-2 half-open contract) fold into one locus. Mirrors
-    ``_clusters_via_sweep`` but for ``Placement``s. Used both to count loci
-    (``multi_mapping`` = >=2) and to compute the distinct-locus margin the
-    §4 gate is applied to."""
-    by_key: dict[tuple[str, str], list[Placement]] = defaultdict(list)
-    for p in placements:
-        by_key[(p.chrom, p.strand)].append(p)
-    clusters: list[list[Placement]] = []
-    for key in by_key:
-        cluster: list[Placement] = []
-        cluster_end: int | None = None
-        for p in sorted(by_key[key], key=lambda p: (p.start, p.end)):
-            if cluster and cluster_end is not None and p.start < cluster_end:
-                cluster.append(p)
-                cluster_end = max(cluster_end, p.end)
-            else:
-                if cluster:
-                    clusters.append(cluster)
-                cluster = [p]
-                cluster_end = p.end
-        if cluster:
-            clusters.append(cluster)
-    return clusters
+    >0-base overlap (Task-2 half-open contract) fold into one locus. Used
+    both to count loci (``multi_mapping`` = >=2) and to compute the
+    distinct-locus margin the §4 gate is applied to.
+
+    Delegates to the Task-2 ``_clusters_via_sweep``, which clusters on the
+    ``.chrom/.strand/.start/.end`` fields ``Placement`` also exposes — one
+    clustering implementation shared by both tracks (the placement-typed name
+    is kept as the cascade's entry point)."""
+    return _clusters_via_sweep(placements)
 
 
 def _identity_rank(p: Placement) -> tuple:

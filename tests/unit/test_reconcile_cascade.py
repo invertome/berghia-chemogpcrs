@@ -22,6 +22,7 @@ tests pass explicit ``Thresholds`` rather than leaning on defaults.
 """
 from __future__ import annotations
 
+import random
 from dataclasses import fields
 
 import reconcile_candidates as rc
@@ -435,6 +436,75 @@ def test_reconcile_output_is_sorted_by_gene_id_and_deterministic():
     assert ids_a == sorted(ids_a)                  # stable, gene_id order
     assert ids_a == ["chr1:1000-2000:+", "chr2:5000-6000:+",
                      "chr3:8000-9000:+", "unplaced:Bst_unplaced"]
+
+
+def test_reconcile_is_order_independent_under_permuted_inputs():
+    # Real order-independence: reconcile the SAME data twice, the second time
+    # with candidate order, per-method placement order, refseq order, and
+    # refseq_loci order all shuffled. A same-process rerun (above) cannot
+    # catch input-order dependence; this permutation does. Includes a
+    # multi-placement candidate (chr6 vs chr7) so shuffling per-method lists
+    # is non-trivial.
+    thr = rc.Thresholds()
+    g_both = rc.PlacedModel("XP_both", "chr1", 1000, 2000, "+",
+                            source="genome", complete=True, length=350, n_tm=7)
+    g_only = rc.PlacedModel("XP_only", "chr2", 5000, 6000, "+",
+                            source="genome", complete=True, length=300, n_tm=6)
+    refseq = [g_both, g_only]
+    refseq_loci = [("chr1", 1000, 2000, "+"), ("chr2", 5000, 6000, "+")]
+    txome = [
+        rc.Candidate("Bst_both", complete=True, length=340, n_tm=7),
+        rc.Candidate("Bst_txonly", complete=True, length=320, n_tm=8),
+        rc.Candidate("Bst_multi", complete=True, length=300, n_tm=6),
+        rc.Candidate("Bst_unplaced", complete=True, length=200, n_tm=5),
+    ]
+    placements = {
+        "Bst_both": {
+            "minimap2": [_pl("Bst_both", "chr1", 1000, 2000, "+", 98.0, 95.0, "minimap2")],
+            "gmap":     [_pl("Bst_both", "chr1", 1010, 1990, "+", 97.0, 94.0, "gmap")],
+        },
+        "Bst_txonly": {
+            "minimap2": [_pl("Bst_txonly", "chr3", 8000, 9000, "+", 99.0, 96.0, "minimap2")],
+            "gmap":     [_pl("Bst_txonly", "chr3", 8005, 8995, "+", 98.0, 95.0, "gmap")],
+        },
+        "Bst_multi": {
+            "minimap2": [_pl("Bst_multi", "chr6", 1000, 2000, "+", 98.0, 95.0, "minimap2"),
+                         _pl("Bst_multi", "chr7", 1000, 2000, "+", 95.0, 95.0, "minimap2")],
+            "gmap":     [_pl("Bst_multi", "chr6", 1010, 1990, "+", 97.0, 94.0, "gmap"),
+                         _pl("Bst_multi", "chr7", 1005, 1995, "+", 95.0, 94.0, "gmap")],
+        },
+        "Bst_unplaced": {
+            "minimap2": [_pl("Bst_unplaced", "chr9", 1, 1000, "+", 80.0, 99.0, "minimap2")],
+        },
+    }
+    genes_a = rc.reconcile(txome, refseq, placements, refseq_loci, thr)
+
+    rng = random.Random(20260702)
+
+    def perm(seq):
+        s = list(seq)
+        rng.shuffle(s)
+        return s
+
+    p_txome = perm(txome)
+    p_refseq = perm(refseq)
+    p_refseq_loci = perm(refseq_loci)
+    p_placements = {q: {m: perm(hits) for m, hits in bundle.items()}
+                    for q, bundle in placements.items()}
+    # guard: the permutation must actually reorder something, else the test
+    # is vacuous (a no-op "shuffle" would pass trivially).
+    assert (p_txome != txome or p_refseq != refseq or p_refseq_loci != refseq_loci
+            or p_placements["Bst_multi"]["minimap2"]
+            != placements["Bst_multi"]["minimap2"]), "seed did not reorder inputs"
+
+    genes_b = rc.reconcile(p_txome, p_refseq, p_placements, p_refseq_loci, thr)
+
+    # frozen ReconciledGene -> value equality; identical lists prove
+    # order-independence end to end (order AND every field).
+    assert genes_a == genes_b
+    assert [g.gene_id for g in genes_a] == [
+        "chr1:1000-2000:+", "chr2:5000-6000:+", "chr3:8000-9000:+",
+        "chr6:1000-2000:+", "unplaced:Bst_unplaced"]
 
 
 def test_reconcile_candidate_with_no_placement_entry_is_unplaced():
