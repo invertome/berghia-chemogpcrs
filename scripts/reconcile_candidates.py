@@ -323,6 +323,11 @@ class PlacedModel:
     hashable, matching the module's value-record convention; ``source``
     must be carried through grouping unchanged (Task 3 reads it to
     label provenance).
+
+    ``complete`` (True = complete ORF) and ``length`` (protein length in
+    aa) are the two axes Task 3's representative selection ranks on. Both
+    are appended with defaults so every Task-2 construction (which omits
+    them) stays valid and unchanged.
     """
     query: str
     chrom: str
@@ -330,6 +335,8 @@ class PlacedModel:
     end: int
     strand: str
     source: str
+    complete: bool = False
+    length: int = 0
 
 
 @dataclass(frozen=True)
@@ -453,3 +460,137 @@ def _clusters_from_merge_output(output: str, records: list[PlacedModel]
         idx_field = line.split("\t")[-1]
         clusters.append([records[int(x)] for x in idx_field.split(",")])
     return clusters
+
+
+# ---- representative + provenance + QC flags (Task 3) -------------------------
+
+# Placeholder QC thresholds. These are NOT final scientific values — they
+# are CALIBRATED IN TASK 8 against the positive-control set and BUSCO
+# single-copy genes. They are surfaced as qc_flags() parameters so Task 8
+# can retune them without touching any call site; the defaults below only
+# make the function usable in isolation.
+LOW_MARGIN_THRESHOLD_DEFAULT = 2.0        # best-vs-second %identity margin (percentage points)
+SOURCE_DISAGREEMENT_FRAC_DEFAULT = 0.20   # >20% length divergence between source reps (design §5)
+
+
+def _representative(members) -> PlacedModel:
+    """Pick the representative model from a non-empty group of members.
+
+    Preference order (design §5): a complete ORF before a partial one
+    (so a complete SHORT model beats a partial LONG one); then greatest
+    protein ``length``; then the genome-anchored (RefSeq) model over a
+    transcriptome one; then the smallest ``query`` id for full
+    determinism. Expressed as the ``min`` under a composite key whose
+    every component sorts the preferred model first.
+    """
+    return min(members, key=lambda m: (not m.complete, -m.length,
+                                       m.source != "genome", m.query))
+
+
+def pick_representative(locus: Locus) -> PlacedModel:
+    """Representative ``PlacedModel`` for a locus (= gene). See
+    ``_representative`` for the preference order."""
+    return _representative(locus.members)
+
+
+def provenance(locus: Locus) -> str:
+    """Label a locus ``both`` / ``genome_only`` / ``transcriptome_only``
+    from the source tracks present among its members: ``both`` iff a
+    genome (RefSeq) model AND a transcriptome model share the locus; an
+    all-txome group (including the unplaced bucket) is
+    ``transcriptome_only``."""
+    sources = {m.source for m in locus.members}
+    if "genome" in sources and "txome" in sources:
+        return "both"
+    if "genome" in sources:
+        return "genome_only"
+    return "transcriptome_only"
+
+
+def _gene_interval(gene) -> tuple[str, int, int, str]:
+    """Normalize a RefSeq gene interval to ``(chrom, start, end, strand)``,
+    accepting either a 4-tuple or any object exposing
+    ``.chrom/.start/.end/.strand`` (e.g. a ``Locus`` or ``PlacedModel``)."""
+    if isinstance(gene, tuple):
+        return gene
+    return (gene.chrom, gene.start, gene.end, gene.strand)
+
+
+def _member_overlaps_gene(m: PlacedModel, gene: tuple[str, int, int, str]) -> bool:
+    """Same-chromosome, same-strand, half-open ``[start, end)`` overlap
+    (the Task-2 overlap contract) between a member and a gene interval."""
+    gchrom, gstart, gend, gstrand = gene
+    return (m.chrom == gchrom and m.strand == gstrand
+            and m.start < gend and gstart < m.end)
+
+
+def _is_chimeric(locus: Locus, refseq_genes) -> bool:
+    """True iff any single member overlaps >=2 DISTINCT RefSeq genes — the
+    fused-model failure mode. Gene intervals are de-duplicated (a set of
+    normalized tuples) so an identical interval listed twice can't fake a
+    chimera."""
+    genes = {_gene_interval(g) for g in refseq_genes}
+    for m in locus.members:
+        hits = sum(1 for gene in genes if _member_overlaps_gene(m, gene))
+        if hits >= 2:
+            return True
+    return False
+
+
+def _source_disagreement(locus: Locus, frac: float) -> bool:
+    """True iff the genome-side and txome-side representatives differ in
+    protein ``length`` by more than ``frac`` (relative to the longer of
+    the two). The caller only invokes this on ``both`` provenance, so each
+    side is non-empty; a defensive guard still returns False if either
+    side is missing or neither carries a length."""
+    genome = [m for m in locus.members if m.source == "genome"]
+    txome = [m for m in locus.members if m.source == "txome"]
+    if not genome or not txome:
+        return False
+    g_rep = _representative(genome)
+    t_rep = _representative(txome)
+    longer = max(g_rep.length, t_rep.length)
+    if longer <= 0:
+        return False    # no length information -> cannot judge disagreement
+    return abs(g_rep.length - t_rep.length) / longer > frac
+
+
+def qc_flags(locus: Locus, *, refseq_genes=None, margin: float | None = None,
+             low_margin_threshold: float = LOW_MARGIN_THRESHOLD_DEFAULT,
+             multi_mapping: bool = False,
+             source_disagreement_frac: float = SOURCE_DISAGREEMENT_FRAC_DEFAULT
+             ) -> tuple[str, ...]:
+    """Deterministic (sorted) tuple of QC flags for a locus.
+
+    Each flag isolates one failure mode; the caller supplies exactly the
+    context each needs (design §8):
+
+    * ``chimeric`` — a member overlaps >=2 distinct ``refseq_genes``
+      (a list of ``Locus`` / ``(chrom, start, end, strand)`` intervals);
+      skipped entirely when ``refseq_genes`` is None.
+    * ``partial_only`` — no member has a complete ORF.
+    * ``source_disagreement`` — a ``both`` locus whose genome-side and
+      txome-side representatives differ in length by more than
+      ``source_disagreement_frac``.
+    * ``low_margin`` — the best-vs-second placement %identity ``margin``
+      is below ``low_margin_threshold`` (ignored when ``margin`` is None,
+      i.e. a single unambiguous placement).
+    * ``multi_mapping`` — caller-supplied: the transcript had >=2
+      gate-passing loci (ambiguous placement; only Task 4 can know this,
+      so it is passed in rather than re-derived here).
+
+    ``low_margin_threshold`` (and the margin scale generally) is a
+    Task-8-calibrated placeholder — see the module-level constants.
+    """
+    flags: set[str] = set()
+    if refseq_genes is not None and _is_chimeric(locus, refseq_genes):
+        flags.add("chimeric")
+    if not any(m.complete for m in locus.members):
+        flags.add("partial_only")
+    if provenance(locus) == "both" and _source_disagreement(locus, source_disagreement_frac):
+        flags.add("source_disagreement")
+    if margin is not None and margin < low_margin_threshold:
+        flags.add("low_margin")
+    if multi_mapping:
+        flags.add("multi_mapping")
+    return tuple(sorted(flags))
