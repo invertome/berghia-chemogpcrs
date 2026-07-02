@@ -202,3 +202,111 @@ def test_main_help_exits_zero(capsys):
     with pytest.raises(SystemExit) as excinfo:
         rc.main(["--help"])
     assert excinfo.value.code == 0
+
+
+# ---- pure CLI helpers -----------------------------------------------------
+
+@pytest.mark.parametrize("token", [
+    "1", "true", "TRUE", "True", "t", "T", "yes", "Yes", "y", "Y",
+    "complete", "Complete", "COMPLETE", " complete ", "1 ", "\ttrue"])
+def test_parse_bool_truthy(token):
+    assert rc._parse_bool(token) is True
+
+
+@pytest.mark.parametrize("token", [
+    "0", "false", "False", "partial", "PARTIAL", "", "   ", "no", "n",
+    "2", "completed", "truthy"])
+def test_parse_bool_falsy(token):
+    # substrings/near-misses ("completed", "truthy") must NOT read as True.
+    assert rc._parse_bool(token) is False
+
+
+def test_read_fasta_joins_multiline_and_uses_first_token(tmp_path):
+    p = tmp_path / "in.faa"
+    p.write_text(">ref_1 some description here\nMAAA\nAAKK\n"
+                 ">tx_2\nMBBB\n")
+    seqs = rc._read_fasta(str(p))
+    # id = first whitespace token of the header; sequence lines joined.
+    assert seqs == {"ref_1": "MAAAAAKK", "tx_2": "MBBB"}
+
+
+def test_read_fasta_empty_header(tmp_path):
+    p = tmp_path / "in.faa"
+    p.write_text(">\nMXYZ\n")
+    seqs = rc._read_fasta(str(p))
+    assert seqs == {"": "MXYZ"}
+
+
+def _placement(query, method, chrom="chr1", start=100, end=500, strand="+"):
+    return rc.Placement(query=query, chrom=chrom, start=start, end=end,
+                        strand=strand, pct_identity=99.0, pct_coverage=100.0,
+                        method=method, score=60.0)
+
+
+def test_group_placements_buckets_by_query_and_method():
+    a1, a2 = _placement("tx_A", "minimap2"), _placement("tx_A", "gmap")
+    b1 = _placement("tx_B", "minimap2")
+    grouped = rc._group_placements(("minimap2", [a1, b1]), ("gmap", [a2]),
+                                   ("miniprot", []), ("rbh", []))
+    assert set(grouped) == {"tx_A", "tx_B"}
+    assert grouped["tx_A"]["minimap2"] == [a1]
+    assert grouped["tx_A"]["gmap"] == [a2]
+    assert grouped["tx_B"]["minimap2"] == [b1]
+    assert "gmap" not in grouped["tx_B"]          # only present methods bucketed
+
+
+def test_group_placements_routes_blastp_to_rbh_key():
+    # The BLASTp parser tags method="blastp"; the caller buckets it under the
+    # cascade's "rbh" key. The bucket key is the caller's pairing, NOT
+    # Placement.method (reconcile reads bundle["rbh"]).
+    hit = _placement("tx_C", "blastp")
+    grouped = rc._group_placements(("minimap2", []), ("gmap", []),
+                                   ("miniprot", []), ("rbh", [hit]))
+    assert grouped["tx_C"]["rbh"] == [hit]
+    assert "blastp" not in grouped["tx_C"]
+
+
+# ---- metadata readers: fail loud on malformed rows ------------------------
+
+def test_read_candidates_raises_on_missing_field(tmp_path):
+    # tx_B is missing n_tm -> MUST raise, never silently vanish (a dropped
+    # candidate would not even surface as unplaced -> "never drop" violated).
+    p = tmp_path / "txome.tsv"
+    p.write_text("tx_A\t1\t300\t7\ntx_B\t0\t200\n")
+    with pytest.raises(ValueError):
+        rc._read_candidates(str(p))
+
+
+def test_read_refseq_models_raises_on_short_row(tmp_path):
+    p = tmp_path / "refseq.tsv"
+    p.write_text("ref_1\tchr1\t100\t500\t+\t1\t310\n")   # 7 fields, need >= 8
+    with pytest.raises(ValueError):
+        rc._read_refseq_models(str(p))
+
+
+def test_read_loci_raises_on_short_row(tmp_path):
+    # A short loci row must raise; silently dropping it empties refseq_loci
+    # and the chimeric flag would never be raised.
+    p = tmp_path / "loci.tsv"
+    p.write_text("chr1\t100\t500\n")                     # missing strand
+    with pytest.raises(ValueError):
+        rc._read_loci(str(p))
+
+
+def test_read_candidates_wellformed_tolerates_extra_fields_and_comments(tmp_path):
+    p = tmp_path / "txome.tsv"
+    p.write_text("#query\tcomplete\tlength\tn_tm\n"       # header skipped
+                 "tx_A\t1\t300\t7\n"
+                 "tx_B\tpartial\t200\t6\textra\n")        # extra col tolerated
+    cands = rc._read_candidates(str(p))
+    assert [c.query for c in cands] == ["tx_A", "tx_B"]
+    assert cands[0].complete is True and cands[0].n_tm == 7
+    assert cands[1].complete is False and cands[1].length == 200
+
+
+def test_read_candidates_is_crlf_safe(tmp_path):
+    # Without rstrip("\r\n") the trailing \r rides into int("7\r") -> crash.
+    p = tmp_path / "txome.tsv"
+    p.write_bytes(b"tx_A\t1\t300\t7\r\n")
+    cands = rc._read_candidates(str(p))
+    assert cands[0].query == "tx_A" and cands[0].n_tm == 7

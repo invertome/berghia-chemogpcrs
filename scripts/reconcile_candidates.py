@@ -1071,10 +1071,12 @@ def write_report(genes: list[ReconciledGene], path: str) -> None:
 
 def _read_tsv_rows(path: str):
     """Yield tab-split field lists from a TSV, skipping blank and
-    ``#``-commented lines (so a ``#``-prefixed header is tolerated)."""
+    ``#``-commented lines (so a ``#``-prefixed header is tolerated).
+    ``rstrip("\\r\\n")`` keeps the parser CRLF-safe (an unstripped ``\\r``
+    would otherwise ride the last field into ``int()`` or a strand)."""
     with open(path) as fh:
         for line in fh:
-            line = line.rstrip("\n")
+            line = line.rstrip("\r\n")
             if not line or line.startswith("#"):
                 continue
             yield line.split("\t")
@@ -1087,11 +1089,19 @@ def _parse_bool(token: str) -> bool:
 
 
 def _read_candidates(path: str) -> list[Candidate]:
-    """Read ``--txome-candidates`` (``query, complete, length, n_tm``)."""
+    """Read ``--txome-candidates`` (``query, complete, length, n_tm``).
+
+    A wrong-arity row RAISES (never silently skipped) — dropping a
+    candidate row would violate the pipeline's "never drop a candidate"
+    contract: it would vanish entirely rather than surface as ``unplaced``.
+    Numeric conversions likewise raise, so both malformation modes fail
+    loud and consistently. Extra trailing fields are tolerated.
+    """
     out: list[Candidate] = []
     for row in _read_tsv_rows(path):
         if len(row) < 4:
-            continue
+            raise ValueError(
+                f"{path}: expected >= 4 fields, got {len(row)}: {row!r}")
         out.append(Candidate(query=row[0], complete=_parse_bool(row[1]),
                              length=int(row[2]), n_tm=int(row[3])))
     return out
@@ -1099,11 +1109,14 @@ def _read_candidates(path: str) -> list[Candidate]:
 
 def _read_refseq_models(path: str) -> list[PlacedModel]:
     """Read ``--refseq-models`` (``query, chrom, start, end, strand, complete,
-    length, n_tm``) as source-``"genome"`` PlacedModels."""
+    length, n_tm``) as source-``"genome"`` PlacedModels. A wrong-arity row
+    RAISES (fail loud, consistent with the numeric conversions); extra
+    trailing fields are tolerated."""
     out: list[PlacedModel] = []
     for row in _read_tsv_rows(path):
         if len(row) < 8:
-            continue
+            raise ValueError(
+                f"{path}: expected >= 8 fields, got {len(row)}: {row!r}")
         out.append(PlacedModel(query=row[0], chrom=row[1], start=int(row[2]),
                               end=int(row[3]), strand=row[4], source="genome",
                               complete=_parse_bool(row[5]), length=int(row[6]),
@@ -1112,12 +1125,16 @@ def _read_refseq_models(path: str) -> list[PlacedModel]:
 
 
 def _read_loci(path: str) -> list[tuple[str, int, int, str]]:
-    """Read ``--refseq-loci`` (``chrom, start, end, strand``) gene intervals
-    for the ``chimeric`` QC flag."""
+    """Read ``--refseq-loci`` (4-column tab-separated
+    ``chrom<TAB>start<TAB>end<TAB>strand``) gene intervals for the
+    ``chimeric`` QC flag. A wrong-arity row RAISES (fail loud): silently
+    dropping a short row would empty ``refseq_loci`` and the ``chimeric``
+    flag would never be raised. Extra trailing fields are tolerated."""
     out: list[tuple[str, int, int, str]] = []
     for row in _read_tsv_rows(path):
         if len(row) < 4:
-            continue
+            raise ValueError(
+                f"{path}: expected >= 4 fields, got {len(row)}: {row!r}")
         out.append((row[0], int(row[1]), int(row[2]), row[3]))
     return out
 
@@ -1174,7 +1191,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                    help="TSV: query, chrom, start, end, strand, complete, "
                         "length, n_tm (source genome)")
     p.add_argument("--refseq-loci",
-                   help="TSV/BED: chrom, start, end, strand (chimeric flag)")
+                   help="4-column tab-separated file "
+                        "(chrom<TAB>start<TAB>end<TAB>strand) of RefSeq gene "
+                        "intervals, for the chimeric flag")
     p.add_argument("--proteins",
                    help="FASTA of representative protein sequences (for the .faa)")
     # Thresholds (defaults from Thresholds()).
