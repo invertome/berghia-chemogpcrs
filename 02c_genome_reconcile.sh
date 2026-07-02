@@ -434,9 +434,10 @@ fi
 RECON_PROTEINS="${WORK}/reconcile_proteins.faa"
 cat "$REFSEQ_CAND_FA" "$TXOME_CANDS_FA" > "$RECON_PROTEINS"
 
-# --- (h) Reconcile. Thresholds are omitted so the module uses its own defaults
-#         (min-id 95 / min-cov 90 / margin 2 = the design §4 working hypothesis);
-#         Task 8 wires calibrated cutoffs from config.sh. ---
+# --- (h) Reconcile. Thresholds come from config.sh (GENOME_TRACK_MIN_ID/_COV/
+#         _MARGIN — the design §4 working hypothesis 95/90/2, to be FINALIZED by
+#         scripts/calibrate_reconcile_thresholds.py on the BUSCO single-copy set).
+#         The module's own defaults match, so these are explicit, not new behavior. ---
 log "Reconciling genome + transcriptome candidate tracks -> ${RECON_DIR}"
 python3 "${SCRIPTS_DIR}/reconcile_candidates.py" \
     --minimap2-paf "$MINIMAP_PAF" \
@@ -447,6 +448,9 @@ python3 "${SCRIPTS_DIR}/reconcile_candidates.py" \
     --refseq-models "$REFSEQ_MODELS_TSV" \
     --refseq-loci "$REFSEQ_LOCI_TSV" \
     --proteins "$RECON_PROTEINS" \
+    --min-id "${GENOME_TRACK_MIN_ID}" \
+    --min-cov "${GENOME_TRACK_MIN_COV}" \
+    --min-margin "${GENOME_TRACK_MIN_MARGIN}" \
     --out-dir "$RECON_DIR"
 
 check_file "$OUT_FAA" "${RECON_DIR}/reconciled_candidates.tsv"
