@@ -60,12 +60,12 @@ print_ok() {
 
 print_error() {
     echo -e "  ${RED}✗${NC} $1"
-    ((ERRORS++))
+    ERRORS=$((ERRORS+1))
 }
 
 print_warning() {
     echo -e "  ${YELLOW}⚠${NC} $1"
-    ((WARNINGS++))
+    WARNINGS=$((WARNINGS+1))
 }
 
 print_fix() {
