@@ -71,6 +71,12 @@ WORKING_MIN_COV = 90.0
 # the paralog CEILING (the bar must be above it).
 FLOOR_PCT = 5.0
 DEFAULT_PARALOG_PCT = 95.0
+# Minimum gap (percentage points) between the paralog ceiling and the true-
+# same-gene floor for the separation to count as CLEAN. Below this the two
+# distributions effectively touch: the calibrator refuses to recommend a
+# tightened bar (which would also risk rounding the recommendation onto a
+# boundary), and falls back to the working hypothesis.
+MIN_SEPARATION_GAP = 0.1
 
 
 @dataclass(frozen=True)
@@ -126,28 +132,25 @@ def _distribution(values) -> Distribution:
 
 # ---- distinct-locus reduction (self vs paralog cross-maps) -----------------
 
-def _overlaps(a: rc.Placement, b: rc.Placement) -> bool:
-    """Same chrom + strand + >0-base half-open overlap — the Task-2 locus
-    contract from reconcile_candidates.py, applied to two placements."""
-    return (a.chrom == b.chrom and a.strand == b.strand
-            and a.start < b.end and b.start < a.end)
-
-
 def _distinct_locus_reps(placements: list[rc.Placement]) -> list[rc.Placement]:
     """Reduce one transcript's placements to one representative per DISTINCT
     genomic locus, highest identity first.
 
-    Greedy: walk placements from highest identity down; a placement overlapping
-    an already-chosen (higher-identity) locus is folded into it (skipped), so
-    each distinct locus contributes exactly its best hit. The first rep is the
-    self locus (the transcript's own gene); the rest are paralog cross-maps."""
-    reps: list[rc.Placement] = []
-    for p in sorted(placements,
-                    key=lambda x: (-x.pct_identity, x.chrom, x.start, x.end)):
-        if any(_overlaps(p, r) for r in reps):
-            continue
-        reps.append(p)
-    return reps
+    Delegates to reconcile_candidates.py's OWN locus clustering
+    (``rc._cluster_placements`` — connected components of same-chrom/strand
+    overlap, which is TRANSITIVE), so "distinct locus" means exactly what the
+    reconciliation means: an A–B–C overlap chain is ONE locus even though A and
+    C are disjoint. A greedy pairwise scan would instead keep C as a spurious
+    second locus and inflate the paralog ceiling with a within-gene alignment —
+    the very quantity this script calibrates the bar against.
+
+    Each cluster is represented by its highest-identity placement
+    (``rc._identity_rank`` orders identity-descending), and the reps are sorted
+    the same way: ``reps[0]`` is the self (own-gene) locus, ``reps[1:]`` are the
+    paralog cross-maps."""
+    return sorted((min(cluster, key=rc._identity_rank)
+                   for cluster in rc._cluster_placements(placements)),
+                  key=rc._identity_rank)
 
 
 def same_gene_reps(placements_by_query: dict[str, list[rc.Placement]],
@@ -203,7 +206,10 @@ def compute_separation(same_reps: list[rc.Placement],
     if paralog_ids:
         ceiling: float | None = _percentile(paralog_ids, paralog_pct)
         margin: float | None = id_dist.p05 - ceiling
-        clean = ceiling < id_dist.p05
+        # A clean bar needs a REAL gap, not a hairline touch (< MIN_SEPARATION_GAP
+        # is effectively no separation, and would risk the recommendation below
+        # rounding onto the ceiling).
+        clean = margin >= MIN_SEPARATION_GAP
     else:
         ceiling = None
         margin = None
@@ -211,6 +217,10 @@ def compute_separation(same_reps: list[rc.Placement],
 
     if clean:
         rec_min_id = round((ceiling + id_dist.p05) / 2.0, 1)
+        # Rounding to 1 dp can land ON a boundary; force the bar STRICTLY inside
+        # (ceiling < min_id < floor) via the exact midpoint, which always is.
+        if not (ceiling < rec_min_id < id_dist.p05):
+            rec_min_id = (ceiling + id_dist.p05) / 2.0
         rec_min_cov = float(math.floor(cov_dist.p05))
     else:
         rec_min_id = working_min_id
@@ -304,7 +314,8 @@ def synthetic_inputs():
 # ---- CLI -------------------------------------------------------------------
 
 def _read_ids(path: str) -> list[str]:
-    """One id per line; blank and ``#``-commented lines skipped."""
+    """One id per line; blank and ``#``-commented lines skipped; the first
+    whitespace token of each line is taken (tolerating trailing columns)."""
     ids: list[str] = []
     with open(path) as fh:
         for line in fh:
@@ -312,6 +323,24 @@ def _read_ids(path: str) -> list[str]:
             if s and not s.startswith("#"):
                 ids.append(s.split()[0])
     return ids
+
+
+def matched_fraction_warning(kind: str, matched: int, requested: int) -> str | None:
+    """A stderr warning when the requested ids only PARTIALLY match the
+    alignment query names, else None. A format mismatch between the ids file and
+    the PAF/GFF query names would otherwise silently compute a confident bar off
+    a tiny (or empty) distribution — so surface it, and escalate the message
+    when the matched fraction is very low."""
+    if requested == 0 or matched >= requested:
+        return None
+    msg = f"WARNING: matched {matched} of {requested} requested {kind} ids"
+    if matched == 0:
+        return (msg + " — NONE matched; check the ids file against the alignment "
+                "query names (a format mismatch, e.g. version suffixes).")
+    if matched / requested < 0.5:
+        return (msg + " — LOW match fraction; likely an id-format mismatch "
+                "between the ids file and the PAF/GFF query names.")
+    return msg
 
 
 def _placements_by_query(minimap2_paf, gmap_gff) -> dict[str, list[rc.Placement]]:
@@ -354,19 +383,26 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _write_recommendation(path: str, result: SeparationResult) -> None:
-    """Write the recommended cutoffs as sourceable shell, citing the numbers."""
+def _write_recommendation(path: str, result: SeparationResult,
+                          dry_run: bool = False) -> None:
+    """Write the recommended cutoffs as sourceable shell, citing the numbers.
+
+    In ``--dry-run`` the values come from the SYNTHETIC example, so the file is
+    stamped ``NOT for production`` on its first line to keep a demo artifact from
+    ever being sourced into a real run."""
     ceil_s = "n/a" if result.paralog_ceiling is None else f"{result.paralog_ceiling:g}"
-    text = (
+    header = ["# DRY RUN synthetic — NOT for production"] if dry_run else []
+    header += [
         "# Recommended genome-track %match gate, from "
-        "scripts/calibrate_reconcile_thresholds.py\n"
+        "scripts/calibrate_reconcile_thresholds.py",
         f"# true-same-gene identity floor (p05) = {result.id_dist.p05:g}; "
         f"paralog identity ceiling (p{result.paralog_pct:g}) = {ceil_s}; "
-        f"clean_separation = {result.clean_separation}\n"
-        f"GENOME_TRACK_MIN_ID={result.rec_min_id:g}\n"
-        f"GENOME_TRACK_MIN_COV={result.rec_min_cov:g}\n")
+        f"clean_separation = {result.clean_separation}",
+        f"GENOME_TRACK_MIN_ID={result.rec_min_id:g}",
+        f"GENOME_TRACK_MIN_COV={result.rec_min_cov:g}",
+    ]
     with open(path, "w", newline="\n") as fh:
-        fh.write(text)
+        fh.write("\n".join(header) + "\n")
 
 
 def main(argv=None) -> int:
@@ -379,7 +415,7 @@ def main(argv=None) -> int:
                                     paralog_pct=args.paralog_pct)
         print(format_table(result, title="DRY RUN — synthetic worked example"))
         if args.out:
-            _write_recommendation(args.out, result)
+            _write_recommendation(args.out, result, dry_run=True)
         return 0
 
     if not args.busco_single_copy_ids:
@@ -396,11 +432,20 @@ def main(argv=None) -> int:
     para_ids = _read_ids(args.paralog_ids) if args.paralog_ids else []
 
     reps = same_gene_reps(by_query, busco_ids)
+    # len(reps) == the number of requested BUSCO ids that matched an alignment
+    # (one self-rep per matched id) — surface a partial/empty match.
+    w = matched_fraction_warning("same-gene", len(reps), len(busco_ids))
+    if w:
+        print(w, file=sys.stderr)
     if not reps:
         print("ERROR: none of the BUSCO single-copy ids were found in the "
               "alignment files; cannot calibrate.", file=sys.stderr)
         return 1
     para = paralog_identities(by_query, para_ids)
+    matched_para = sum(1 for q in para_ids if by_query.get(q))
+    w = matched_fraction_warning("paralog", matched_para, len(para_ids))
+    if w:
+        print(w, file=sys.stderr)
 
     result = compute_separation(reps, para, paralog_pct=args.paralog_pct)
     print(format_table(result))

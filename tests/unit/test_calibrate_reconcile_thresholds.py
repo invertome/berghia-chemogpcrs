@@ -159,3 +159,119 @@ def test_dry_run_example_shows_clean_separation():
                                  cal.paralog_identities(placements, paralog_ids))
     assert res.clean_separation is True
     assert res.paralog_ceiling < res.rec_min_id < res.id_dist.p05
+
+
+# ---- Minor 1: distinct-locus logic must MATCH the module it calibrates ------
+
+def test_distinct_locus_reps_transitive_chain_is_one_locus():
+    # A–B–C overlap CHAIN: A overlaps B, B overlaps C, but A is DISJOINT from C.
+    # The module clusters by connected components (transitive), so the chain is
+    # ONE locus -> one representative (A@99). A greedy pairwise scan would wrongly
+    # keep C@98 as a second "distinct locus", inflating the paralog ceiling with
+    # a within-gene alignment. Pins that the calibrator uses the SAME distinct-
+    # locus definition as reconcile_candidates.py.
+    placements = [
+        _pl("t", "chr1", 1000, 2000, 99.0),   # A
+        _pl("t", "chr1", 1990, 3000, 95.0),   # B bridges A and C
+        _pl("t", "chr1", 2990, 4000, 98.0),   # C (disjoint from A)
+    ]
+    reps = cal._distinct_locus_reps(placements)
+    assert [r.pct_identity for r in reps] == [99.0]
+
+
+def test_distinct_locus_reps_matches_module_clustering():
+    # Independent cross-check: the reps' loci equal the module's own clustering
+    # of the same placements (one rep per module cluster).
+    placements = [
+        _pl("t", "chr1", 1000, 2000, 99.0),
+        _pl("t", "chr1", 1990, 3000, 95.0),
+        _pl("t", "chr1", 8000, 9000, 90.0),   # a genuinely separate locus
+    ]
+    reps = cal._distinct_locus_reps(placements)
+    assert len(reps) == len(rc._cluster_placements(placements))
+    assert [r.pct_identity for r in reps] == [99.0, 90.0]
+
+
+# ---- Minor 2: strict-between invariant / degenerate near-touch gap ----------
+
+def test_compute_separation_subthreshold_gap_is_not_clean():
+    # ceiling 95.0, floor 95.05 -> gap 0.05 < the minimum separation gap: the
+    # distributions essentially touch. Without the min-gap guard, midpoint
+    # rounding (round(95.025, 1) == 95.0) would emit rec_min_id == ceiling yet
+    # declare clean_separation True — violating paralog_ceiling < min_id < floor.
+    same_reps = [_pl("b", "c", 1, 2, 95.05, cov=95.0) for _ in range(4)]
+    paralog_ids = [95.0, 95.0, 95.0, 95.0]
+    res = cal.compute_separation(same_reps, paralog_ids)
+    assert res.clean_separation is False
+    assert res.rec_min_id == cal.WORKING_MIN_ID
+
+
+def test_compute_separation_clean_recommendation_is_strictly_interior():
+    # Whenever a clean bar is declared, the recommended min_id must lie STRICTLY
+    # between the paralog ceiling and the true-same-gene floor (never on either).
+    same_reps = [_pl("b", "c", 1, 2, pid, cov=97.0) for pid in
+                 [98.0, 99.0, 100.0, 97.9, 98.5]]
+    res = cal.compute_separation(same_reps, [88.0, 90.0, 91.0, 92.0])
+    assert res.clean_separation is True
+    assert res.paralog_ceiling < res.rec_min_id < res.id_dist.p05
+
+
+# ---- Minor 5: empty-paralog branch ------------------------------------------
+
+def test_compute_separation_no_paralog_data_is_not_clean():
+    same_reps = [_pl("b", "c", 1, 2, 99.0, cov=98.0)]
+    res = cal.compute_separation(same_reps, [])
+    assert res.paralog_ceiling is None
+    assert res.separation_margin is None
+    assert res.clean_separation is False
+    assert res.rec_min_id == cal.WORKING_MIN_ID
+    assert res.rec_min_cov == cal.WORKING_MIN_COV
+
+
+# ---- Minor 5: _read_ids parsing ---------------------------------------------
+
+def test_read_ids_skips_comments_blanks_and_takes_first_token(tmp_path):
+    f = tmp_path / "ids.txt"
+    f.write_text("# comment\n\nq1\nq2 extra tokens\n  q3  \n")
+    assert cal._read_ids(str(f)) == ["q1", "q2", "q3"]
+
+
+# ---- Minor 3: partial id-match warning --------------------------------------
+
+def test_matched_fraction_warning_levels():
+    assert cal.matched_fraction_warning("same-gene", 5, 5) is None
+    assert cal.matched_fraction_warning("same-gene", 0, 0) is None
+    assert "matched 3 of 4 requested same-gene ids" in \
+        cal.matched_fraction_warning("same-gene", 3, 4)
+    assert "none" in cal.matched_fraction_warning("paralog", 0, 4).lower()
+    assert "low" in cal.matched_fraction_warning("paralog", 1, 4).lower()
+
+
+def test_real_mode_warns_on_partial_id_match(tmp_path, capsys):
+    # q3 is requested but absent from the alignment -> a silent tiny-distribution
+    # bar would otherwise result. Also exercises _read_ids (comment + blank).
+    paf = tmp_path / "aln.paf"
+    paf.write_text(
+        "q1\t1000\t0\t1000\t+\tchr1\t100000\t5000\t6000\t990\t1000\t60\n"
+        "q2\t1000\t0\t900\t+\tchr1\t100000\t20000\t20900\t880\t900\t60\n")
+    ids = tmp_path / "busco.txt"
+    ids.write_text("# single-copy ids\n\nq1\nq2\nq3\n")
+    code = cal.main(["--minimap2-paf", str(paf),
+                     "--busco-single-copy-ids", str(ids)])
+    assert code == 0
+    err = capsys.readouterr().err
+    assert "matched 2 of 3 requested same-gene ids" in err
+
+
+# ---- Minor 4: dry-run --out must be marked synthetic -------------------------
+
+def test_dry_run_out_file_marked_synthetic_and_sets_vars(tmp_path):
+    out = tmp_path / "rec.sh"
+    assert cal.main(["--dry-run", "--out", str(out)]) == 0
+    text = out.read_text()
+    # Clearly marked NOT for production...
+    assert "DRY RUN synthetic" in text and "NOT for production" in text
+    # ...yet still sets both vars and cites the decision numbers (closes the
+    # "--out content never asserted" gap).
+    assert "GENOME_TRACK_MIN_ID=" in text and "GENOME_TRACK_MIN_COV=" in text
+    assert "floor" in text and "ceiling" in text and "clean_separation" in text
