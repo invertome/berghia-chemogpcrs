@@ -327,7 +327,8 @@ validate_genome_track() {
     if [ -f "${GENOME_GFF}" ]; then
         print_ok "RefSeq GFF present: ${GENOME_GFF}"
     else
-        print_warning "RefSeq GFF not found (needed for RefSeq gene coords/loci): ${GENOME_GFF}"
+        print_error "RUN_GENOME_TRACK=1 but RefSeq GFF not found (needed for RefSeq gene coords/loci): ${GENOME_GFF}"
+        print_fix "Run scripts/fetch_berghia_genome.sh to stage the RefSeq GFF, or set RUN_GENOME_TRACK=0"
     fi
 }
 

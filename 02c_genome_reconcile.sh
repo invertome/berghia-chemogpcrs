@@ -38,6 +38,9 @@ WORK="${RECON_DIR}/work"
 OUT_FAA="${RECON_DIR}/reconciled_candidates.faa"
 TXOME_CANDS_FA="${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa"
 TXOME_PRED="${RESULTS_DIR}/chemogpcrs/deeptmhmm_berghia/prediction"
+# Honor the SLURM allocation for tool threads (falls back to CPUS for local
+# runs) so a smaller grant isn't over-subscribed.
+THREADS="${SLURM_CPUS_PER_TASK:-${CPUS}}"
 
 mkdir -p "${RECON_DIR}" "${LOGS_DIR}" || { log "Error: cannot create ${RECON_DIR}"; exit 1; }
 
@@ -111,7 +114,7 @@ else
         : > "$REFSEQ_CAND_FA"
     fi
 fi
-log "RefSeq candidates: $(grep -c '^>' "$REFSEQ_CAND_FA" 2>/dev/null || echo 0)"
+log "RefSeq candidates: $(grep -c '^>' "$REFSEQ_CAND_FA" 2>/dev/null || true)"
 
 # --- Build the transcriptome-candidate module input (--txome-candidates). ---
 # query, complete, length, n_tm. completeness+length come from the ORIGINAL
@@ -288,14 +291,18 @@ def resolve(pid):
     partial = g[4] or mrna_part or part
     return g[0], g[1], g[2], g[3], partial
 
-n_written, n_unresolved = 0, 0
+n_written = 0
+unresolved = []
 with open(models_out, "w") as mf:
     mf.write("#query\tchrom\tstart\tend\tstrand\tcomplete\tlength\tn_tm\n")
     for pid in sorted(cand):
         r = resolve(pid)
         if r is None:
-            n_unresolved += 1
-            sys.stderr.write(f"WARN: RefSeq candidate {pid} did not resolve to a gene locus; skipped\n")
+            # Never silently drop a genome candidate (the module's never-drop
+            # contract): collect and fail loud after the loop. Unreachable on the
+            # RefSeq GFF (every protein-coding CDS carries gene= AND Parent=), but
+            # this keeps the stage as strict as reconcile_candidates.py's readers.
+            unresolved.append(pid)
             continue
         chrom, gs, ge, strand, partial = r
         mf.write(f"{pid}\t{chrom}\t{gs}\t{ge}\t{strand}\t"
@@ -306,14 +313,21 @@ with open(loci_out, "w") as lf:
     for chrom, s, e, strand in all_loci:
         lf.write(f"{chrom}\t{s}\t{e}\t{strand}\n")
 
-sys.stderr.write(f"refseq models: {n_written} written, {n_unresolved} unresolved; refseq loci: {len(all_loci)}\n")
+if unresolved:
+    sys.stderr.write(
+        f"ERROR: {len(unresolved)} RefSeq candidate(s) did not resolve to a gene "
+        f"locus in {gff} (a genome candidate would otherwise vanish silently): "
+        f"{', '.join(unresolved)}\n")
+    sys.exit(1)
+
+sys.stderr.write(f"refseq models: {n_written} written; refseq loci: {len(all_loci)}\n")
 PYEOF
 
 # --- (c) Build the GMAP index once. ---
 GMAP_DB_DIR="${WORK}/gmap_index"
 GMAP_DB_NAME="berghia_genome"
 mkdir -p "$GMAP_DB_DIR"
-run_command "gmap_build" ${GMAP_BUILD} -D "$GMAP_DB_DIR" -d "$GMAP_DB_NAME" "$GENOME"
+run_command "gmap_build" ${GMAP_BUILD} -D "$GMAP_DB_DIR" -d "$GMAP_DB_NAME" -t "$THREADS" "$GENOME"
 
 # --- (d) Subset the candidate .mrna and run the nucleotide spliced aligners. ---
 # Design decision (confirmed): run minimap2 + gmap + miniprot + RBH on ALL
@@ -329,9 +343,9 @@ GMAP_GFF="${WORK}/gmap.gff3"
 : > "$MINIMAP_PAF"; : > "$GMAP_GFF"
 if [ -s "$CAND_MRNA" ]; then
     run_command "minimap2_splice" --stdout="$MINIMAP_PAF" \
-        ${MINIMAP2} -x splice "$GENOME" "$CAND_MRNA"
+        ${MINIMAP2} -x splice -t "$THREADS" "$GENOME" "$CAND_MRNA"
     run_command "gmap_align" --stdout="$GMAP_GFF" \
-        ${GMAP} -D "$GMAP_DB_DIR" -d "$GMAP_DB_NAME" -f gff3_gene -t "${CPUS}" "$CAND_MRNA"
+        ${GMAP} -D "$GMAP_DB_DIR" -d "$GMAP_DB_NAME" -f gff3_gene -t "$THREADS" "$CAND_MRNA"
 else
     log --level=WARN "No candidate .mrna sequences — skipping minimap2/gmap."
 fi
@@ -341,7 +355,7 @@ MINIPROT_GFF="${WORK}/miniprot.gff3"
 : > "$MINIPROT_GFF"
 if [ -s "$TXOME_CANDS_FA" ]; then
     run_command "miniprot_align" --stdout="$MINIPROT_GFF" \
-        ${MINIPROT} -t "${CPUS}" --gff "$GENOME" "$TXOME_CANDS_FA"
+        ${MINIPROT} -t "$THREADS" --gff "$GENOME" "$TXOME_CANDS_FA"
 fi
 
 # --- (f) Homology fallback: BLASTp reciprocal-best-hit (both directions). ---
@@ -360,9 +374,9 @@ if [ -s "$TXOME_CANDS_FA" ] && [ -s "$REFSEQ_CAND_FA" ]; then
     run_command "makeblastdb_refseq" ${MAKEBLASTDB} -in "$REFSEQ_CAND_FA" -dbtype prot -out "$REF_DB"
     run_command "makeblastdb_txome"  ${MAKEBLASTDB} -in "$TXOME_CANDS_FA" -dbtype prot -out "$TXO_DB"
     run_command "blastp_fwd" --stdout="$FWD" ${BLASTP} -query "$TXOME_CANDS_FA" -db "$REF_DB" \
-        -outfmt "$BLAST_OUTFMT" -evalue "${RECON_BLAST_EVALUE:-1e-5}" -max_target_seqs 5 -num_threads "${CPUS}"
+        -outfmt "$BLAST_OUTFMT" -evalue "${RECON_BLAST_EVALUE:-1e-5}" -max_target_seqs 5 -num_threads "$THREADS"
     run_command "blastp_rev" --stdout="$REV" ${BLASTP} -query "$REFSEQ_CAND_FA" -db "$TXO_DB" \
-        -outfmt "$BLAST_OUTFMT" -evalue "${RECON_BLAST_EVALUE:-1e-5}" -max_target_seqs 5 -num_threads "${CPUS}"
+        -outfmt "$BLAST_OUTFMT" -evalue "${RECON_BLAST_EVALUE:-1e-5}" -max_target_seqs 5 -num_threads "$THREADS"
     export FWD REV RBH_TAB
     python3 <<'PYEOF'
 import os
