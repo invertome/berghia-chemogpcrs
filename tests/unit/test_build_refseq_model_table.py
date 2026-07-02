@@ -191,6 +191,22 @@ def test_resolve_returns_none_when_parent_chain_broken(tmp_path):
     assert _resolve(tmp_path, "XP_z.1", ("XP_z.1",), gff_rows=rows) is None
 
 
+def test_resolve_route_a_carries_even_when_parent_chain_broken(tmp_path):
+    # Fault-isolates route A: the CDS carries gene=LOCA (route A) BUT its Parent
+    # points at a MISSING mRNA (route B is dead, exactly as the broken-chain case
+    # above). The candidate must STILL resolve via route A. If route A were
+    # disabled and everything fell through to route B, this would return None —
+    # so this test is the route-A counterpart of route B's isolation (XP_002.1,
+    # which has no gene=).
+    rows = [
+        _gff_line("c", "gene", 10, 20, "+", "ID=gene-LOCA;gene=LOCA"),
+        _gff_line("c", "CDS", 10, 20, "+",
+                  "ID=cds;Parent=rna-MISSING;gene=LOCA;protein_id=XP_a.1"),
+    ]
+    assert _resolve(tmp_path, "XP_a.1", ("XP_a.1",), gff_rows=rows) == \
+        ("c", 10, 20, "+", False)
+
+
 # --- build_tables (byte-level output contract) -----------------------------
 
 def test_build_tables_writes_models_tsv_field_for_field(tmp_path):
