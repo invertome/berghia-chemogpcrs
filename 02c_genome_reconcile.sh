@@ -188,140 +188,18 @@ PYEOF
 log "Assembling RefSeq gene-model + loci tables from ${GENOME_GFF}..."
 REFSEQ_MODELS_TSV="${WORK}/refseq_models.tsv"
 REFSEQ_LOCI_TSV="${WORK}/refseq_loci.tsv"
-export REFSEQ_CAND_IDS GENOME_GFF REFSEQ_CAND_FA REFSEQ_PRED REFSEQ_MODELS_TSV REFSEQ_LOCI_TSV
-python3 <<'PYEOF'
-import os, re, sys
-ids_file   = os.environ["REFSEQ_CAND_IDS"]
-gff        = os.environ["GENOME_GFF"]
-prot_fa    = os.environ["REFSEQ_CAND_FA"]
-pred       = os.environ["REFSEQ_PRED"]
-models_out = os.environ["REFSEQ_MODELS_TSV"]
-loci_out   = os.environ["REFSEQ_LOCI_TSV"]
-
-cand = set()
-with open(ids_file) as fh:
-    for line in fh:
-        s = line.strip()
-        if s:
-            cand.add(s)
-
-def attr(s, key):
-    m = re.search(r'(?:^|;)' + re.escape(key) + r'=([^;]+)', s)
-    return m.group(1) if m else None
-
-def is_partial(s):
-    a = s.lower()
-    return ("partial=true" in a) or ("start_range=" in a) or ("end_range=" in a)
-
-genes_by_id, genes_by_loc = {}, {}   # -> (chrom,start,end,strand,partial)
-mrna_parent = {}                     # rna id -> (gene feature id, mrna_partial)
-all_loci = []                        # (chrom,start,end,strand) for every gene
-cds_for_prot = {}                    # protein_id -> {loc, parent, partial}
-
-with open(gff) as fh:
-    for line in fh:
-        if line.startswith("#"):
-            continue
-        f = line.rstrip("\n").split("\t")
-        if len(f) < 9:
-            continue
-        chrom, ftype, start, end, strand, a = f[0], f[2], f[3], f[4], f[6], f[8]
-        if ftype == "gene":
-            gid = attr(a, "ID")
-            loc = attr(a, "gene") or (gid[len("gene-"):] if gid and gid.startswith("gene-") else None)
-            tup = (chrom, int(start), int(end), strand, is_partial(a))
-            if gid:
-                genes_by_id[gid] = tup
-            if loc:
-                genes_by_loc[loc] = tup
-            all_loci.append((chrom, int(start), int(end), strand))
-        elif ftype in ("mRNA", "transcript"):
-            rid = attr(a, "ID")
-            if rid:
-                mrna_parent[rid] = (attr(a, "Parent"), is_partial(a))
-        elif ftype == "CDS":
-            pid = attr(a, "protein_id")
-            if pid and pid in cand:
-                d = cds_for_prot.setdefault(pid, {"loc": None, "parent": None, "partial": False})
-                d["loc"] = d["loc"] or attr(a, "gene")
-                d["parent"] = d["parent"] or attr(a, "Parent")
-                d["partial"] = d["partial"] or is_partial(a)
-
-# Protein lengths (residue counts) from the candidate protein FASTA.
-plen, name, ln = {}, None, 0
-if os.path.exists(prot_fa):
-    with open(prot_fa) as fh:
-        for line in fh:
-            if line.startswith(">"):
-                if name is not None:
-                    plen[name] = ln
-                name, ln = line[1:].split()[0], 0
-            else:
-                ln += len(line.strip())
-        if name is not None:
-            plen[name] = ln
-
-# n_TM from the RefSeq DeepTMHMM prediction (col1 = XP_ id, col5 = TM count).
-ntm = {}
-if os.path.exists(pred):
-    with open(pred) as fh:
-        for line in fh:
-            f = line.rstrip("\n").split("\t")
-            if len(f) < 5:
-                continue
-            try:
-                ntm[f[0]] = int(float(f[4]))
-            except ValueError:
-                continue
-
-def resolve(pid):
-    d = cds_for_prot.get(pid)
-    if not d:
-        return None
-    if d["loc"] and d["loc"] in genes_by_loc:
-        g, part = genes_by_loc[d["loc"]], d["partial"]
-    else:
-        gidf = None
-        if d["parent"] and d["parent"] in mrna_parent:
-            gidf = mrna_parent[d["parent"]][0]
-        if not (gidf and gidf in genes_by_id):
-            return None
-        g, part = genes_by_id[gidf], d["partial"]
-    mrna_part = mrna_parent[d["parent"]][1] if d["parent"] in mrna_parent else False
-    partial = g[4] or mrna_part or part
-    return g[0], g[1], g[2], g[3], partial
-
-n_written = 0
-unresolved = []
-with open(models_out, "w") as mf:
-    mf.write("#query\tchrom\tstart\tend\tstrand\tcomplete\tlength\tn_tm\n")
-    for pid in sorted(cand):
-        r = resolve(pid)
-        if r is None:
-            # Never silently drop a genome candidate (the module's never-drop
-            # contract): collect and fail loud after the loop. Unreachable on the
-            # RefSeq GFF (every protein-coding CDS carries gene= AND Parent=), but
-            # this keeps the stage as strict as reconcile_candidates.py's readers.
-            unresolved.append(pid)
-            continue
-        chrom, gs, ge, strand, partial = r
-        mf.write(f"{pid}\t{chrom}\t{gs}\t{ge}\t{strand}\t"
-                 f"{'partial' if partial else 'complete'}\t{plen.get(pid, 0)}\t{ntm.get(pid, 0)}\n")
-        n_written += 1
-
-with open(loci_out, "w") as lf:
-    for chrom, s, e, strand in all_loci:
-        lf.write(f"{chrom}\t{s}\t{e}\t{strand}\n")
-
-if unresolved:
-    sys.stderr.write(
-        f"ERROR: {len(unresolved)} RefSeq candidate(s) did not resolve to a gene "
-        f"locus in {gff} (a genome candidate would otherwise vanish silently): "
-        f"{', '.join(unresolved)}\n")
-    sys.exit(1)
-
-sys.stderr.write(f"refseq models: {n_written} written; refseq loci: {len(all_loci)}\n")
-PYEOF
+# The GFF walk lives in scripts/build_refseq_model_table.py (unit-tested): it
+# resolves each candidate XP_ accession to its gene coords via the CDS gene=
+# attribute or the Parent=rna- -> mRNA -> gene chain, and FAILS LOUD (nonzero,
+# aborting the stage under `set -e`) if any candidate can't be resolved so a
+# genome candidate is never silently dropped (the module's never-drop contract).
+python3 "${SCRIPTS_DIR}/build_refseq_model_table.py" \
+    --ids "$REFSEQ_CAND_IDS" \
+    --gff "$GENOME_GFF" \
+    --proteins "$REFSEQ_CAND_FA" \
+    --prediction "$REFSEQ_PRED" \
+    --models-out "$REFSEQ_MODELS_TSV" \
+    --loci-out "$REFSEQ_LOCI_TSV"
 
 # --- (c) Build the GMAP index once. ---
 GMAP_DB_DIR="${WORK}/gmap_index"
