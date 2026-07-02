@@ -151,6 +151,41 @@ def test_write_faa_all_missing_writes_empty_file(tmp_path):
     assert path.read_text() == ""
 
 
+def test_write_faa_returns_skipped_ids(tmp_path):
+    # write_faa RETURNS the reps that had no sequence (in gene order) so a
+    # representative absent from --proteins can never vanish silently.
+    genes = [
+        _gene(gene_id="g1", representative_id="ref_1"),
+        _gene(gene_id="g2", representative_id="missing_rep"),
+        _gene(gene_id="g3", representative_id="tx_9"),
+    ]
+    seqs = {"ref_1": "MAAAA", "tx_9": "MBBBB"}        # missing_rep absent
+    path = tmp_path / "out.faa"
+    skipped = rc.write_faa(genes, seqs, str(path))
+    assert skipped == ["missing_rep"]                 # exactly the 1 missing rep
+    # file-writing behavior unchanged: 2 records, the missing one absent.
+    headers = [ln for ln in path.read_text().splitlines() if ln.startswith(">")]
+    assert headers == [">ref_1", ">tx_9"]
+
+
+def test_main_warns_on_missing_representative_sequence(tmp_path, capsys):
+    # A representative absent from --proteins must produce a loud stderr
+    # WARNING (never a silent omission from the .faa, the stage-03/04 input).
+    txome = tmp_path / "txome.tsv"
+    txome.write_text("tx_A\t1\t300\t7\n")             # unplaced -> rep id "tx_A"
+    proteins = tmp_path / "proteins.faa"
+    proteins.write_text(">other_1\nMKKK\n")           # tx_A intentionally absent
+    out_dir = tmp_path / "out"
+    rc.main(["--txome-candidates", str(txome), "--proteins", str(proteins),
+             "--out-dir", str(out_dir)])
+    err = capsys.readouterr().err
+    assert "WARNING" in err
+    assert "tx_A" in err
+    # the omission is real: tx_A is not in the written .faa.
+    faa = (out_dir / "reconciled_candidates.faa").read_text()
+    assert ">tx_A" not in faa
+
+
 # ---- write_report ---------------------------------------------------------
 
 def test_write_report_case_counts_and_review_lists(tmp_path):
@@ -161,7 +196,7 @@ def test_write_report_case_counts_and_review_lists(tmp_path):
         _gene(gene_id="tx_placed_1", provenance="transcriptome_only",
               genome_locus="chr3:1-2:+"),
         _gene(gene_id="tx_unplaced_1", provenance="transcriptome_only",
-              genome_locus="unplaced"),
+              genome_locus="unplaced", qc_flags=("unplaced",)),
         _gene(gene_id="chimeric_1", provenance="both",
               genome_locus="chr4:1-2:+", qc_flags=("chimeric",)),
         _gene(gene_id="lowmargin_1", provenance="transcriptome_only",
@@ -181,6 +216,7 @@ def test_write_report_case_counts_and_review_lists(tmp_path):
     assert "- chimeric: 1" in text
     assert "- low_margin: 1" in text
     assert "- source_disagreement: 0" in text
+    assert "- unplaced: 1" in text                          # tx_unplaced_1
     # flagged review lists carry the right gene_ids ("- " => list line)
     assert "- chimeric_1" in text
     assert "- lowmargin_1" in text

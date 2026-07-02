@@ -38,6 +38,7 @@ import argparse
 import os
 import shutil
 import subprocess
+import sys
 from collections import defaultdict, namedtuple
 from dataclasses import dataclass, fields
 
@@ -60,6 +61,10 @@ class Placement:
     Frozen (immutable + hashable): a Placement is a value record, never
     mutated after construction, and Task 2's locus dedup needs it
     hashable — matching the repo's value-record convention.
+
+    ``score`` is parsed/collected by all four parsers (minimap2 mapq / GMAP
+    matches / miniprot score / BLASTp bitscore) but is currently unused by
+    any ranking or output — retained for debugging and possible future use.
     """
     query: str
     chrom: str
@@ -267,6 +272,14 @@ def parse_blastp_tab(path: str, coords: dict[str, tuple[str, int, int, str]]
     `coords` maps a subject RefSeq protein id to its gene locus
     `(chrom, start, end, strand)`. A subject id absent from `coords`
     is skipped (conservative — no genomic coordinates to place at).
+
+    RBH CONTRACT: the input file MUST already be filtered to
+    reciprocal-best-hit (RBH) pairs. This module does NOT enforce
+    reciprocity — it labels every gate-passing hit ``rbh`` (design §3/§6
+    require reciprocal-best-hit) without re-checking it. Establishing
+    reciprocity is the stage's responsibility: run BLASTp in both
+    directions and keep only the pairs that are each other's best hit
+    before passing the file here.
     """
     if not os.path.exists(path):
         return []
@@ -306,7 +319,17 @@ def best_and_margin(placements: list[Placement | None]
                      ) -> tuple[Placement | None, float]:
     """Return the best placement (by pct_identity) and its margin over
     the runner-up. margin = inf when there is exactly one placement;
-    (None, 0.0) when there are none."""
+    (None, 0.0) when there are none.
+
+    WARNING: this is a NAIVE per-placement best-vs-second margin over a raw
+    Placement list — it is NOT the §4 distinct-locus placement-gate margin.
+    That gate is ``_confident_placement`` (which first clusters placements
+    into distinct loci), and its margin is what the cascade and
+    ``ReconciledGene.best_vs_second_margin`` actually use. This helper does
+    NOT cluster by locus, so two placements of one transcript at the SAME
+    locus look like a spurious runner-up here. It is retained for the Task-1
+    API but is unused by the cascade — do not use it as the placement gate.
+    """
     ps = sorted([p for p in placements if p], key=lambda p: p.pct_identity, reverse=True)
     if not ps:
         return None, 0.0
@@ -1005,7 +1028,8 @@ def write_tsv(genes: list[ReconciledGene], path: str) -> None:
     _write_text(path, "\n".join(lines) + "\n")
 
 
-def write_faa(genes: list[ReconciledGene], seqs: dict[str, str], path: str) -> None:
+def write_faa(genes: list[ReconciledGene], seqs: dict[str, str], path: str
+              ) -> list[str]:
     """Write the representative protein FASTA (``reconciled_candidates.faa``).
 
     ``seqs`` maps ``representative_id`` -> protein sequence. One record per
@@ -1013,15 +1037,26 @@ def write_faa(genes: list[ReconciledGene], seqs: dict[str, str], path: str) -> N
     ``>{representative_id}``, sequence on the next line); genes whose
     representative is absent are skipped rather than raising. Records follow
     the given gene order; an all-missing set writes an empty file.
+
+    Returns the list of representative ids that had NO sequence in ``seqs``
+    (in gene order). The ``.faa`` is the actual downstream input (stage 03
+    orthology -> 04 phylogeny), so a representative missing from
+    ``--proteins`` would otherwise vanish with no signal — most dangerous for
+    exactly the recovered/unplaced genes this feature exists to surface.
+    ``main`` warns on a non-empty return; supplying a complete ``--proteins``
+    is the stage's responsibility, so the omission is surfaced, not fatal.
     """
     lines: list[str] = []
+    skipped: list[str] = []
     for g in genes:
         seq = seqs.get(g.representative_id)
         if seq is None:
+            skipped.append(g.representative_id)
             continue
         lines.append(f">{g.representative_id}")
         lines.append(seq)
     _write_text(path, "\n".join(lines) + "\n" if lines else "")
+    return skipped
 
 
 def write_report(genes: list[ReconciledGene], path: str) -> None:
@@ -1039,7 +1074,7 @@ def write_report(genes: list[ReconciledGene], path: str) -> None:
                       and g.genome_locus == "unplaced")
 
     flag_names = ("chimeric", "source_disagreement", "partial_only",
-                  "low_margin", "multi_mapping")
+                  "low_margin", "multi_mapping", "unplaced")
     flag_counts = {f: sum(1 for g in genes if f in g.qc_flags) for f in flag_names}
 
     chimeric_ids = [g.gene_id for g in genes if "chimeric" in g.qc_flags]
@@ -1183,7 +1218,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--minimap2-paf", help="minimap2 PAF (spliced) placements")
     p.add_argument("--gmap-gff", help="GMAP gff3_gene placements")
     p.add_argument("--miniprot-gff", help="miniprot GFF3 placements")
-    p.add_argument("--blastp-tab", help="BLASTp outfmt6+qcovs (RBH) placements")
+    p.add_argument("--blastp-tab",
+                   help="BLASTp outfmt6+qcovs placements. The file MUST "
+                        "already be filtered to reciprocal-best-hit (RBH) "
+                        "pairs: reciprocity is the stage's responsibility (run "
+                        "BLASTp both directions, keep only reciprocal bests). "
+                        "This module labels every gate-passing hit 'rbh' "
+                        "without re-checking reciprocity.")
     # Candidate / gene-model inputs.
     p.add_argument("--txome-candidates", required=True,
                    help="TSV: query, complete, length, n_tm")
@@ -1242,7 +1283,14 @@ def main(argv=None) -> int:
 
     os.makedirs(args.out_dir, exist_ok=True)
     write_tsv(genes, os.path.join(args.out_dir, "reconciled_candidates.tsv"))
-    write_faa(genes, seqs, os.path.join(args.out_dir, "reconciled_candidates.faa"))
+    skipped = write_faa(genes, seqs,
+                        os.path.join(args.out_dir, "reconciled_candidates.faa"))
+    if skipped:
+        # Non-fatal, but loud: a representative absent from --proteins is
+        # omitted from the .faa (the stage-03/04 input). Never silent.
+        print(f"WARNING: {len(skipped)} representative(s) had no sequence in "
+              f"--proteins and were omitted from reconciled_candidates.faa: "
+              f"{', '.join(skipped)}", file=sys.stderr)
     write_report(genes, os.path.join(args.out_dir, "reconciliation_report.md"))
     return 0
 
