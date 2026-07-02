@@ -5,17 +5,21 @@ Merges the genome-derived (Berghia RefSeq protein) chemoreceptor
 candidate track with the transcriptome-derived track into one
 non-redundant, genome-anchored, provenance-labeled gene set.
 
-Task 1 (this pass) implements only the first stage of the pipeline:
+The module implements the reconciliation pipeline end to end:
 
-    parse placements -> %match gate
+    parse placements -> %match gate -> group loci / collapse isoforms
+    -> pick representatives + provenance + QC flags
+    -> placement cascade -> reconcile
 
-i.e. the ``Placement`` model, the four aligner-output parsers
-(minimap2 PAF, GMAP GFF3, miniprot GFF3, BLASTp outfmt6+qcovs), and
-the absolute + best-vs-second-margin gate functions. Task 2 adds
-locus grouping + isoform collapse (``PlacedModel``, ``Locus``,
-``group_into_loci``). Representative selection, the placement
-cascade, and the output writers are added in later tasks against
-this same module.
+concretely: the ``Placement`` model + four aligner-output parsers
+(minimap2 PAF, GMAP GFF3, miniprot GFF3, BLASTp outfmt6+qcovs) and the
+absolute + best-vs-second-margin gate functions (``pass_gate`` /
+``best_and_margin``); ``group_into_loci`` (``PlacedModel``, ``Locus``)
+for same-strand overlap grouping + isoform collapse; representative
+selection (``pick_representative``), provenance labeling, and ``qc_flags``;
+and the placement cascade (``concordant`` / ``place_transcript``) feeding
+the top-level ``reconcile`` that emits one ``ReconciledGene`` per gene.
+The output writers are added in a later task against this same module.
 
 All functions here are stdlib-only with no network access. The one
 optional subprocess is ``group_into_loci``'s ``bedtools merge`` fast
@@ -574,12 +578,19 @@ def qc_flags(locus: Locus, *, refseq_genes=None, margin: float | None = None,
     * ``source_disagreement`` — a ``both`` locus whose genome-side and
       txome-side representatives differ in length by more than
       ``source_disagreement_frac``.
-    * ``low_margin`` — the best-vs-second placement %identity ``margin``
-      is below ``low_margin_threshold`` (ignored when ``margin`` is None,
-      i.e. a single unambiguous placement).
-    * ``multi_mapping`` — caller-supplied: the transcript had >=2
-      gate-passing loci (ambiguous placement; only Task 4 can know this,
-      so it is passed in rather than re-derived here).
+    * ``low_margin`` — the SOFTER of the two-tier margin control (design §4):
+      the distinct-locus best-vs-second ``margin`` is below
+      ``low_margin_threshold``. The HARD tier (``min_margin``) is enforced
+      earlier by ``place_transcript`` — a placement below ``min_margin`` is
+      rejected as ambiguous and never reaches here — so this flags a gene
+      that WAS placed (cleared ``min_margin``) but whose margin is still
+      thin. Ignored when ``margin`` is None (a single unambiguous placement,
+      or a RefSeq-native / unplaced gene with no margin). With the default
+      ``min_margin == low_margin_threshold`` it never fires on a placed gene.
+    * ``multi_mapping`` — caller-supplied: the transcript had >=2 distinct
+      gate-passing loci. This can be True even on a CONFIDENT placement (the
+      top locus beat the runner-up by >= ``min_margin``); it is passed in
+      because only Task 4's cascade knows the distinct-locus count.
 
     ``low_margin_threshold`` (and the margin scale generally) is a
     Task-8-calibrated placeholder — see the module-level constants.
@@ -620,13 +631,25 @@ class Thresholds:
     """The %match gate + margin cutoffs (design §4).
 
     ``min_id``/``min_cov`` are the absolute pct_identity / pct_coverage bars
-    every placement must clear (``pass_gate``). ``low_margin_threshold`` is
-    the best-vs-second %identity margin below which a placement is *flagged*
-    ``low_margin`` (a soft QC signal — a thin margin between near-identical
-    LSE paralogs must NOT drop a real placement, so the cascade gates on
-    id+cov only and surfaces the margin rather than hard-filtering on it).
-    ``min_margin`` is reserved for the design-§4 hard-margin option and is
-    not enforced by the current cascade.
+    every placement must clear (``pass_gate``).
+
+    The best-vs-second-best margin is a TWO-TIER control, both measured
+    across DISTINCT LOCI (top-locus identity minus the runner-up distinct
+    locus's identity — never within a single locus):
+
+    * ``min_margin`` — the HARD gate (design §4): when a cascade step places
+      a transcript at >=2 distinct loci and the top locus does NOT beat the
+      runner-up by at least ``min_margin``, the placement is AMBIGUOUS and
+      the step yields nothing (the cascade falls through, and the transcript
+      is left unplaced if no method resolves it). A single distinct locus
+      has infinite margin and always clears this gate.
+    * ``low_margin_threshold`` — the softer ADVISORY tier: a transcript that
+      cleared ``min_margin`` but whose distinct-locus margin is still below
+      ``low_margin_threshold`` is *placed* and merely *flagged* ``low_margin``
+      (design §8). With the default ``min_margin == low_margin_threshold``
+      this never fires on a placed gene; Task 8 may raise
+      ``low_margin_threshold`` above ``min_margin`` to surface thin-but-kept
+      placements.
 
     All four are Task-8-calibrated placeholders (mirroring the module-level
     threshold constants); the defaults only make the type usable in
@@ -640,9 +663,10 @@ class Thresholds:
 
 # The cascade's per-transcript verdict. ``placement`` is the chosen
 # ``Placement`` (None when unplaced); ``method``/``confidence`` name the
-# cascade step that won; ``margin`` (best-vs-second %identity over that
-# step's gate-passing placements) and ``multi_mapping`` (>=2 distinct
-# gate-passing loci) feed qc_flags downstream.
+# cascade step that won; ``margin`` is the best-vs-second-best identity
+# margin measured across DISTINCT LOCI (inf for a single distinct locus,
+# None when unplaced) — the same value the §4 hard gate is applied to;
+# ``multi_mapping`` (>=2 distinct gate-passing loci) feeds qc_flags.
 PlacementResult = namedtuple(
     "PlacementResult",
     ["placement", "method", "confidence", "margin", "multi_mapping"])
@@ -675,9 +699,16 @@ def concordant(mm: Placement, gmap: Placement, min_id: float, min_cov: float
 def _concordant_placements(mm: list[Placement], gmap: list[Placement],
                            min_id: float, min_cov: float) -> list[Placement]:
     """Every distinct agreed placement over the minimap2 x GMAP
-    cross-product. De-duped (order-preserving) so a single minimap2 hit that
-    agrees with several GMAP hits at one locus contributes ONE agreed
-    placement, not a spurious cluster that would fake a low margin."""
+    cross-product (order-preserving, de-duped on exact equality).
+
+    Note the agreed placement of a pair is the higher-identity side, so a
+    single minimap2 hit that agrees with several *higher-identity* GMAP hits
+    at ONE locus yields several DISTINCT agreed placements at that same
+    locus (each GMAP hit), not one — exact-equality de-dup does not collapse
+    them. That is harmless: the distinct-locus clustering in
+    ``_confident_placement`` folds those co-located placements back into a
+    single locus, so the §4 margin gate sees one locus (margin inf), never a
+    spurious within-locus runner-up."""
     agreed: list[Placement] = []
     for m in mm:
         for g in gmap:
@@ -687,48 +718,87 @@ def _concordant_placements(mm: list[Placement], gmap: list[Placement],
     return agreed
 
 
-def _distinct_locus_count(placements: list[Placement]) -> int:
-    """Number of distinct genomic loci spanned by ``placements``: same
-    chrom+strand and >0-base overlap (Task-2 half-open contract) cluster
-    into one locus. >=2 distinct loci means the transcript mapped
-    ambiguously (the ``multi_mapping`` QC flag). Mirrors
-    ``_clusters_via_sweep`` but only counts, and works on ``Placement``s."""
+def _cluster_placements(placements: list[Placement]) -> list[list[Placement]]:
+    """Cluster placements into DISTINCT genomic loci: same chrom+strand and
+    >0-base overlap (Task-2 half-open contract) fold into one locus. Mirrors
+    ``_clusters_via_sweep`` but for ``Placement``s. Used both to count loci
+    (``multi_mapping`` = >=2) and to compute the distinct-locus margin the
+    §4 gate is applied to."""
     by_key: dict[tuple[str, str], list[Placement]] = defaultdict(list)
     for p in placements:
         by_key[(p.chrom, p.strand)].append(p)
-    count = 0
+    clusters: list[list[Placement]] = []
     for key in by_key:
+        cluster: list[Placement] = []
         cluster_end: int | None = None
         for p in sorted(by_key[key], key=lambda p: (p.start, p.end)):
-            if cluster_end is not None and p.start < cluster_end:
+            if cluster and cluster_end is not None and p.start < cluster_end:
+                cluster.append(p)
                 cluster_end = max(cluster_end, p.end)
             else:
-                count += 1
+                if cluster:
+                    clusters.append(cluster)
+                cluster = [p]
                 cluster_end = p.end
-    return count
+        if cluster:
+            clusters.append(cluster)
+    return clusters
 
 
-def _result_from(candidates: list[Placement], method: str, confidence: str
-                 ) -> PlacementResult:
-    """Assemble a PlacementResult from a non-empty list of confident,
-    gate-passing placements at one cascade step: best by pct_identity,
-    margin over the runner-up, and the multi-mapping determination."""
-    best, margin = best_and_margin(candidates)
+def _identity_rank(p: Placement) -> tuple:
+    """Deterministic ordering key: highest pct_identity first, then a stable
+    coordinate/method tiebreak so ties never depend on input order."""
+    return (-p.pct_identity, p.chrom, p.start, p.end, p.strand, p.method)
+
+
+def _confident_placement(candidates: list[Placement], method: str,
+                         confidence: str, min_margin: float
+                         ) -> PlacementResult | None:
+    """Turn one cascade step's gate-passing placements into a CONFIDENT
+    PlacementResult, or None when the step cannot confidently place.
+
+    Placements are clustered into distinct loci (``_cluster_placements``);
+    each locus is represented by its highest-identity placement. The step's
+    ``placement`` is the top locus's best placement and ``margin`` is the
+    top-vs-second-best DISTINCT-LOCUS identity margin (inf for a single
+    locus). The step is confident only when a gate-passing best exists AND
+    (there is a single distinct locus OR the margin clears ``min_margin``,
+    the §4 hard gate). Otherwise — no candidates, or >=2 distinct loci whose
+    margin is below ``min_margin`` (ambiguous) — it returns None so the
+    caller falls through to the next method."""
+    if not candidates:
+        return None
+    clusters = _cluster_placements(candidates)
+    ranked = sorted((min(c, key=_identity_rank) for c in clusters),
+                    key=_identity_rank)
+    best = ranked[0]
+    margin = (float("inf") if len(ranked) == 1
+              else ranked[0].pct_identity - ranked[1].pct_identity)
+    multi = len(ranked) >= 2
+    if multi and margin < min_margin:
+        return None
     return PlacementResult(placement=best, method=method, confidence=confidence,
-                           margin=margin,
-                           multi_mapping=_distinct_locus_count(candidates) >= 2)
+                           margin=margin, multi_mapping=multi)
 
 
 def place_transcript(query: str, mm: list[Placement], gmap: list[Placement],
                      miniprot: list[Placement], rbh: list[Placement],
                      thresholds: Thresholds) -> PlacementResult:
     """Run the placement cascade for one transcript (design §3), stopping at
-    the first confident step:
+    the first step that places it CONFIDENTLY:
 
       1. concordant minimap2 + GMAP  -> confidence "high"
       2. gate-passing miniprot       -> confidence "medium"
       3. gate-passing RBH (BLASTp)   -> confidence "low"
       4. none of the above           -> unplaced (never dropped)
+
+    A step is confident only when it clears the %match gate AND the §4
+    distinct-locus margin gate (``_confident_placement``): if a step places
+    the transcript at >=2 distinct loci whose top-vs-second identity margin
+    is below ``thresholds.min_margin``, the placement is AMBIGUOUS and the
+    cascade falls through to the next method rather than committing to an
+    arbitrary locus. If every method is empty or ambiguous the transcript is
+    unplaced (retained, never dropped).
 
     ``query`` names the transcript being placed — the four lists are its
     per-method hits; coordinates come from the ``Placement`` objects, so the
@@ -736,14 +806,17 @@ def place_transcript(query: str, mm: list[Placement], gmap: list[Placement],
     self-documenting and the API stable for the reconcile step)."""
     t = thresholds
     agreed = _concordant_placements(mm, gmap, t.min_id, t.min_cov)
-    if agreed:
-        return _result_from(agreed, "minimap2+gmap_concordant", "high")
+    res = _confident_placement(agreed, "minimap2+gmap_concordant", "high", t.min_margin)
+    if res is not None:
+        return res
     mp = [p for p in miniprot if pass_gate(p, t.min_id, t.min_cov)]
-    if mp:
-        return _result_from(mp, "miniprot", "medium")
+    res = _confident_placement(mp, "miniprot", "medium", t.min_margin)
+    if res is not None:
+        return res
     rb = [p for p in rbh if pass_gate(p, t.min_id, t.min_cov)]
-    if rb:
-        return _result_from(rb, "rbh", "low")
+    res = _confident_placement(rb, "rbh", "low", t.min_margin)
+    if res is not None:
+        return res
     return PlacementResult(placement=None, method="unplaced", confidence="none",
                            margin=None, multi_mapping=False)
 

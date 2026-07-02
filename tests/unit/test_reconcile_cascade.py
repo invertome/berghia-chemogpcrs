@@ -207,30 +207,99 @@ def test_single_confident_placement_has_infinite_margin_not_multi():
     assert res.multi_mapping is False
 
 
-def test_two_distinct_concordant_loci_flag_multi_mapping_and_margin():
-    # the transcript places confidently at TWO genomic loci (chr1 and chr5).
-    # -> multi_mapping True, and margin = best-vs-second identity (98 - 97).
-    mm = [_pl(chrom="chr1", start=1000, end=2000, pid=98.0, cov=95.0, method="minimap2"),
-          _pl(chrom="chr5", start=1000, end=2000, pid=97.0, cov=95.0, method="minimap2")]
-    gmap = [_pl(chrom="chr1", start=1010, end=1990, pid=96.0, cov=94.0, method="gmap"),
-            _pl(chrom="chr5", start=1005, end=1995, pid=96.0, cov=94.0, method="gmap")]
-    res = rc.place_transcript("q", mm, gmap, [], [], THR)
-    assert res.multi_mapping is True
-    assert abs(res.margin - 1.0) < 1e-9
-    assert res.placement.chrom == "chr1"   # the higher-identity locus
-
-
-def test_duplicate_concordant_agreements_do_not_fake_low_margin():
+def test_duplicate_concordant_agreements_stay_single_locus():
     # one minimap2 hit concordant with TWO overlapping gmap hits at the SAME
-    # locus -> both pairs agree on the SAME minimap2 placement. De-duping
-    # keeps a single agreed placement (margin inf, not a spurious 0.0 that
-    # would trip low_margin), and one locus (not multi_mapping).
+    # locus -> both pairs agree on the SAME (higher-identity minimap2)
+    # placement. Distinct-locus clustering keeps this ONE locus: margin inf,
+    # not multi_mapping.
     mm = [_pl(chrom="chr1", start=1000, end=2000, pid=99.0, cov=95.0, method="minimap2")]
     gmap = [_pl(chrom="chr1", start=1010, end=1990, pid=97.0, cov=94.0, method="gmap"),
             _pl(chrom="chr1", start=1020, end=1980, pid=96.0, cov=94.0, method="gmap")]
     res = rc.place_transcript("q", mm, gmap, [], [], THR)
     assert res.margin == float("inf")
     assert res.multi_mapping is False
+
+
+# ---- place_transcript: §4 distinct-locus margin GATE ----------------------
+
+def test_two_distinct_loci_margin_above_min_is_confident_multi_mapping():
+    # two distinct concordant loci (chr1 id98, chr5 id95); the top locus
+    # beats the runner-up by 3.0 >= min_margin 2.0 -> CONFIDENT at the top
+    # (chr1) locus, and still multi_mapping (>=2 distinct loci). Both aligners
+    # clear the id gate at BOTH loci (chr5 gmap id95, not below the bar).
+    mm = [_pl(chrom="chr1", start=1000, end=2000, pid=98.0, cov=95.0, method="minimap2"),
+          _pl(chrom="chr5", start=1000, end=2000, pid=95.0, cov=95.0, method="minimap2")]
+    gmap = [_pl(chrom="chr1", start=1010, end=1990, pid=97.0, cov=94.0, method="gmap"),
+            _pl(chrom="chr5", start=1005, end=1995, pid=95.0, cov=94.0, method="gmap")]
+    res = rc.place_transcript("q", mm, gmap, [], [], THR)
+    assert res.method == "minimap2+gmap_concordant" and res.confidence == "high"
+    assert res.placement.chrom == "chr1"          # the top-identity locus
+    assert res.multi_mapping is True
+    assert abs(res.margin - 3.0) < 1e-9           # 98 - 95 across distinct loci
+
+
+def test_two_distinct_loci_margin_below_min_is_ambiguous_falls_through():
+    # two near-tie concordant loci (chr1 id98, chr5 id97); margin 1.0 <
+    # min_margin 2.0 -> the concordance step is AMBIGUOUS (the §4 hard gate
+    # rejects it) and the cascade falls through to miniprot. This test FAILS
+    # if the margin gate is removed (concordance would win at chr1 instead).
+    mm = [_pl(chrom="chr1", start=1000, end=2000, pid=98.0, cov=95.0, method="minimap2"),
+          _pl(chrom="chr5", start=1000, end=2000, pid=97.0, cov=95.0, method="minimap2")]
+    gmap = [_pl(chrom="chr1", start=1010, end=1990, pid=97.0, cov=94.0, method="gmap"),
+            _pl(chrom="chr5", start=1005, end=1995, pid=96.0, cov=94.0, method="gmap")]
+    miniprot = [_pl(chrom="chr1", start=1000, end=2000, pid=96.0, cov=91.0, method="miniprot")]
+    res = rc.place_transcript("q", mm, gmap, miniprot, [], THR)
+    assert res.method == "miniprot" and res.confidence == "medium"
+
+
+def test_two_distinct_loci_margin_at_min_is_confident_boundary():
+    # margin exactly == min_margin (2.0) clears the gate (>= is inclusive).
+    mm = [_pl(chrom="chr1", start=1000, end=2000, pid=98.0, cov=95.0, method="minimap2"),
+          _pl(chrom="chr5", start=1000, end=2000, pid=96.0, cov=95.0, method="minimap2")]
+    gmap = [_pl(chrom="chr1", start=1010, end=1990, pid=97.0, cov=94.0, method="gmap"),
+            _pl(chrom="chr5", start=1005, end=1995, pid=95.0, cov=94.0, method="gmap")]
+    res = rc.place_transcript("q", mm, gmap, [], [], THR)
+    assert res.method == "minimap2+gmap_concordant"
+    assert abs(res.margin - 2.0) < 1e-9
+
+
+def test_fully_ambiguous_cascade_is_unplaced_never_dropped():
+    # concordance ambiguous (2 loci, margin 1.0 < 2.0) and NO protein /
+    # homology fallback -> unplaced (retained, not dropped).
+    mm = [_pl(chrom="chr1", start=1000, end=2000, pid=98.0, cov=95.0, method="minimap2"),
+          _pl(chrom="chr5", start=1000, end=2000, pid=97.0, cov=95.0, method="minimap2")]
+    gmap = [_pl(chrom="chr1", start=1010, end=1990, pid=97.0, cov=94.0, method="gmap"),
+            _pl(chrom="chr5", start=1005, end=1995, pid=96.0, cov=94.0, method="gmap")]
+    res = rc.place_transcript("q", mm, gmap, [], [], THR)
+    assert res.placement is None and res.method == "unplaced"
+
+
+def test_single_locus_multiple_within_locus_alignments_is_confident_inf_margin():
+    # THE spec-review case: a lone minimap2 id96 hit agrees with TWO
+    # higher-identity gmap hits (id97, id98) at ONE locus -> TWO agreed
+    # placements at the SAME locus. Distinct-locus clustering collapses them
+    # to one locus (margin inf), so the transcript is placed CONFIDENTLY at
+    # the best within-locus alignment (id98), NOT spuriously unplaced by a
+    # within-locus "margin" of 1.0.
+    mm = [_pl(chrom="chr1", start=1000, end=2000, pid=96.0, cov=95.0, method="minimap2")]
+    gmap = [_pl(chrom="chr1", start=1010, end=1990, pid=97.0, cov=94.0, method="gmap"),
+            _pl(chrom="chr1", start=1020, end=1980, pid=98.0, cov=94.0, method="gmap")]
+    res = rc.place_transcript("q", mm, gmap, [], [], THR)
+    assert res.method == "minimap2+gmap_concordant" and res.confidence == "high"
+    assert res.margin == float("inf")
+    assert res.multi_mapping is False
+    assert res.placement.pct_identity == 98.0     # best within the single locus
+
+
+def test_miniprot_ambiguous_two_loci_falls_through_to_rbh():
+    # the margin gate applies at EVERY cascade step, not just concordance:
+    # miniprot lands two near-tie distinct loci (margin 1.0 < 2.0) ->
+    # ambiguous -> RBH resolves it unambiguously.
+    miniprot = [_pl(chrom="chr1", start=1000, end=2000, pid=98.0, cov=95.0, method="miniprot"),
+                _pl(chrom="chr5", start=1000, end=2000, pid=97.0, cov=95.0, method="miniprot")]
+    rbh = [_pl(chrom="chr8", start=1000, end=2000, pid=96.0, cov=93.0, method="blastp")]
+    res = rc.place_transcript("q", [], [], miniprot, rbh, THR)
+    assert res.method == "rbh" and res.confidence == "low"
 
 
 # ---- PlacementResult shape ------------------------------------------------
@@ -309,6 +378,8 @@ def test_reconcile_both_gene():
     assert g.placement_method == "minimap2+gmap_concordant"
     assert g.placement_confidence == "high"
     assert g.pct_identity == 98.0 and g.pct_coverage == 95.0
+    # single distinct locus -> distinct-locus margin is inf in the output.
+    assert g.best_vs_second_margin == float("inf")
     assert g.completeness == "complete"
     assert g.n_tm == 7
     assert g.transcriptome_isoform_ids == ("Bst_both",)
@@ -377,3 +448,23 @@ def test_reconcile_candidate_with_no_placement_entry_is_unplaced():
     assert g.placement_method == "unplaced"
     assert g.completeness == "partial"
     assert "unplaced" in g.qc_flags
+
+
+def test_reconcile_multi_locus_confident_carries_finite_distinct_locus_margin():
+    # a transcript confidently placed at its top of TWO distinct loci
+    # (chr1 id98 beats chr7 id95 by 3.0 >= min_margin): the output row is at
+    # the top locus, carries the FINITE distinct-locus margin, and is flagged
+    # multi_mapping. Pins that the §4 distinct-locus margin flows to output.
+    c = rc.Candidate("Bst_multi", complete=True, length=300, n_tm=6)
+    placements = {"Bst_multi": {
+        "minimap2": [_pl("Bst_multi", "chr1", 1000, 2000, "+", 98.0, 95.0, "minimap2"),
+                     _pl("Bst_multi", "chr7", 1000, 2000, "+", 95.0, 95.0, "minimap2")],
+        "gmap":     [_pl("Bst_multi", "chr1", 1010, 1990, "+", 97.0, 94.0, "gmap"),
+                     _pl("Bst_multi", "chr7", 1005, 1995, "+", 95.0, 94.0, "gmap")],
+    }}
+    genes = rc.reconcile([c], [], placements, [], rc.Thresholds())
+    assert len(genes) == 1
+    g = genes[0]
+    assert g.genome_locus == "chr1:1000-2000:+"          # the top locus
+    assert abs(g.best_vs_second_margin - 3.0) < 1e-9     # 98 - 95 distinct-locus
+    assert "multi_mapping" in g.qc_flags
