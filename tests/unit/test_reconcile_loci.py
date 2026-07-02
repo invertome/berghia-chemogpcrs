@@ -19,7 +19,10 @@ monkeypatched parity test) exercises the pure-Python path.
 """
 from __future__ import annotations
 
+import shutil
 from types import SimpleNamespace
+
+import pytest
 
 import reconcile_candidates as rc
 
@@ -46,11 +49,23 @@ def test_placed_model_source_is_free_form_string():
 def test_locus_fields_and_member_list():
     pm1 = rc.PlacedModel("a", "chr1", 100, 400, "+", source="genome")
     pm2 = rc.PlacedModel("b", "chr1", 300, 600, "+", source="txome")
-    locus = rc.Locus("chr1", 100, 600, "+", [pm1, pm2])
+    locus = rc.Locus("chr1", 100, 600, "+", (pm1, pm2))
     assert locus.chrom == "chr1"
     assert locus.start == 100 and locus.end == 600
     assert locus.strand == "+"
-    assert locus.members == [pm1, pm2]
+    assert locus.members == (pm1, pm2)
+
+
+def test_locus_is_hashable_and_members_are_immutable_tuple():
+    # Locus advertises the same value-record contract as Placement/
+    # PlacedModel: frozen + hashable. `members` is a tuple (not a list),
+    # so the locus can't be mutated in place and can be used as a set/
+    # dict key (Tasks 3-4 do exactly that).
+    pm = rc.PlacedModel("a", "chr1", 100, 400, "+", source="genome")
+    locus = rc.Locus("chr1", 100, 400, "+", (pm,))
+    assert isinstance(locus.members, tuple)
+    assert isinstance(hash(locus), int)        # no longer raises
+    assert {locus, locus} == {locus}           # usable in sets/dicts
 
 
 # ---- group_into_loci: degenerate inputs -----------------------------------
@@ -64,7 +79,7 @@ def test_group_single_record_is_one_locus_one_member():
     loci = rc.group_into_loci([pm])
     assert len(loci) == 1
     (locus,) = loci
-    assert locus.members == [pm]
+    assert locus.members == (pm,)
     assert locus.chrom == "chr1" and locus.strand == "+"
     assert locus.start == 100 and locus.end == 500
 
@@ -164,6 +179,11 @@ def test_locus_members_sorted_by_query():
     t1 = rc.PlacedModel("t1", "chr1", 200, 600, "+", source="genome")
     (locus,) = rc.group_into_loci([t9, t1])
     assert [m.query for m in locus.members] == ["t1", "t9"]
+    # span is min(start)/max(end) across members, NOT members[0]/members[-1]:
+    # here the min start (100) belongs to the LAST member by query (t9) and
+    # the max end (600) to the FIRST (t1), so a members[0].start or
+    # members[-1].end shortcut computes the wrong span and is caught.
+    assert locus.start == 100 and locus.end == 600
 
 
 # ---- bedtools path parity (monkeypatched; no binary needed) ---------------
@@ -219,3 +239,24 @@ def test_clusters_from_merge_output_maps_collapsed_indices_back_to_records():
     out = "chr1\t100\t600\t+\t0,1\nchr2\t10\t90\t-\t2\n"
     clusters = rc._clusters_from_merge_output(out, records)
     assert [sorted(m.query for m in c) for c in clusters] == [["r0", "r1"], ["r2"]]
+
+
+@pytest.mark.skipif(shutil.which("bedtools") is None, reason="bedtools not installed")
+def test_bedtools_real_binary_matches_python_path(monkeypatch):
+    """Parity against a REAL bedtools binary. Skipped where bedtools is
+    absent (e.g. this workstation); runs on Unity/CI to guard the live
+    shell-out path. Includes a book-ended pair (the iso cluster ends at
+    600 and ``bookend`` starts at 600 -> 0 shared bases) to prove
+    ``-d -1`` keeps them separate on the real binary, plus an
+    opposite-strand and a different-chromosome model."""
+    records = [
+        rc.PlacedModel("iso_a", "chr1", 100, 500, "+", source="genome"),
+        rc.PlacedModel("iso_b", "chr1", 400, 600, "+", source="txome"),
+        rc.PlacedModel("bookend", "chr1", 600, 900, "+", source="genome"),
+        rc.PlacedModel("rev", "chr1", 300, 700, "-", source="txome"),
+        rc.PlacedModel("other", "chr2", 100, 400, "+", source="genome"),
+    ]
+    bedtools_loci = rc.group_into_loci(records)                    # real binary
+    monkeypatch.setattr(rc.shutil, "which", lambda _binary: None)
+    python_loci = rc.group_into_loci(records)                     # forced pure-Python
+    assert bedtools_loci == python_loci

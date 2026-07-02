@@ -336,14 +336,17 @@ class PlacedModel:
 class Locus:
     """One locus (= gene): a same-chromosome, same-strand overlap cluster
     of ``PlacedModel``s. ``start``/``end`` span ``min(member starts)`` /
-    ``max(member ends)``; ``members`` is the list of models in the locus,
-    sorted by ``query`` for deterministic output.
+    ``max(member ends)``; ``members`` is the tuple of models in the locus,
+    sorted by ``query`` for deterministic output. A tuple (not a list)
+    keeps ``Locus`` genuinely immutable and hashable — matching the
+    ``Placement``/``PlacedModel`` value-record contract, so Tasks 3-4 can
+    use loci in sets/dicts.
     """
     chrom: str
     start: int
     end: int
     strand: str
-    members: list[PlacedModel]
+    members: tuple[PlacedModel, ...]
 
 
 def group_into_loci(records: list[PlacedModel]) -> list[Locus]:
@@ -384,7 +387,7 @@ def _locus_from_members(members: list[PlacedModel]) -> Locus:
                  start=min(m.start for m in members),
                  end=max(m.end for m in members),
                  strand=members[0].strand,
-                 members=sorted(members, key=lambda m: m.query))
+                 members=tuple(sorted(members, key=lambda m: m.query)))
 
 
 def _clusters_via_sweep(records: list[PlacedModel]) -> list[list[PlacedModel]]:
