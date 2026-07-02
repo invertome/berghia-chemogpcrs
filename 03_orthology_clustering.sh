@@ -27,8 +27,12 @@ log "Starting orthology clustering."
 
 # --- Prepare OrthoFinder input: one FASTA per species ---
 
-# Berghia chemoreceptor candidates (stage 02 output — unchanged)
-cp "${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa" "${RESULTS_DIR}/orthogroups/input/${BERGHIA_TAXID}_berghia.fa" || { log "Error: Failed to copy Berghia GPCR FASTA"; exit 1; }
+# Berghia chemoreceptor candidates: reconciled genome-track set when
+# RUN_GENOME_TRACK=1 and stage 02c has produced it, else the stage-02
+# transcriptome candidate set (byte-identical to legacy). Source is
+# toggle-driven via berghia_candidate_fasta (functions.sh).
+BERGHIA_CANDS="$(berghia_candidate_fasta)"
+cp "${BERGHIA_CANDS}" "${RESULTS_DIR}/orthogroups/input/${BERGHIA_TAXID}_berghia.fa" || { log "Error: Failed to copy Berghia GPCR FASTA"; exit 1; }
 
 # --- Scan-derived candidates (P5 / P6) ---
 # SCAN_DERIVED_CANDIDATES_DIR must exist and contain at least one

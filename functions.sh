@@ -556,6 +556,23 @@ check_dir() {
     done
 }
 
+# --- Resolve the Berghia Candidate FASTA Source (genome-track aware) ---
+# Echoes the Berghia candidate FASTA that downstream stages (03 orthology
+# clustering) should consume. When the genome track is enabled (RUN_GENOME_TRACK
+# != 0, mirroring stage 02c's toggle) AND stage 02c has written the reconciled
+# set, that reconciled FASTA is the source; otherwise the legacy stage-02
+# transcriptome candidate set — byte-identical to pre-genome-track behavior.
+# Pure: echoes a path only, no side effects.
+berghia_candidate_fasta() {
+    local reconciled="${RESULTS_DIR}/reconciliation/reconciled_candidates.faa"
+    local legacy="${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa"
+    if [ "${RUN_GENOME_TRACK:-1}" != "0" ] && [ -f "$reconciled" ]; then
+        printf '%s\n' "$reconciled"
+    else
+        printf '%s\n' "$legacy"
+    fi
+}
+
 # --- Detect Available Resources ---
 # Sets DETECTED_CPUS and DETECTED_MEM based on system
 detect_resources() {
