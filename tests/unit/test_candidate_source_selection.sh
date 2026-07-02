@@ -34,9 +34,15 @@ LEGACY="$RESULTS_DIR/chemogpcrs/chemogpcrs_berghia.fa"
 # RUN_GENOME_TRACK, in an isolated subshell. Sourcing functions.sh installs an
 # EXIT trap (finalize_pipeline); we disarm it (trap - EXIT) so only the helper's
 # echoed path reaches stdout and this test's own cleanup trap is never clobbered.
+# Pass a toggle value ("0"/"1"), or the sentinel "unset" to genuinely leave
+# RUN_GENOME_TRACK undefined (exercises the ${RUN_GENOME_TRACK:-1} default).
 eval_helper() {
     (
-        export RUN_GENOME_TRACK="$1"
+        if [ "$1" = "unset" ]; then
+            unset RUN_GENOME_TRACK
+        else
+            export RUN_GENOME_TRACK="$1"
+        fi
         # shellcheck disable=SC1091
         source "$PROJECT_DIR/functions.sh"
         trap - EXIT
@@ -71,5 +77,13 @@ assert_eq "RUN_GENOME_TRACK=1 + reconciled absent -> legacy" \
 : > "$RECONCILED"
 assert_eq "RUN_GENOME_TRACK=0 -> legacy (reconciled present ignored)" \
     "$LEGACY" "$(eval_helper 0)"
+
+# (iv) production default: RUN_GENOME_TRACK UNSET + reconciled present ->
+# reconciled. Proves the helper's ${RUN_GENOME_TRACK:-1} default enables the
+# track (config.sh ships RUN_GENOME_TRACK=1; this pins the same track-on behavior
+# for the unset case, e.g. functions.sh sourced without config.sh).
+: > "$RECONCILED"
+assert_eq "RUN_GENOME_TRACK unset (default) + reconciled present -> reconciled" \
+    "$RECONCILED" "$(eval_helper unset)"
 
 echo "OK"
