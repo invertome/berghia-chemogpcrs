@@ -21,8 +21,9 @@ labeling, and ``qc_flags``; and the placement cascade (``concordant`` /
 ``_confident_placement`` (measured across distinct loci), feeding the
 top-level ``reconcile`` that emits one ``ReconciledGene`` per gene.
 ``best_and_margin`` is a Task-1 best-vs-second helper retained for the API
-but not used by the cascade. The output writers are added in a later task
-against this same module.
+but not used by the cascade. The output writers (``write_tsv`` /
+``write_faa`` / ``write_report``) and the ``main`` argparse CLI that wires
+input files through ``reconcile`` into those writers close out the module.
 
 All functions here are stdlib-only with no network access. The one
 optional subprocess is ``group_into_loci``'s ``bedtools merge`` fast
@@ -33,11 +34,12 @@ Design spec: docs/plans/2026-06-30-berghia-genome-track-reconciliation-design.md
 """
 from __future__ import annotations
 
+import argparse
 import os
 import shutil
 import subprocess
 from collections import defaultdict, namedtuple
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 
 # miniprot's native GFF3 mRNA row has no coverage-equivalent attribute
 # (the `Target=<id> <start> <end>` range alone doesn't reveal the full
@@ -949,3 +951,282 @@ def reconcile(txome_candidates: list[Candidate],
     genes.extend(_reconciled_gene_unplaced(c) for c in unplaced)
     genes.sort(key=lambda g: g.gene_id)
     return genes
+
+
+# ---- output writers (Task 5) ------------------------------------------------
+
+# Tuple-valued ReconciledGene fields are serialized as ";"-joined lists;
+# the float-or-None fields use %g with a "" sentinel for None (and a
+# literal "inf" for a single-locus unambiguous placement).
+_TUPLE_FIELDS = ("transcriptome_isoform_ids", "genome_isoform_ids", "qc_flags")
+_FLOAT_FIELDS = ("pct_identity", "pct_coverage", "best_vs_second_margin")
+
+
+def _write_text(path: str, text: str) -> None:
+    """Write `text` verbatim with LF line endings, regardless of platform
+    (``newline="\\n"`` disables the default os.linesep translation)."""
+    with open(path, "w", newline="\n") as fh:
+        fh.write(text)
+
+
+def _fmt_tsv_value(name: str, value) -> str:
+    """Serialize one ReconciledGene field to its TSV cell (design §8).
+
+    tuple fields -> ";"-joined (empty tuple -> ""); pct_identity/
+    pct_coverage -> "" if None else %g; best_vs_second_margin -> "" if
+    None, "inf" for a single-locus unambiguous placement, else %g; n_tm ->
+    the integer; every other (str) field verbatim.
+    """
+    if name in _TUPLE_FIELDS:
+        return ";".join(value)
+    if name in _FLOAT_FIELDS:
+        if value is None:
+            return ""
+        if value == float("inf"):
+            return "inf"
+        return f"{value:g}"
+    if name == "n_tm":
+        return str(int(value))
+    return str(value)
+
+
+def write_tsv(genes: list[ReconciledGene], path: str) -> None:
+    """Write the reconciled gene set as a TSV (``reconciled_candidates.tsv``).
+
+    Header row = the ``ReconciledGene`` field names in §8 order (read off
+    the dataclass, so it can never drift from the schema); one row per gene
+    in the given order (``reconcile`` already sorts by ``gene_id``). LF line
+    endings; cells serialized by ``_fmt_tsv_value``.
+    """
+    names = [f.name for f in fields(ReconciledGene)]
+    lines = ["\t".join(names)]
+    for g in genes:
+        lines.append("\t".join(_fmt_tsv_value(n, getattr(g, n)) for n in names))
+    _write_text(path, "\n".join(lines) + "\n")
+
+
+def write_faa(genes: list[ReconciledGene], seqs: dict[str, str], path: str) -> None:
+    """Write the representative protein FASTA (``reconciled_candidates.faa``).
+
+    ``seqs`` maps ``representative_id`` -> protein sequence. One record per
+    gene whose ``representative_id`` is present in ``seqs`` (header
+    ``>{representative_id}``, sequence on the next line); genes whose
+    representative is absent are skipped rather than raising. Records follow
+    the given gene order; an all-missing set writes an empty file.
+    """
+    lines: list[str] = []
+    for g in genes:
+        seq = seqs.get(g.representative_id)
+        if seq is None:
+            continue
+        lines.append(f">{g.representative_id}")
+        lines.append(seq)
+    _write_text(path, "\n".join(lines) + "\n" if lines else "")
+
+
+def write_report(genes: list[ReconciledGene], path: str) -> None:
+    """Write the human-readable Markdown reconciliation report
+    (``reconciliation_report.md``): a total, per-case provenance counts, QC
+    flag counts, and flagged review lists. Deterministic (preserves the
+    given gene order, which ``reconcile`` has already sorted by ``gene_id``).
+    """
+    total = len(genes)
+    both = sum(1 for g in genes if g.provenance == "both")
+    genome_only = sum(1 for g in genes if g.provenance == "genome_only")
+    tx_placed = sum(1 for g in genes if g.provenance == "transcriptome_only"
+                    and g.genome_locus != "unplaced")
+    tx_unplaced = sum(1 for g in genes if g.provenance == "transcriptome_only"
+                      and g.genome_locus == "unplaced")
+
+    flag_names = ("chimeric", "source_disagreement", "partial_only",
+                  "low_margin", "multi_mapping")
+    flag_counts = {f: sum(1 for g in genes if f in g.qc_flags) for f in flag_names}
+
+    chimeric_ids = [g.gene_id for g in genes if "chimeric" in g.qc_flags]
+    ambiguous_ids = [g.gene_id for g in genes
+                     if "low_margin" in g.qc_flags or "multi_mapping" in g.qc_flags]
+    disagreement_ids = [g.gene_id for g in genes
+                        if "source_disagreement" in g.qc_flags]
+
+    lines: list[str] = ["# Genome-track reconciliation report", ""]
+    lines.append(f"Total reconciled genes: {total}")
+    lines += ["", "## Provenance",
+              f"- both (shared): {both}",
+              f"- genome_only (recovered): {genome_only}",
+              f"- transcriptome_only, placed: {tx_placed}",
+              f"- transcriptome_only, unplaced: {tx_unplaced}",
+              "", "## QC flags"]
+    lines += [f"- {f}: {flag_counts[f]}" for f in flag_names]
+    lines += ["", "## Review lists", ""]
+    for title, ids in (("chimeric", chimeric_ids),
+                       ("ambiguous (low_margin or multi_mapping)", ambiguous_ids),
+                       ("source_disagreement", disagreement_ids)):
+        lines.append(f"### {title} ({len(ids)})")
+        lines += [f"- {gid}" for gid in ids]
+        lines.append("")
+    _write_text(path, "\n".join(lines) + "\n")
+
+
+# ---- CLI (Task 5) -----------------------------------------------------------
+
+def _read_tsv_rows(path: str):
+    """Yield tab-split field lists from a TSV, skipping blank and
+    ``#``-commented lines (so a ``#``-prefixed header is tolerated)."""
+    with open(path) as fh:
+        for line in fh:
+            line = line.rstrip("\n")
+            if not line or line.startswith("#"):
+                continue
+            yield line.split("\t")
+
+
+def _parse_bool(token: str) -> bool:
+    """Parse a completeness flag cell. True for the common truthy encodings
+    (case-insensitive); anything else (incl. "partial", "0", "") is False."""
+    return token.strip().lower() in ("1", "true", "t", "yes", "y", "complete")
+
+
+def _read_candidates(path: str) -> list[Candidate]:
+    """Read ``--txome-candidates`` (``query, complete, length, n_tm``)."""
+    out: list[Candidate] = []
+    for row in _read_tsv_rows(path):
+        if len(row) < 4:
+            continue
+        out.append(Candidate(query=row[0], complete=_parse_bool(row[1]),
+                             length=int(row[2]), n_tm=int(row[3])))
+    return out
+
+
+def _read_refseq_models(path: str) -> list[PlacedModel]:
+    """Read ``--refseq-models`` (``query, chrom, start, end, strand, complete,
+    length, n_tm``) as source-``"genome"`` PlacedModels."""
+    out: list[PlacedModel] = []
+    for row in _read_tsv_rows(path):
+        if len(row) < 8:
+            continue
+        out.append(PlacedModel(query=row[0], chrom=row[1], start=int(row[2]),
+                              end=int(row[3]), strand=row[4], source="genome",
+                              complete=_parse_bool(row[5]), length=int(row[6]),
+                              n_tm=int(row[7])))
+    return out
+
+
+def _read_loci(path: str) -> list[tuple[str, int, int, str]]:
+    """Read ``--refseq-loci`` (``chrom, start, end, strand``) gene intervals
+    for the ``chimeric`` QC flag."""
+    out: list[tuple[str, int, int, str]] = []
+    for row in _read_tsv_rows(path):
+        if len(row) < 4:
+            continue
+        out.append((row[0], int(row[1]), int(row[2]), row[3]))
+    return out
+
+
+def _read_fasta(path: str) -> dict[str, str]:
+    """Minimal stdlib FASTA reader -> ``{first-token-of-header: sequence}``,
+    the ``seqs`` map ``write_faa`` consumes (keyed by representative id)."""
+    seqs: dict[str, str] = {}
+    name: str | None = None
+    chunks: list[str] = []
+    with open(path) as fh:
+        for line in fh:
+            line = line.rstrip("\n")
+            if line.startswith(">"):
+                if name is not None:
+                    seqs[name] = "".join(chunks)
+                header = line[1:].strip()
+                name = header.split()[0] if header else header
+                chunks = []
+            elif name is not None:
+                chunks.append(line.strip())
+    if name is not None:
+        seqs[name] = "".join(chunks)
+    return seqs
+
+
+def _group_placements(*method_groups) -> dict[str, dict[str, list[Placement]]]:
+    """Bucket parsed Placements into the per-query ``{query: {method: [...]}}``
+    map ``reconcile`` expects. Each argument is a ``(bundle_key, placements)``
+    pair; note the BLASTp parser's ``method="blastp"`` hits are bucketed under
+    the cascade's ``"rbh"`` key (the caller supplies the mapping)."""
+    placements: dict[str, dict[str, list[Placement]]] = {}
+    for key, plist in method_groups:
+        for p in plist:
+            placements.setdefault(p.query, {}).setdefault(key, []).append(p)
+    return placements
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="reconcile_candidates.py",
+        description="Reconcile the genome (RefSeq) and transcriptome "
+                    "chemoreceptor candidate tracks into one genome-anchored, "
+                    "provenance-labeled gene set.")
+    # Placement inputs — each optional; an absent method contributes no hits.
+    p.add_argument("--minimap2-paf", help="minimap2 PAF (spliced) placements")
+    p.add_argument("--gmap-gff", help="GMAP gff3_gene placements")
+    p.add_argument("--miniprot-gff", help="miniprot GFF3 placements")
+    p.add_argument("--blastp-tab", help="BLASTp outfmt6+qcovs (RBH) placements")
+    # Candidate / gene-model inputs.
+    p.add_argument("--txome-candidates", required=True,
+                   help="TSV: query, complete, length, n_tm")
+    p.add_argument("--refseq-models",
+                   help="TSV: query, chrom, start, end, strand, complete, "
+                        "length, n_tm (source genome)")
+    p.add_argument("--refseq-loci",
+                   help="TSV/BED: chrom, start, end, strand (chimeric flag)")
+    p.add_argument("--proteins",
+                   help="FASTA of representative protein sequences (for the .faa)")
+    # Thresholds (defaults from Thresholds()).
+    defaults = Thresholds()
+    p.add_argument("--min-id", type=float, default=defaults.min_id)
+    p.add_argument("--min-cov", type=float, default=defaults.min_cov)
+    p.add_argument("--min-margin", type=float, default=defaults.min_margin)
+    p.add_argument("--low-margin-threshold", type=float,
+                   default=defaults.low_margin_threshold)
+    p.add_argument("--out-dir", required=True,
+                   help="output directory for the .tsv / .faa / report.md")
+    return p
+
+
+def main(argv=None) -> int:
+    """CLI: wire input files through ``reconcile`` into the three writers.
+
+    Parses the placement files (each optional), the txome candidates, the
+    RefSeq models + intervals, builds the ``coords`` map (RefSeq protein ->
+    its gene locus, for the BLASTp parser) and the per-query ``placements``
+    bundle, runs ``reconcile``, and writes ``reconciled_candidates.tsv`` /
+    ``reconciled_candidates.faa`` / ``reconciliation_report.md`` under
+    ``--out-dir``. A thin orchestrator; the parsing/scoring lives above.
+    """
+    args = _build_arg_parser().parse_args(argv)
+    thresholds = Thresholds(min_id=args.min_id, min_cov=args.min_cov,
+                            min_margin=args.min_margin,
+                            low_margin_threshold=args.low_margin_threshold)
+
+    txome_candidates = _read_candidates(args.txome_candidates)
+    refseq_models = _read_refseq_models(args.refseq_models) if args.refseq_models else []
+    refseq_loci = _read_loci(args.refseq_loci) if args.refseq_loci else []
+    # coords: subject RefSeq protein id -> its gene locus, for parse_blastp_tab.
+    coords = {m.query: (m.chrom, m.start, m.end, m.strand) for m in refseq_models}
+
+    mm = parse_minimap2_paf(args.minimap2_paf) if args.minimap2_paf else []
+    gmap = parse_gmap_gff(args.gmap_gff) if args.gmap_gff else []
+    miniprot = parse_miniprot_gff(args.miniprot_gff) if args.miniprot_gff else []
+    rbh = parse_blastp_tab(args.blastp_tab, coords) if args.blastp_tab else []
+    placements = _group_placements(("minimap2", mm), ("gmap", gmap),
+                                   ("miniprot", miniprot), ("rbh", rbh))
+
+    genes = reconcile(txome_candidates, refseq_models, placements, refseq_loci,
+                      thresholds)
+    seqs = _read_fasta(args.proteins) if args.proteins else {}
+
+    os.makedirs(args.out_dir, exist_ok=True)
+    write_tsv(genes, os.path.join(args.out_dir, "reconciled_candidates.tsv"))
+    write_faa(genes, seqs, os.path.join(args.out_dir, "reconciled_candidates.faa"))
+    write_report(genes, os.path.join(args.out_dir, "reconciliation_report.md"))
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())
