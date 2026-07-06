@@ -83,3 +83,92 @@ def test_cli_writes_sourceable_recommendation(tmp_path):
     cm.main(["--dry-run", "--out-recommendation", str(out)])
     text = out.read_text()
     assert text.startswith("#") and "GENOME_TRACK_MIN_MARGIN=" in text
+
+
+# ---- review fix 1: grid pads one full step beyond the max data value --------
+
+def test_grid_last_point_exceeds_max_margin():
+    # 8.1/0.1 == 80.9999... in float; int() would truncate and clip the grid at
+    # 8.0 (== max data), losing the tail of the curve. round() keeps the pad.
+    grid = cm._grid([8.0], [3.0])
+    assert grid[-1] > 8.0
+
+
+# ---- review fix 2: true locus overlaps NONE of the placements ---------------
+
+def test_margins_true_locus_matches_no_placement():
+    reps = cm.distinct_locus_reps([_P("chrA", 5000, 5100, 99.0), _P("chrA", 9000, 9100, 95.0)])
+    obs = cm.query_margins(reps, ("chrX", 1, 2))          # true gene mapped nowhere here
+    assert obs.tp is None
+    assert obs.fp == pytest.approx(4.0) and obs.fp_kind == "synthetic"
+
+
+# ---- review fix 3: real (non-dry-run) file-mode CLI, both modes -------------
+
+def _paf_rows():
+    # Gene A: true locus (99) + two distinct paralog loci (96, 94) -> TP margin
+    #   3.0 and synthetic FP margin 2.0. Gene B: one confident locus -> TP inf.
+    # Query names are the full lcl| CDS ids so they join the CDS FASTA headers.
+    rows = [
+        ("lcl|NC_1.1_cds_XPA_1", 100, 0, 100, "+", "NC_1.1", 1000000, 100, 200, 99, 100, 60),
+        ("lcl|NC_1.1_cds_XPA_1", 100, 0, 100, "+", "NC_1.1", 1000000, 5000, 5100, 96, 100, 60),
+        ("lcl|NC_1.1_cds_XPA_1", 100, 0, 100, "+", "NC_1.1", 1000000, 9000, 9100, 94, 100, 60),
+        ("lcl|NC_1.1_cds_XPB_1", 100, 0, 100, "+", "NC_1.1", 1000000, 20000, 20100, 98, 100, 60),
+    ]
+    return "\n".join("\t".join(str(x) for x in r) for r in rows) + "\n"
+
+def _cds_fasta():
+    return (">lcl|NC_1.1_cds_XPA_1 [location=join(100..150,160..200)]\nMKAA\n"
+            ">lcl|NC_1.1_cds_XPB_1 [location=20000..20100]\nMKBB\n")
+
+def test_cli_refseq_mode_file_inputs(tmp_path, capsys):
+    paf = tmp_path / "aln.paf"; paf.write_text(_paf_rows())
+    cds = tmp_path / "gpcr_cds.fna"; cds.write_text(_cds_fasta())
+    code = cm.main(["--mode", "refseq", "--minimap2-paf", str(paf), "--refseq-cds", str(cds)])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "Margin-gate calibration" in out and "GENOME_TRACK_MIN_MARGIN=" in out
+
+def test_cli_busco_mode_file_inputs(tmp_path, capsys):
+    paf = tmp_path / "aln.paf"; paf.write_text(_paf_rows())
+    ids = tmp_path / "busco.ids"
+    ids.write_text("# busco single-copy\n\nlcl|NC_1.1_cds_XPA_1\nlcl|NC_1.1_cds_XPB_1\n")
+    code = cm.main(["--mode", "busco", "--minimap2-paf", str(paf), "--busco-ids", str(ids)])
+    out = capsys.readouterr().out
+    assert code == 0 and "GENOME_TRACK_MIN_MARGIN=" in out
+
+
+# ---- review fix 4: collect_margins match-fraction safeguard -----------------
+
+def test_collect_margins_warns_on_partial_id_match(capsys):
+    # 1 of 4 requested CDS ids joins the alignment -> a silent tiny-sample knee
+    # would otherwise result. Surfaces the requested denominator (4), not n_tp.
+    by_q = {"lcl|NC_1.1_cds_XPA_1": [_P("chrA", 100, 200, 99.0)]}
+    true_loci = {"lcl|NC_1.1_cds_XPA_1": ("chrA", 100, 200),
+                 "lcl|NC_1.1_cds_XPB_1": ("chrB", 1, 2),
+                 "lcl|NC_1.1_cds_XPC_1": ("chrC", 1, 2),
+                 "lcl|NC_1.1_cds_XPD_1": ("chrD", 1, 2)}
+    cm.collect_margins(by_q, true_loci)
+    err = capsys.readouterr().err
+    assert "matched 1 of 4 requested refseq ids" in err
+
+
+# ---- review fix 5: overlap -> split_advisory + GENOME_TRACK_LOW_MARGIN -------
+
+def test_recommend_overlap_splits_and_emits_low_margin(tmp_path):
+    rec = cm.recommend([1.0, 2.0, 3.0, 4.0], [1.0, 2.0, 3.0, 4.0])
+    assert rec.split_advisory is True and rec.low_margin_threshold is not None
+    assert "GENOME_TRACK_LOW_MARGIN=" in cm.format_table(rec)
+    out = tmp_path / "rec.sh"
+    cm.write_recommendation(str(out), rec)
+    assert "GENOME_TRACK_LOW_MARGIN=" in out.read_text()
+
+
+# ---- review fix 6: write_figure smoke test (matplotlib installed) -----------
+
+def test_write_figure_creates_png(tmp_path):
+    tp, fp = cm._synthetic()
+    rec = cm.recommend(tp, fp)
+    out = tmp_path / "roc.png"
+    cm.write_figure(str(out), tp, fp, rec)
+    assert out.exists() and out.stat().st_size > 0

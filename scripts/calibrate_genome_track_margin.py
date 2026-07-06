@@ -49,6 +49,12 @@ def _margin(reps: list[rc.Placement]) -> float:
 
 @dataclass(frozen=True)
 class MarginObs:
+    """One query's contribution to the ROC: its TP margin (``tp`` — the correct
+    top-locus best-vs-second margin, ``inf`` for a lone locus, ``None`` when the
+    top locus is not the true one) and its operative FP margin (``fp`` with
+    ``fp_kind`` ``"natural"`` = a paralog genuinely outranked the true locus, or
+    ``"synthetic"`` = the true-locus rep dropped to model an absent gene; both
+    ``None`` when no spurious margin is available)."""
     tp: float | None
     fp: float | None
     fp_kind: str | None      # "natural" | "synthetic" | None
@@ -83,6 +89,9 @@ GRID_STEP = 0.1
 
 @dataclass(frozen=True)
 class RocPoint:
+    """One threshold ``m`` on the margin ROC and its scores (see ``roc_points``):
+    ``retention`` = TP kept, ``rejection`` = FP dropped, ``j`` = Youden-J
+    (``retention + rejection - 1``)."""
     m: float
     retention: float     # P(tp margin >= m); inf counts as retained
     rejection: float     # P(fp margin < m)
@@ -90,6 +99,10 @@ class RocPoint:
 
 @dataclass(frozen=True)
 class MarginRecommendation:
+    """The calibration verdict: the recommended ``min_margin`` (the knee), the
+    ``knee`` RocPoint it came from, and — when TP/FP overlap (``split_advisory``)
+    — a proposed ``low_margin_threshold`` for the advisory tier. ``n_tp``/``n_fp``
+    are the sample sizes behind the curve."""
     min_margin: float
     knee: RocPoint
     split_advisory: bool
@@ -98,12 +111,25 @@ class MarginRecommendation:
     n_fp: int
 
 def _grid(tp, fp):
+    """Threshold sweep grid: 0 .. (max finite margin + GRID_STEP) in GRID_STEP
+    increments. ``round`` (not ``int``) on the point count so the grid always
+    pads one full step BEYOND the largest data value — otherwise float
+    truncation (e.g. 8.1/0.1 == 80.9999) clips the last point exactly at the max
+    and the figure loses the tail of the curve (design §5 wants the full curve).
+    ``inf`` margins are excluded from the span."""
     finite = [x for x in tp + fp if x != INF]
     hi = (max(finite) if finite else 1.0) + GRID_STEP
-    n = int(hi / GRID_STEP) + 1
+    n = round(hi / GRID_STEP) + 1
     return [round(i * GRID_STEP, 4) for i in range(n)]
 
 def roc_points(tp, fp, grid=None) -> list[RocPoint]:
+    """Evaluate TP-retention / FP-rejection / Youden-J at every grid threshold.
+
+    For each ``m``: ``retention = P(tp margin >= m)`` (an ``inf`` margin — a
+    single-locus gene with no competitor — is always retained) and
+    ``rejection = P(fp margin < m)``. With no TP (resp. FP) samples the
+    corresponding fraction is NaN (and ``j`` NaN), so ``youden_knee`` skips those
+    points rather than dividing by zero."""
     grid = grid if grid is not None else _grid(tp, fp)
     n_tp, n_fp = len(tp), len(fp)
     out = []
@@ -114,12 +140,21 @@ def roc_points(tp, fp, grid=None) -> list[RocPoint]:
     return out
 
 def youden_knee(points) -> RocPoint:
+    """The knee = the ROC point of maximum Youden-J (design §5). Ties break to
+    the SMALLER margin (``-p.m``), i.e. favor recall / the more conservative
+    gate. Raises if no point has a finite J (needs both TP and FP samples)."""
     valid = [p for p in points if not math.isnan(p.j)]
     if not valid:
         raise ValueError("no valid ROC points (need both TP and FP samples)")
     return max(valid, key=lambda p: (p.j, -p.m))     # tie -> smaller margin (favor recall)
 
 def recommend(tp, fp) -> MarginRecommendation:
+    """Turn TP/FP margin samples into a MarginRecommendation. ``min_margin`` is
+    the Youden knee. When the knee's J is below ``J_MIN_CLEAN`` the TP and FP
+    margins overlap (no clean separation): ``split_advisory`` is set and a
+    ``low_margin_threshold`` (median TP margin) is proposed so thin multi-locus
+    placements can be kept-and-flagged rather than dropped (design §5); the tier
+    split itself is gated on explicit user approval."""
     knee = youden_knee(roc_points(tp, fp))
     split = knee.j < J_MIN_CLEAN
     return MarginRecommendation(
@@ -137,6 +172,10 @@ def _percentile(values, p):     # linear-interp percentile, stdlib (mirrors the 
 
 
 def load_cds_true_loci(cds_fasta: str) -> dict[str, tuple[str, int, int]]:
+    """Map each RefSeq CDS record id (the full ``lcl|...`` header token) to its
+    true genomic locus ``(scaffold, min, max)`` via ``parse_cds_true_locus`` —
+    the refseq-mode ground truth. That id is the join key against the aligner
+    output's query names, so it must match the PAF/GFF query ids exactly."""
     loci = {}
     with open(cds_fasta) as fh:
         for line in fh:
@@ -146,6 +185,8 @@ def load_cds_true_loci(cds_fasta: str) -> dict[str, tuple[str, int, int]]:
     return loci
 
 def _placements_by_query(paf, gff):
+    """Parse the (optional) minimap2 PAF + GMAP GFF with reconcile_candidates'
+    own parsers and bucket every placement by its query (transcript/CDS) id."""
     parsed = []
     if paf: parsed += rc.parse_minimap2_paf(paf)
     if gff: parsed += rc.parse_gmap_gff(gff)
@@ -154,19 +195,59 @@ def _placements_by_query(paf, gff):
         by_q.setdefault(p.query, []).append(p)
     return by_q
 
+def matched_fraction_warning(kind: str, matched: int, requested: int) -> str | None:
+    """A stderr warning string when the requested ids only PARTIALLY join the
+    alignment query names, else None. Mirrors the sibling id/cov calibrator
+    (``calibrate_reconcile_thresholds.matched_fraction_warning``): a
+    CDS-header ↔ PAF/GFF query-id format drift would otherwise silently compute a
+    knee off a tiny (or empty) sample, so surface it and escalate the message
+    when the matched fraction is very low."""
+    if requested == 0 or matched >= requested:
+        return None
+    msg = f"WARNING: matched {matched} of {requested} requested {kind} ids"
+    if matched == 0:
+        return (msg + " — NONE matched; check the ids/CDS headers against the "
+                "alignment query names (a format mismatch, e.g. version suffixes).")
+    if matched / requested < 0.5:
+        return (msg + " — LOW match fraction; likely an id-format mismatch "
+                "between the CDS/ids and the PAF/GFF query names.")
+    return msg
+
 def collect_margins(by_query, true_loci, restrict_ids=None):
-    """-> (tp_list, fp_list). true_loci=None ⇒ busco-mode (rep0 truth)."""
+    """Collect the per-query TP and FP margins into ``(tp_list, fp_list)``.
+
+    ``true_loci`` given ⇒ refseq-mode (header truth; requested = the CDS ids);
+    ``true_loci=None`` ⇒ busco-mode (rep0 is truth; requested = ``restrict_ids``
+    or every aligned query). Emits a stderr match-fraction WARNING (see
+    ``matched_fraction_warning``) — surfacing the requested denominator — when
+    the requested ids only partially join the alignment query names, so the knee
+    is never computed off a silently-tiny sample after an id-format drift."""
+    if restrict_ids is not None:
+        requested = list(restrict_ids)
+    elif true_loci is not None:
+        requested = list(true_loci)
+    else:
+        requested = list(by_query)
+    matched = sum(1 for q in requested if by_query.get(q))
+    warning = matched_fraction_warning(
+        "refseq" if true_loci is not None else "busco", matched, len(requested))
+    if warning:
+        print(warning, file=sys.stderr)
+
     tp, fp = [], []
-    ids = restrict_ids if restrict_ids is not None else list(by_query)
-    for q in ids:
+    for q in requested:
         pls = by_query.get(q)
-        if not pls: continue
+        if not pls:
+            continue
         reps = distinct_locus_reps(pls)
         tl = None if true_loci is None else true_loci.get(q)
-        if true_loci is not None and tl is None: continue    # no truth for this id
+        if true_loci is not None and tl is None:
+            continue    # no truth for this id
         obs = query_margins(reps, tl)
-        if obs.tp is not None: tp.append(obs.tp)
-        if obs.fp is not None: fp.append(obs.fp)
+        if obs.tp is not None:
+            tp.append(obs.tp)
+        if obs.fp is not None:
+            fp.append(obs.fp)
     return tp, fp
 
 def _synthetic():
@@ -177,6 +258,10 @@ def _synthetic():
     return tp, fp
 
 def format_table(rec: MarginRecommendation) -> str:
+    """Render the recommendation as the aligned plain-text report printed to
+    stdout: sample sizes, the knee (margin/retention/rejection/J), the
+    clean-vs-overlap verdict, and the recommended ``GENOME_TRACK_MIN_MARGIN``
+    (plus ``GENOME_TRACK_LOW_MARGIN`` when a tier split is advised)."""
     lines = ["# Margin-gate calibration",
              f"TP (correct) n={rec.n_tp}   FP (spurious) n={rec.n_fp}",
              f"knee: margin={rec.knee.m:g}  retention={rec.knee.retention:.3f}  "
@@ -189,6 +274,11 @@ def format_table(rec: MarginRecommendation) -> str:
     return "\n".join(lines)
 
 def write_recommendation(path, rec, dry_run=False):
+    """Write the recommendation as a sourceable shell file
+    (``GENOME_TRACK_MIN_MARGIN=`` [+ ``GENOME_TRACK_LOW_MARGIN=`` when split],
+    with commented provenance). ``dry_run`` stamps a ``NOT for production`` first
+    line so a synthetic demo artifact can never be sourced into a real run
+    (mirrors the sibling calibrator)."""
     hdr = ["# DRY RUN synthetic — NOT for production"] if dry_run else []
     hdr += ["# scripts/calibrate_genome_track_margin.py",
             f"# knee J={rec.knee.j:.3f}; clean={not rec.split_advisory}",
@@ -198,6 +288,10 @@ def write_recommendation(path, rec, dry_run=False):
     Path(path).write_text("\n".join(hdr) + "\n")
 
 def write_figure(path, tp, fp, rec):
+    """Write the margin-ROC PNG: TP-retention and FP-rejection vs ``m`` with the
+    knee marked (design §5). matplotlib is imported lazily with the ``Agg``
+    backend; if it is unavailable the figure is skipped with a stderr warning
+    rather than crashing the calibration run."""
     try:
         import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
     except Exception as e:
@@ -211,15 +305,43 @@ def write_figure(path, tp, fp, rec):
     plt.xlabel("min_margin (%id points)"); plt.ylabel("fraction"); plt.legend(); plt.tight_layout()
     plt.savefig(path, dpi=150); plt.close()
 
+def _build_arg_parser() -> argparse.ArgumentParser:
+    """Build the argparse parser (factored out for testability, mirroring the
+    sibling calibrator)."""
+    p = argparse.ArgumentParser(
+        prog="calibrate_genome_track_margin.py",
+        description="Calibrate GENOME_TRACK_MIN_MARGIN from a ground-truthed "
+                    "TP/FP best-vs-second distinct-locus margin ROC.")
+    p.add_argument("--dry-run", action="store_true",
+                   help="run the whole computation on a synthetic worked example "
+                        "(no real data / Unity) and print the table")
+    p.add_argument("--mode", choices=["refseq", "busco"], default="refseq",
+                   help="refseq: true loci from --refseq-cds headers; busco: "
+                        "rep0 is truth (single-copy), restricted to --busco-ids "
+                        "(default: refseq)")
+    p.add_argument("--minimap2-paf", help="transcript/CDS -> genome minimap2 PAF")
+    p.add_argument("--gmap-gff", help="transcript/CDS -> genome GMAP gff3_gene")
+    p.add_argument("--refseq-cds",
+                   help="GPCR CDS FASTA whose headers give the true loci "
+                        "(required for refseq-mode)")
+    p.add_argument("--busco-ids",
+                   help="file of BUSCO single-copy query ids, one per line, to "
+                        "restrict busco-mode to")
+    p.add_argument("--out-recommendation",
+                   help="path to write the sourceable GENOME_TRACK_MIN_MARGIN "
+                        "(+ GENOME_TRACK_LOW_MARGIN when split) recommendation")
+    p.add_argument("--out-figure",
+                   help="path to write the margin-ROC PNG (matplotlib)")
+    return p
+
+
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="Calibrate GENOME_TRACK_MIN_MARGIN from a TP/FP margin ROC.")
-    ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--mode", choices=["refseq", "busco"], default="refseq")
-    ap.add_argument("--minimap2-paf"); ap.add_argument("--gmap-gff")
-    ap.add_argument("--refseq-cds", help="GPCR CDS FASTA (headers -> true loci) for refseq-mode")
-    ap.add_argument("--busco-ids", help="restrict to these query ids for busco-mode")
-    ap.add_argument("--out-recommendation"); ap.add_argument("--out-figure")
-    a = ap.parse_args(argv)
+    """CLI: build the TP/FP margin samples (synthetic ``--dry-run``, or from the
+    aligner outputs in refseq/busco mode), compute the Youden-knee
+    recommendation, print the table, and optionally write the recommendation file
+    + ROC figure. Returns a process exit code (0 ok; 1 insufficient data; 2 bad
+    arguments)."""
+    a = _build_arg_parser().parse_args(argv)
 
     if a.dry_run:
         tp, fp = _synthetic()
