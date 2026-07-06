@@ -101,14 +101,24 @@ class RocPoint:
 class MarginRecommendation:
     """The calibration verdict: the recommended ``min_margin`` (the knee), the
     ``knee`` RocPoint it came from, and — when TP/FP overlap (``split_advisory``)
-    — a proposed ``low_margin_threshold`` for the advisory tier. ``n_tp``/``n_fp``
-    are the sample sizes behind the curve."""
+    — a proposed ``low_margin_threshold`` for the advisory tier.
+
+    The knee is computed over the MULTI-LOCUS (finite-margin) TP population only
+    (design §2: the margin gate acts only among >=2 competing loci; single-locus
+    genes have margin=inf and are trivially retained, so including them would
+    inflate retention and push the knee to an artifact). ``n_tp`` is the TOTAL TP
+    count and ``n_tp_multi`` the multi-locus subset the knee is built on;
+    ``full_pop_retention`` is the fraction of ALL TP (incl. the single-locus
+    inf) retained at ``min_margin`` — reported as real-world CONTEXT, not used to
+    place the knee. ``n_fp`` is the FP sample size."""
     min_margin: float
     knee: RocPoint
     split_advisory: bool
     low_margin_threshold: float | None   # set only when split_advisory
     n_tp: int
     n_fp: int
+    n_tp_multi: int
+    full_pop_retention: float
 
 def _grid(tp, fp):
     """Threshold sweep grid: 0 .. (max finite margin + GRID_STEP) in GRID_STEP
@@ -149,19 +159,37 @@ def youden_knee(points) -> RocPoint:
     return max(valid, key=lambda p: (p.j, -p.m))     # tie -> smaller margin (favor recall)
 
 def recommend(tp, fp) -> MarginRecommendation:
-    """Turn TP/FP margin samples into a MarginRecommendation. ``min_margin`` is
-    the Youden knee. When the knee's J is below ``J_MIN_CLEAN`` the TP and FP
-    margins overlap (no clean separation): ``split_advisory`` is set and a
-    ``low_margin_threshold`` (median TP margin) is proposed so thin multi-locus
+    """Turn TP/FP margin samples into a MarginRecommendation.
+
+    The Youden knee is computed over the MULTI-LOCUS (finite-margin) TP
+    population — ``tp_finite = [t for t in tp if t != inf]`` — vs ``fp`` (already
+    all-finite by construction). Single-locus genes carry margin=inf and are
+    trivially retained at any threshold, so including them inflates retention and
+    pushes the knee to an artifact; design §2 defines the calibration on the
+    >=2-paralog regime. Raises ``ValueError`` if there is no finite-margin TP or
+    no FP (can't build a multi-locus ROC — surface it rather than fabricate one).
+
+    ``min_margin`` is the knee. When the knee's J is below ``J_MIN_CLEAN`` the TP
+    and FP margins overlap (no clean separation): ``split_advisory`` is set and a
+    ``low_margin_threshold`` (median multi-locus TP margin) is proposed so thin
     placements can be kept-and-flagged rather than dropped (design §5); the tier
-    split itself is gated on explicit user approval."""
-    knee = youden_knee(roc_points(tp, fp))
+    split itself is gated on explicit user approval. ``full_pop_retention`` (the
+    fraction of ALL TP, incl. the single-locus inf, retained at the knee) is
+    carried as real-world context."""
+    tp_finite = [t for t in tp if t != INF]
+    if not tp_finite:
+        raise ValueError("no multi-locus (finite-margin) TP samples: the margin "
+                         "gate is defined only on the >=2-paralog regime (design §2)")
+    if not fp:
+        raise ValueError("no FP margin samples: cannot build a multi-locus ROC")
+    knee = youden_knee(roc_points(tp_finite, fp))
     split = knee.j < J_MIN_CLEAN
+    full_pop_retention = sum(1 for t in tp if t >= knee.m) / len(tp)
     return MarginRecommendation(
         min_margin=round(knee.m, 2), knee=knee, split_advisory=split,
-        low_margin_threshold=(round(_percentile([x for x in tp if x != INF] or [knee.m], 50.0), 2)
-                              if split else None),
-        n_tp=len(tp), n_fp=len(fp))
+        low_margin_threshold=(round(_percentile(tp_finite, 50.0), 2) if split else None),
+        n_tp=len(tp), n_fp=len(fp), n_tp_multi=len(tp_finite),
+        full_pop_retention=full_pop_retention)
 
 def _percentile(values, p):     # linear-interp percentile, stdlib (mirrors the id/cov calibrator)
     s = sorted(float(v) for v in values)
@@ -259,16 +287,27 @@ def _synthetic():
 
 def format_table(rec: MarginRecommendation) -> str:
     """Render the recommendation as the aligned plain-text report printed to
-    stdout: sample sizes, the knee (margin/retention/rejection/J), the
-    clean-vs-overlap verdict, and the recommended ``GENOME_TRACK_MIN_MARGIN``
-    (plus ``GENOME_TRACK_LOW_MARGIN`` when a tier split is advised)."""
-    lines = ["# Margin-gate calibration",
-             f"TP (correct) n={rec.n_tp}   FP (spurious) n={rec.n_fp}",
-             f"knee: margin={rec.knee.m:g}  retention={rec.knee.retention:.3f}  "
-             f"rejection={rec.knee.rejection:.3f}  J={rec.knee.j:.3f}",
-             f"clean separation: {'NO (advise tier split)' if rec.split_advisory else 'YES'}",
-             "", "## Recommended (write into config.sh after review)",
-             f"GENOME_TRACK_MIN_MARGIN={rec.min_margin:g}"]
+    stdout: the TP breakdown (total / single-locus inf / multi-locus) + FP count,
+    the MULTI-LOCUS knee (margin/retention/rejection/J), the full-population
+    retention labeled as context, the clean-vs-overlap verdict, and the
+    recommended ``GENOME_TRACK_MIN_MARGIN`` (plus ``GENOME_TRACK_LOW_MARGIN`` when
+    a tier split is advised)."""
+    n_single = rec.n_tp - rec.n_tp_multi
+    lines = [
+        "# Margin-gate calibration",
+        f"TP (correct) n={rec.n_tp}  [single-locus/inf n={n_single}  "
+        f"multi-locus n={rec.n_tp_multi}]   FP (spurious) n={rec.n_fp}",
+        "",
+        "knee is computed over the MULTI-LOCUS (finite-margin) population only "
+        "(design §2: the margin gate acts only among >=2 competing loci; "
+        "single-locus genes have margin=inf and are always retained).",
+        f"multi-locus knee: margin={rec.knee.m:g}  retention={rec.knee.retention:.3f}  "
+        f"rejection={rec.knee.rejection:.3f}  J={rec.knee.j:.3f}",
+        f"full-population retention at margin={rec.min_margin:g} "
+        f"(CONTEXT, incl. single-locus inf): {rec.full_pop_retention:.3f}",
+        f"clean separation: {'NO (advise tier split)' if rec.split_advisory else 'YES'}",
+        "", "## Recommended (write into config.sh after review)",
+        f"GENOME_TRACK_MIN_MARGIN={rec.min_margin:g}"]
     if rec.split_advisory:
         lines.append(f"GENOME_TRACK_LOW_MARGIN={rec.low_margin_threshold:g}")
     return "\n".join(lines)
@@ -281,7 +320,10 @@ def write_recommendation(path, rec, dry_run=False):
     (mirrors the sibling calibrator)."""
     hdr = ["# DRY RUN synthetic — NOT for production"] if dry_run else []
     hdr += ["# scripts/calibrate_genome_track_margin.py",
-            f"# knee J={rec.knee.j:.3f}; clean={not rec.split_advisory}",
+            f"# multi-locus knee over n_tp_multi={rec.n_tp_multi} of n_tp={rec.n_tp} "
+            f"(single-locus/inf={rec.n_tp - rec.n_tp_multi}) vs n_fp={rec.n_fp} (design §2)",
+            f"# knee J={rec.knee.j:.3f}; clean={not rec.split_advisory}; "
+            f"full-population retention (context)={rec.full_pop_retention:.3f}",
             f"GENOME_TRACK_MIN_MARGIN={rec.min_margin:g}"]
     if rec.split_advisory:
         hdr.append(f"GENOME_TRACK_LOW_MARGIN={rec.low_margin_threshold:g}")
@@ -296,13 +338,16 @@ def write_figure(path, tp, fp, rec):
         import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
     except Exception as e:
         print(f"WARNING: matplotlib unavailable, skipping figure: {e}", file=sys.stderr); return
-    pts = roc_points(tp, fp)
+    tp_finite = [t for t in tp if t != INF]      # design §2: the gate acts only here
+    pts = roc_points(tp_finite, fp)
     ms = [p.m for p in pts]
     plt.figure(figsize=(6, 4))
-    plt.plot(ms, [p.retention for p in pts], label="TP retention")
+    plt.plot(ms, [p.retention for p in pts], label="multi-locus TP retention")
     plt.plot(ms, [p.rejection for p in pts], label="FP rejection")
     plt.axvline(rec.min_margin, ls="--", color="k", label=f"knee={rec.min_margin:g}")
-    plt.xlabel("min_margin (%id points)"); plt.ylabel("fraction"); plt.legend(); plt.tight_layout()
+    plt.xlabel("min_margin (%id points)"); plt.ylabel("fraction")
+    plt.title(f"multi-locus margin ROC (n_tp_multi={rec.n_tp_multi}, n_fp={rec.n_fp})")
+    plt.legend(); plt.tight_layout()
     plt.savefig(path, dpi=150); plt.close()
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -357,8 +402,17 @@ def main(argv=None) -> int:
             ids = [l.split()[0] for l in open(a.busco_ids) if l.strip() and not l.startswith("#")] if a.busco_ids else None
             tp, fp = collect_margins(by_q, None, restrict_ids=ids)
 
-    if not tp or not fp:
-        print(f"ERROR: insufficient data (TP={len(tp)}, FP={len(fp)})", file=sys.stderr); return 1
+    # A margin ROC needs a MULTI-LOCUS (finite-margin) TP sample AND an FP
+    # sample (design §2); single-locus inf margins alone cannot place a knee.
+    # Pre-validate here so the CLI exits cleanly rather than letting
+    # recommend()'s ValueError surface as a traceback.
+    tp_finite = [t for t in tp if t != INF]
+    if not tp_finite or not fp:
+        print(f"ERROR: insufficient multi-locus data for a margin ROC "
+              f"(multi-locus TP={len(tp_finite)}, FP={len(fp)}; total TP={len(tp)}). "
+              f"The margin gate is defined on the >=2-paralog regime (design §2).",
+              file=sys.stderr)
+        return 1
     rec = recommend(tp, fp)
     print(format_table(rec))
     if a.out_recommendation: write_recommendation(a.out_recommendation, rec, dry_run=a.dry_run)

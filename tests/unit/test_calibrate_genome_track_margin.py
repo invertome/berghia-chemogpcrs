@@ -172,3 +172,24 @@ def test_write_figure_creates_png(tmp_path):
     out = tmp_path / "roc.png"
     cm.write_figure(str(out), tp, fp, rec)
     assert out.exists() and out.stat().st_size > 0
+
+
+# ---- BUSCO-run fix: knee is built on the multi-locus (finite) population -----
+
+def test_recommend_knee_ignores_infinite_single_locus_tp():
+    # 10 single-locus genes (margin inf) must NOT pull the knee up; the knee is
+    # built from the multi-locus TP {8,9} vs FP {1,2} (design §2). Without this
+    # the inf-dominated retention pushes the knee to an artifactual ~99.5.
+    rec = cm.recommend([cm.INF] * 10 + [8.0, 9.0], [1.0, 2.0])
+    assert 2.0 < rec.min_margin < 8.0
+    assert rec.n_tp == 12 and rec.n_tp_multi == 2
+    expected = (10 + sum(1 for t in [8.0, 9.0] if t >= rec.min_margin)) / 12
+    assert rec.full_pop_retention == pytest.approx(expected)
+
+def test_recommend_raises_without_multi_locus_tp():
+    with pytest.raises(ValueError):
+        cm.recommend([cm.INF, cm.INF], [1.0])          # no finite-margin TP
+
+def test_recommend_raises_without_fp():
+    with pytest.raises(ValueError):
+        cm.recommend([8.0], [])                         # no FP samples
