@@ -134,3 +134,114 @@ def _percentile(values, p):     # linear-interp percentile, stdlib (mirrors the 
     if len(s) == 1: return s[0]
     k = (len(s) - 1) * (p / 100.0); lo, hi = math.floor(k), math.ceil(k)
     return s[int(k)] if lo == hi else s[lo] * (hi - k) + s[hi] * (k - lo)
+
+
+def load_cds_true_loci(cds_fasta: str) -> dict[str, tuple[str, int, int]]:
+    loci = {}
+    with open(cds_fasta) as fh:
+        for line in fh:
+            if line.startswith(">"):
+                qid = line[1:].split()[0]
+                loci[qid] = parse_cds_true_locus(line)
+    return loci
+
+def _placements_by_query(paf, gff):
+    parsed = []
+    if paf: parsed += rc.parse_minimap2_paf(paf)
+    if gff: parsed += rc.parse_gmap_gff(gff)
+    by_q: dict[str, list[rc.Placement]] = {}
+    for p in parsed:
+        by_q.setdefault(p.query, []).append(p)
+    return by_q
+
+def collect_margins(by_query, true_loci, restrict_ids=None):
+    """-> (tp_list, fp_list). true_loci=None ⇒ busco-mode (rep0 truth)."""
+    tp, fp = [], []
+    ids = restrict_ids if restrict_ids is not None else list(by_query)
+    for q in ids:
+        pls = by_query.get(q)
+        if not pls: continue
+        reps = distinct_locus_reps(pls)
+        tl = None if true_loci is None else true_loci.get(q)
+        if true_loci is not None and tl is None: continue    # no truth for this id
+        obs = query_margins(reps, tl)
+        if obs.tp is not None: tp.append(obs.tp)
+        if obs.fp is not None: fp.append(obs.fp)
+    return tp, fp
+
+def _synthetic():
+    # 6 clean genes (TP margin ~8-11) + 4 absent-gene grabs (FP margin ~1-3);
+    # FP ceiling 3.0 ⇒ Youden knee at 3.1 (clean separation, well inside 3<m<8).
+    tp = [8.2, 9.1, 10.4, 8.8, 11.0, 9.6]
+    fp = [1.1, 2.0, 3.0, 1.5]
+    return tp, fp
+
+def format_table(rec: MarginRecommendation) -> str:
+    lines = ["# Margin-gate calibration",
+             f"TP (correct) n={rec.n_tp}   FP (spurious) n={rec.n_fp}",
+             f"knee: margin={rec.knee.m:g}  retention={rec.knee.retention:.3f}  "
+             f"rejection={rec.knee.rejection:.3f}  J={rec.knee.j:.3f}",
+             f"clean separation: {'NO (advise tier split)' if rec.split_advisory else 'YES'}",
+             "", "## Recommended (write into config.sh after review)",
+             f"GENOME_TRACK_MIN_MARGIN={rec.min_margin:g}"]
+    if rec.split_advisory:
+        lines.append(f"GENOME_TRACK_LOW_MARGIN={rec.low_margin_threshold:g}")
+    return "\n".join(lines)
+
+def write_recommendation(path, rec, dry_run=False):
+    hdr = ["# DRY RUN synthetic — NOT for production"] if dry_run else []
+    hdr += ["# scripts/calibrate_genome_track_margin.py",
+            f"# knee J={rec.knee.j:.3f}; clean={not rec.split_advisory}",
+            f"GENOME_TRACK_MIN_MARGIN={rec.min_margin:g}"]
+    if rec.split_advisory:
+        hdr.append(f"GENOME_TRACK_LOW_MARGIN={rec.low_margin_threshold:g}")
+    Path(path).write_text("\n".join(hdr) + "\n")
+
+def write_figure(path, tp, fp, rec):
+    try:
+        import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
+    except Exception as e:
+        print(f"WARNING: matplotlib unavailable, skipping figure: {e}", file=sys.stderr); return
+    pts = roc_points(tp, fp)
+    ms = [p.m for p in pts]
+    plt.figure(figsize=(6, 4))
+    plt.plot(ms, [p.retention for p in pts], label="TP retention")
+    plt.plot(ms, [p.rejection for p in pts], label="FP rejection")
+    plt.axvline(rec.min_margin, ls="--", color="k", label=f"knee={rec.min_margin:g}")
+    plt.xlabel("min_margin (%id points)"); plt.ylabel("fraction"); plt.legend(); plt.tight_layout()
+    plt.savefig(path, dpi=150); plt.close()
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description="Calibrate GENOME_TRACK_MIN_MARGIN from a TP/FP margin ROC.")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--mode", choices=["refseq", "busco"], default="refseq")
+    ap.add_argument("--minimap2-paf"); ap.add_argument("--gmap-gff")
+    ap.add_argument("--refseq-cds", help="GPCR CDS FASTA (headers -> true loci) for refseq-mode")
+    ap.add_argument("--busco-ids", help="restrict to these query ids for busco-mode")
+    ap.add_argument("--out-recommendation"); ap.add_argument("--out-figure")
+    a = ap.parse_args(argv)
+
+    if a.dry_run:
+        tp, fp = _synthetic()
+    else:
+        if not (a.minimap2_paf or a.gmap_gff):
+            print("ERROR: need --minimap2-paf and/or --gmap-gff", file=sys.stderr); return 2
+        by_q = _placements_by_query(a.minimap2_paf, a.gmap_gff)
+        if a.mode == "refseq":
+            if not a.refseq_cds:
+                print("ERROR: refseq-mode needs --refseq-cds", file=sys.stderr); return 2
+            tp, fp = collect_margins(by_q, load_cds_true_loci(a.refseq_cds))
+        else:
+            ids = [l.split()[0] for l in open(a.busco_ids) if l.strip() and not l.startswith("#")] if a.busco_ids else None
+            tp, fp = collect_margins(by_q, None, restrict_ids=ids)
+
+    if not tp or not fp:
+        print(f"ERROR: insufficient data (TP={len(tp)}, FP={len(fp)})", file=sys.stderr); return 1
+    rec = recommend(tp, fp)
+    print(format_table(rec))
+    if a.out_recommendation: write_recommendation(a.out_recommendation, rec, dry_run=a.dry_run)
+    if a.out_figure: write_figure(a.out_figure, tp, fp, rec)
+    return 0
+
+if __name__ == "__main__":      # pragma: no cover
+    raise SystemExit(main())

@@ -69,3 +69,17 @@ def test_knee_overlap_flags_split():
     fp = [1.0, 2.0, 3.0, 4.0]
     rec = cm.recommend(tp, fp)
     assert rec.split_advisory                    # no clean knee
+
+
+def test_cli_dry_run_reproduces_clean_knee(capsys):
+    rc_code = cm.main(["--dry-run"])
+    out = capsys.readouterr().out
+    assert rc_code == 0 and "GENOME_TRACK_MIN_MARGIN=" in out
+    val = float([l for l in out.splitlines() if "GENOME_TRACK_MIN_MARGIN=" in l][0].split("=")[1])
+    assert 3.0 < val < 8.0
+
+def test_cli_writes_sourceable_recommendation(tmp_path):
+    out = tmp_path / "rec.sh"
+    cm.main(["--dry-run", "--out-recommendation", str(out)])
+    text = out.read_text()
+    assert text.startswith("#") and "GENOME_TRACK_MIN_MARGIN=" in text
