@@ -193,3 +193,20 @@ def test_recommend_raises_without_multi_locus_tp():
 def test_recommend_raises_without_fp():
     with pytest.raises(ValueError):
         cm.recommend([8.0], [])                         # no FP samples
+
+
+# ---- overlap: recommend the keep-and-flag posture, not the diagnostic knee --
+
+def test_recommend_overlap_uses_keepandflag_not_knee():
+    # Identical TP and FP -> guaranteed overlap. The recommendation must be the
+    # design-§5 keep-and-flag posture (low hard floor at p5 + flag at the median
+    # multi-locus margin), NOT the diagnostic Youden knee — which on overlap is a
+    # bad hard gate that would drop most correct multi-locus placements and can
+    # invert the tier order (min_margin > low_margin_threshold).
+    tp = [1., 2., 3., 4., 5., 6., 7., 8., 9., 10.]
+    fp = list(tp)
+    rec = cm.recommend(tp, fp)
+    assert rec.split_advisory
+    assert rec.min_margin == pytest.approx(cm._percentile(tp, 5.0), abs=0.01)
+    assert rec.low_margin_threshold == pytest.approx(cm._percentile(tp, 50.0), abs=0.01)
+    assert rec.min_margin < rec.low_margin_threshold
