@@ -76,3 +76,61 @@ def query_margins(reps: list[rc.Placement], true_locus: tuple[str, int, int] | N
     rest = reps[1:]                       # drop self
     fp = _margin(rest)
     return MarginObs(tp, None if fp == INF else fp, None if fp == INF else "synthetic")
+
+
+J_MIN_CLEAN = 0.5        # knee Youden-J below this ⇒ TP/FP overlap ⇒ advise splitting the tiers
+GRID_STEP = 0.1
+
+@dataclass(frozen=True)
+class RocPoint:
+    m: float
+    retention: float     # P(tp margin >= m); inf counts as retained
+    rejection: float     # P(fp margin < m)
+    j: float             # retention + rejection - 1
+
+@dataclass(frozen=True)
+class MarginRecommendation:
+    min_margin: float
+    knee: RocPoint
+    split_advisory: bool
+    low_margin_threshold: float | None   # set only when split_advisory
+    n_tp: int
+    n_fp: int
+
+def _grid(tp, fp):
+    finite = [x for x in tp + fp if x != INF]
+    hi = (max(finite) if finite else 1.0) + GRID_STEP
+    n = int(hi / GRID_STEP) + 1
+    return [round(i * GRID_STEP, 4) for i in range(n)]
+
+def roc_points(tp, fp, grid=None) -> list[RocPoint]:
+    grid = grid if grid is not None else _grid(tp, fp)
+    n_tp, n_fp = len(tp), len(fp)
+    out = []
+    for m in grid:
+        ret = (sum(1 for x in tp if x >= m) / n_tp) if n_tp else float("nan")
+        rej = (sum(1 for x in fp if x < m) / n_fp) if n_fp else float("nan")
+        out.append(RocPoint(m, ret, rej, ret + rej - 1))
+    return out
+
+def youden_knee(points) -> RocPoint:
+    valid = [p for p in points if not math.isnan(p.j)]
+    if not valid:
+        raise ValueError("no valid ROC points (need both TP and FP samples)")
+    return max(valid, key=lambda p: (p.j, -p.m))     # tie -> smaller margin (favor recall)
+
+def recommend(tp, fp) -> MarginRecommendation:
+    knee = youden_knee(roc_points(tp, fp))
+    split = knee.j < J_MIN_CLEAN
+    return MarginRecommendation(
+        min_margin=round(knee.m, 2), knee=knee, split_advisory=split,
+        low_margin_threshold=(round(_percentile([x for x in tp if x != INF] or [knee.m], 50.0), 2)
+                              if split else None),
+        n_tp=len(tp), n_fp=len(fp))
+
+def _percentile(values, p):     # linear-interp percentile, stdlib (mirrors the id/cov calibrator)
+    s = sorted(float(v) for v in values)
+    if not s: raise ValueError("percentile of empty")
+    if len(s) == 1: return s[0]
+    k = (len(s) - 1) * (p / 100.0); lo, hi = math.floor(k), math.ceil(k)
+    return s[int(k)] if lo == hi else s[lo] * (hi - k) + s[hi] * (k - lo)

@@ -51,3 +51,21 @@ def test_margins_busco_mode_rep0_is_truth():
     reps = cm.distinct_locus_reps(pls)
     obs = cm.query_margins(reps, None)
     assert obs.tp == pytest.approx(3.5) and obs.fp is None       # only 1 paralog -> no synthetic FP
+
+
+def test_roc_inf_tp_always_retained():
+    pts = cm.roc_points([cm.INF, cm.INF, 5.0], [1.0], [0.0, 3.0, 6.0])
+    ret_at_6 = [p for p in pts if p.m == 6.0][0].retention
+    assert ret_at_6 == pytest.approx(2/3)      # the two inf margins still retained at m=6
+
+def test_knee_clean_separation():
+    tp = [8.0, 9.0, 10.0, 11.0]                # TP floor 8
+    fp = [1.0, 2.0, 3.0]                        # FP ceiling 3
+    rec = cm.recommend(tp, fp)
+    assert 3.0 < rec.min_margin < 8.0 and not rec.split_advisory
+
+def test_knee_overlap_flags_split():
+    tp = [1.0, 2.0, 3.0, 4.0]                  # TP and FP overlap heavily
+    fp = [1.0, 2.0, 3.0, 4.0]
+    rec = cm.recommend(tp, fp)
+    assert rec.split_advisory                    # no clean knee
