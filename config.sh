@@ -187,7 +187,13 @@ export RUN_GENOME_TRACK="${RUN_GENOME_TRACK:-1}"
 # BUSCO single-copy set (run `--dry-run` for a worked example of the method).
 export GENOME_TRACK_MIN_ID="${GENOME_TRACK_MIN_ID:-95}"       # min transcript->genome %identity
 export GENOME_TRACK_MIN_COV="${GENOME_TRACK_MIN_COV:-90}"     # min transcript->genome %coverage
-export GENOME_TRACK_MIN_MARGIN="${GENOME_TRACK_MIN_MARGIN:-2}"  # min best-vs-second %id margin across distinct loci
+# Margin gate CALIBRATED 2026-07-06 (bead x89, keep-and-flag posture): the on-target
+# RefSeq-GPCR + BUSCO ground-truth ROC found the best-vs-second margin does NOT separate
+# correct from spurious locus assignments for LSE paralogs (Youden J ~0.11-0.13). So the
+# HARD gate is low (reject only near-ties, which then defer to the miniprot/BLASTp-RBH
+# cascade) and a higher ADVISORY threshold flags thin placements; real gating = MIN_ID/COV/RBH.
+export GENOME_TRACK_MIN_MARGIN="${GENOME_TRACK_MIN_MARGIN:-1}"   # HARD gate: reject multi-locus placements below this best-vs-second %id margin
+export GENOME_TRACK_LOW_MARGIN="${GENOME_TRACK_LOW_MARGIN:-8}"   # ADVISORY: flag (not reject) multi-locus placements below this %id margin as low_margin
 
 # --- Local overrides (gitignored) ---
 # Allow per-machine config (real SLURM_EMAIL, custom paths, etc.) without
