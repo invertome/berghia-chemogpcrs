@@ -312,10 +312,11 @@ fi
 RECON_PROTEINS="${WORK}/reconcile_proteins.faa"
 cat "$REFSEQ_CAND_FA" "$TXOME_CANDS_FA" > "$RECON_PROTEINS"
 
-# --- (h) Reconcile. Thresholds come from config.sh (GENOME_TRACK_MIN_ID/_COV/
-#         _MARGIN — the design §4 working hypothesis 95/90/2, to be FINALIZED by
-#         scripts/calibrate_reconcile_thresholds.py on the BUSCO single-copy set).
-#         The module's own defaults match, so these are explicit, not new behavior. ---
+# --- (h) Reconcile. Thresholds come from config.sh. GENOME_TRACK_MIN_ID/_COV=95/90
+#         (id/cov calibration found no clean separation → kept the working hypothesis).
+#         GENOME_TRACK_MIN_MARGIN/_LOW_MARGIN=1/8 CALIBRATED 2026-07-06 (bead x89): the
+#         best-vs-second margin is non-discriminating for LSE paralogs, so a low HARD
+#         gate + higher ADVISORY flag (keep-and-flag); real gating = %id/%cov/RBH. ---
 log "Reconciling genome + transcriptome candidate tracks -> ${RECON_DIR}"
 python3 "${SCRIPTS_DIR}/reconcile_candidates.py" \
     --minimap2-paf "$MINIMAP_PAF" \
@@ -329,6 +330,7 @@ python3 "${SCRIPTS_DIR}/reconcile_candidates.py" \
     --min-id "${GENOME_TRACK_MIN_ID}" \
     --min-cov "${GENOME_TRACK_MIN_COV}" \
     --min-margin "${GENOME_TRACK_MIN_MARGIN}" \
+    --low-margin-threshold "${GENOME_TRACK_LOW_MARGIN}" \
     --out-dir "$RECON_DIR"
 
 check_file "$OUT_FAA" "${RECON_DIR}/reconciled_candidates.tsv"
