@@ -1,9 +1,12 @@
 """Generate a BRAKER4-format samples.csv for Phase 1f (bead -p49).
 
-Reads `references/species_tree/genome_inventory_unannotated.tsv` (134
-unannotated-genome species from Phase 1e) + a cache dir of pre-downloaded
-genome FASTAs (Phase 1f genome downloader output) + an OrthoDB metazoa
-protein DB; emits the BRAKER4 samples.csv for protein-only EP mode.
+Reads `references/species_tree/genome_inventory.tsv` (the unified
+genome inventory — Phase 1e unannotated + Phase 1d extension species,
+merged) + a cache dir of pre-downloaded genome FASTAs (Phase 1f genome
+downloader output) + a protein evidence DB; emits the BRAKER4 samples.csv
+for protein-only EP mode. The legacy two-file form (genome_inventory_-
+unannotated.tsv + extension_inventory.tsv) is still accepted via --manifest
+(read_targets is variadic + schema-tolerant); see read_targets for details.
 
 BRAKER4 schema reference: https://github.com/Gaius-Augustus/BRAKER4 README.
 The 14 columns must appear in the exact order below; for EP mode only
@@ -155,9 +158,10 @@ def _build_argparser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description=(
             "Generate BRAKER4 samples.csv for Phase 1f EP-mode runs over "
-            "the unannotated-genome species. Reads the Phase 1e manifest "
-            "+ a cache dir of pre-downloaded genome FASTAs + an OrthoDB "
-            "protein DB; emits one row per species that has a cached genome."
+            "the genome-inventory species. Reads the unified genome "
+            "inventory (or the legacy Phase 1e/1d manifests) + a cache dir "
+            "of pre-downloaded genome FASTAs + a protein evidence DB; emits "
+            "one row per species that has a cached genome."
         ),
     )
     p.add_argument(
