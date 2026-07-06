@@ -32,3 +32,47 @@ def parse_cds_true_locus(header: str) -> tuple[str, int, int]:
     if not coords:
         raise ValueError(f"no coordinates in location: {m.group(1)}")
     return scaffold, min(coords), max(coords)
+
+
+def distinct_locus_reps(placements: list[rc.Placement]) -> list[rc.Placement]:
+    """One highest-identity rep per distinct locus, identity-descending —
+    reconcile_candidates.py's own clustering, so 'distinct locus' matches the gate."""
+    return sorted((min(c, key=rc._identity_rank) for c in rc._cluster_placements(placements)),
+                  key=rc._identity_rank)
+
+def _overlaps(p: rc.Placement, scaffold: str, start: int, end: int) -> bool:
+    # tolerant inclusive overlap; paralog loci are kb apart so 1-base slop is irrelevant.
+    return p.chrom == scaffold and p.start <= end and start <= p.end
+
+def _margin(reps: list[rc.Placement]) -> float:
+    return INF if len(reps) < 2 else reps[0].pct_identity - reps[1].pct_identity
+
+@dataclass(frozen=True)
+class MarginObs:
+    tp: float | None
+    fp: float | None
+    fp_kind: str | None      # "natural" | "synthetic" | None
+
+def query_margins(reps: list[rc.Placement], true_locus: tuple[str, int, int] | None) -> MarginObs:
+    """TP margin (correct top locus) and the operative FP margin for one query.
+
+    refseq-mode (true_locus given): top rep overlapping true -> TP; a paralog on
+    top -> NATURAL FP; drop-true-locus among >=2 remaining -> SYNTHETIC FP.
+    busco-mode (true_locus None): rep0 assumed true (single-copy)."""
+    if not reps:
+        return MarginObs(None, None, None)
+    if true_locus is None:
+        true_idx = 0
+    else:
+        sc, s, e = true_locus
+        true_idx = next((i for i, r in enumerate(reps) if _overlaps(r, sc, s, e)), None)
+    if true_idx is None:
+        # true gene not mapped at all: top-vs-second is an absent-gene grab.
+        fp = _margin(reps)
+        return MarginObs(None, None if fp == INF else fp, None if fp == INF else "synthetic")
+    if true_idx >= 1:
+        return MarginObs(None, reps[0].pct_identity - reps[1].pct_identity, "natural")
+    tp = _margin(reps)                    # true is rep0
+    rest = reps[1:]                       # drop self
+    fp = _margin(rest)
+    return MarginObs(tp, None if fp == INF else fp, None if fp == INF else "synthetic")
