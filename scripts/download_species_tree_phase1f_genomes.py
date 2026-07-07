@@ -27,6 +27,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Union
 
+# Share the samples-builder's canonical stem so the genome filename this writes
+# is byte-identical to the name build_braker4_samples_csv later looks up. Using
+# a bare `binomial.replace(' ', '_')` here diverged for punctuated names
+# (e.g. "Ctena cf. galapagana" / "Chaetoderma sp. LZ-2023a"): the builder strips
+# '.'/'-' and collapses underscores, so those genomes were downloaded but never
+# found -> silently dropped from the BRAKER set.
+from build_braker4_samples_csv import sanitize_sample_name
+
 
 @dataclass(frozen=True)
 class DownloadTarget:
@@ -39,10 +47,13 @@ class DownloadTarget:
 
 def target_output_path(target: DownloadTarget, cache_dir: Union[str, Path]) -> Path:
     """Canonical genome FASTA path for one species: `<cache_dir>/<taxid>_<binomial>.fasta`.
-    Spaces in binomial -> underscores.
+
+    The stem is sanitized with the SAME function the samples-builder uses
+    (sanitize_sample_name: non-[A-Za-z0-9_] -> '_', collapsed) so the two agree
+    on the filename for every species, including punctuated names.
     """
     cache = Path(cache_dir)
-    stem = f"{target.taxid}_{target.binomial.replace(' ', '_')}"
+    stem = sanitize_sample_name(f"{target.taxid}_{target.binomial}")
     return cache / f"{stem}.fasta"
 
 
