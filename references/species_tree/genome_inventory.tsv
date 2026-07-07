@@ -2,7 +2,7 @@ taxid	binomial	clade	policy_class	source	accession	assembly_level	annotation_sta
 6161	Dugesia japonica	platyhelminthes		GenBank	GCA_001938525.1	Scaffold		0		1166	854187087		nath_phase1e
 6162	Girardia tigrina	platyhelminthes		GenBank	GCA_001938485.1	Scaffold		0		5133	1428149015		nath_phase1e
 6189	Schistosoma spindalis	Platyhelminthes	outgroup_platyhelminthes	GenBank	GCA_946903255.1	Chromosome		9330		3920158	390075707	harvested_annotated	extension_phase1d
-6192	Fasciola hepatica	platyhelminthes		GenBank	GCA_948099385.2	Contig		0	2024-08-27	9838557	1506673460		phase1a_recover
+6192	Fasciola hepatica	platyhelminthes		GenBank	GCA_948099385.2	Contig		0	2024-08-27	9838557	1506673460	dropped_redundant_outgroup	phase1a_recover
 6206	Taenia saginata	platyhelminthes		GenBank	GCA_001693075.2	Scaffold		0		142979	169104283		nath_phase1e
 6212	Echinococcus oligarthrus	platyhelminthes		GenBank	GCA_900683695.1	Contig		0		2071	105959096		nath_phase1e
 6344	Arenicola marina	Annelida	outgroup_annelida	GenBank	GCA_964019135.1	Chromosome		0		360722	869392476	harvested_ensembl	extension_phase1d
