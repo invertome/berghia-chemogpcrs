@@ -20,7 +20,7 @@ taxid	binomial	clade	source	accession	assembly_level	annotation_status	est_prote
 6216	Hymenolepis diminuta	platyhelminthes	GenBank	GCA_056153285.1	Chromosome		10241		
 6347	Owenia fusiformis	annelida	GenBank	GCA_903813345.2	Scaffold		26674		
 6359	Platynereis dumerilii	annelida							no_proteome_in_ncbi
-6398	Lumbricus terrestris	annelida							no_proteome_in_ncbi
+6398	Lumbricus terrestris	annelida	Ensembl_rapid_release	GCA_949752735.1	Chromosome	Ensembl rapid-release geneset	37647		
 6412	Helobdella robusta	annelida	RefSeq	GCF_000326865.2	Scaffold		23368		
 6421	Hirudo medicinalis	annelida							no_proteome_in_ncbi
 6426	Riftia pachyptila	annelida							no_proteome_in_ncbi
@@ -49,7 +49,7 @@ taxid	binomial	clade	source	accession	assembly_level	annotation_status	est_prote
 28841	Moniezia expansa	platyhelminthes							no_proteome_in_ncbi
 29158	Mytilus galloprovincialis	bivalvia	RefSeq	GCF_965363235.1	Chromosome	Full annotation	27168		
 29159	Crassostrea gigas	bivalvia	RefSeq	GCF_963853765.1	Chromosome	Full annotation	26073		
-31201	Spisula solida	bivalvia							no_proteome_in_ncbi
+31201	Spisula solida	bivalvia	Ensembl_rapid_release	GCA_947247005.1	Chromosome	Ensembl rapid-release geneset	22445		
 31246	Schistosoma mattheei	platyhelminthes	GenBank	GCA_944470405.2	Chromosome		10770		
 34504	Paragonimus westermani	platyhelminthes	GenBank	GCA_008508345.1	Scaffold		12783		
 34573	Nautilus pompilius	cephalopoda							no_proteome_in_ncbi
@@ -92,18 +92,18 @@ taxid	binomial	clade	source	accession	assembly_level	annotation_status	est_prote
 79327	Schmidtea mediterranea	platyhelminthes							no_proteome_in_ncbi
 79923	Clonorchis sinensis	platyhelminthes	GenBank	GCA_003604175.2	Chromosome		13489		
 80818	Hippopus hippopus	bivalvia							no_proteome_in_ncbi
-80821	Fragum fragum	bivalvia							no_proteome_in_ncbi
-80829	Tridacna gigas	bivalvia							no_proteome_in_ncbi
+80821	Fragum fragum	bivalvia	Ensembl_rapid_release	GCA_946902895.1	Chromosome	Ensembl rapid-release geneset	25546		
+80829	Tridacna gigas	bivalvia	Ensembl_rapid_release	GCA_945859785.2	Chromosome	Ensembl rapid-release geneset	30512		
 80833	Tridacna crocea	bivalvia							no_proteome_in_ncbi
 82660	Gyrodactylus bullatarudis	platyhelminthes							no_proteome_in_ncbi
 83531	Octopus mimus	cephalopoda							no_proteome_in_ncbi
 85432	Taenia pisiformis	platyhelminthes							no_proteome_in_ncbi
-87960	Patella depressa	gastropoda							no_proteome_in_ncbi
-88005	Patella pellucida	gastropoda							no_proteome_in_ncbi
+87960	Patella depressa	gastropoda	Ensembl_rapid_release	GCA_948474765.1	Chromosome	Ensembl rapid-release geneset	35309		
+88005	Patella pellucida	gastropoda	Ensembl_rapid_release	GCA_917208275.1	Chromosome	Ensembl rapid-release geneset	28775		
 88925	Lineus longissimus	other_lophotrochozoan_phyla	RefSeq	GCF_910592395.1	Chromosome	Full annotation	17976		
 89764	Conus betulinus	gastropoda							no_proteome_in_ncbi
 94034	Taenia multiceps	platyhelminthes							no_proteome_in_ncbi
-95170	Membranipora membranacea	other_lophotrochozoan_phyla							no_proteome_in_ncbi
+95170	Membranipora membranacea	other_lophotrochozoan_phyla	Ensembl_rapid_release	GCA_914767715.1	Chromosome	Ensembl rapid-release geneset	42756		
 95538	Streblospio benedicti	annelida							no_proteome_in_ncbi
 98310	Sinonovacula constricta	bivalvia							no_proteome_in_ncbi
 99802	Spirometra erinaceieuropaei	platyhelminthes							no_proteome_in_ncbi
@@ -151,7 +151,7 @@ taxid	binomial	clade	source	accession	assembly_level	annotation_status	est_prote
 262604	Goniobranchus kuniei	gastropoda							no_proteome_in_ncbi
 262605	Goniobranchus leopardus	gastropoda							no_proteome_in_ncbi
 271030	Anisus vortex	gastropoda							no_proteome_in_ncbi
-271774	Alentia gelatinosa	annelida							no_proteome_in_ncbi
+271774	Alentia gelatinosa	annelida	Ensembl_rapid_release	GCA_950022655.1	Chromosome	Ensembl rapid-release geneset	28362		
 282301	Macrostomum lignano	platyhelminthes	GenBank	GCA_002269645.1	Scaffold		49013		
 283909	Capitella teleta	annelida	GenBank	GCA_000328365.1	Scaffold		31977		
 294695	Argonauta argo	cephalopoda							no_proteome_in_ncbi
@@ -163,7 +163,7 @@ taxid	binomial	clade	source	accession	assembly_level	annotation_status	est_prote
 311461	Hirudo verbana	annelida							no_proteome_in_ncbi
 335511	Cardicola forsteri	platyhelminthes							no_proteome_in_ncbi
 351238	Amynthas corticis	annelida							no_proteome_in_ncbi
-356393	Limnoperna fortunei	bivalvia							no_proteome_in_ncbi
+356393	Limnoperna fortunei	bivalvia	Ensembl_rapid_release	GCA_944474755.1	Chromosome	Ensembl rapid-release geneset	68899		
 358449	Laevipilina antarctica	other_molluscan_classes							no_proteome_in_ncbi
 366651	Atrina japonica	bivalvia							no_proteome_in_ncbi
 370345	Batillaria attramentaria	gastropoda	GenBank	GCA_018292915.2	Contig		40596		
@@ -180,13 +180,13 @@ taxid	binomial	clade	source	accession	assembly_level	annotation_status	est_prote
 508130	Goniobranchus fidelis	gastropoda							no_proteome_in_ncbi
 515824	Octopus minor	cephalopoda							no_proteome_in_ncbi
 519352	Echinococcus canadensis	platyhelminthes							no_proteome_in_ncbi
-558755	Cryptosula pallasiana	other_lophotrochozoan_phyla							no_proteome_in_ncbi
+558755	Cryptosula pallasiana	other_lophotrochozoan_phyla	Ensembl_rapid_release	GCA_945261195.1	Chromosome	Ensembl rapid-release geneset	34499		
 582868	Ampullaceana balthica	gastropoda							no_proteome_in_ncbi
 623738	Octopus maya	cephalopoda							no_proteome_in_ncbi
 627230	Ostrea lurida	bivalvia							no_proteome_in_ncbi
 669229	Wirenia argentea	other_molluscan_classes							no_proteome_in_ncbi
 683711	Macrostomum hystrix	platyhelminthes							no_proteome_in_ncbi
-703304	Gibbula magus	gastropoda							no_proteome_in_ncbi
+703304	Gibbula magus	gastropoda	Ensembl_rapid_release	GCA_936450465.1	Chromosome	Ensembl rapid-release geneset	41245		
 857299	Botula fusca	bivalvia							no_proteome_in_ncbi
 880429	Alitta virens	annelida							no_proteome_in_ncbi
 1028688	Arion vulgaris	gastropoda							no_proteome_in_ncbi
@@ -196,15 +196,15 @@ taxid	binomial	clade	source	accession	assembly_level	annotation_status	est_prote
 1131437	Terebella lapidaria	annelida							no_proteome_in_ncbi
 1163369	Schistosoma turkestanicum	platyhelminthes	GenBank	GCA_944470395.2	Chromosome		11134		
 1196096	Metaphire vulgaris	annelida							no_proteome_in_ncbi
-1209993	Amphiduros pacificus	annelida							no_proteome_in_ncbi
+1209993	Amphiduros pacificus	annelida	Ensembl_rapid_release	GCA_949316495.1	Chromosome	Ensembl rapid-release geneset	41354		
 1210411	Lepidonotus clava	annelida							no_proteome_in_ncbi
-1210413	Sthenelais limicola	annelida							no_proteome_in_ncbi
+1210413	Sthenelais limicola	annelida	Ensembl_rapid_release	GCA_942159475.1	Chromosome	Ensembl rapid-release geneset	30951		
 1348078	Hirudinaria manillensis	annelida							no_proteome_in_ncbi
 1353015	Muusoctopus longibrachus	cephalopoda							no_proteome_in_ncbi
 1423836	Octopus insularis	cephalopoda							no_proteome_in_ncbi
 1491186	Alviniconcha marisindica	gastropoda							no_proteome_in_ncbi
 1582096	Octopoteuthis deletron	cephalopoda							no_proteome_in_ncbi
-1620919	Phorcus lineatus	gastropoda							no_proteome_in_ncbi
+1620919	Phorcus lineatus	gastropoda	Ensembl_rapid_release	GCA_921293015.1	Chromosome	Ensembl rapid-release geneset	23437		
 1699438	Fragum whitleyi	bivalvia							no_proteome_in_ncbi
 1735272	Gigantopelta aegis	gastropoda	RefSeq	GCF_016097555.1	Chromosome	Full annotation	22556		
 1803738	Conchocele bisecta	bivalvia							no_proteome_in_ncbi
@@ -220,7 +220,7 @@ taxid	binomial	clade	source	accession	assembly_level	annotation_status	est_prote
 2547956	Mytilisepta virgata	bivalvia							no_proteome_in_ncbi
 2559711	Macrostomum cliftonense	platyhelminthes							no_proteome_in_ncbi
 2584915	Oreohelix idahoensis	gastropoda							no_proteome_in_ncbi
-2589376	Gari tellinella	bivalvia							no_proteome_in_ncbi
+2589376	Gari tellinella	bivalvia	Ensembl_rapid_release	GCA_922989275.2	Chromosome	Ensembl rapid-release geneset	36527		
 2607531	Octopus sinensis	cephalopoda	RefSeq	GCF_006345805.1	Chromosome	Full annotation	18886		
 2653900	Magallana hongkongensis	bivalvia							no_proteome_in_ncbi
 2664684	Dimorphilus gyrociliatus	annelida	GenBank	GCA_904063045.1	Scaffold		14031		
@@ -247,3 +247,17 @@ taxid	binomial	clade	source	accession	assembly_level	annotation_status	est_prote
 6189	Schistosoma spindalis	Platyhelminthes	GenBank	GCA_946903255.1	Chromosome		9330		
 38744	Schistosoma mekongi	Platyhelminthes	GenBank	GCA_034768735.1	Chromosome		9094		
 3198878	Liolophura sinensis	Polyplacophora	RefSeq	GCF_032854445.1	Chromosome	Updated annotation	17422		
+6344	Arenicola marina	Annelida	Ensembl_rapid_release	GCA_964019135.1	Chromosome	Ensembl rapid-release geneset	60078		
+34570	Sepioteuthis lessoniana	Cephalopoda	Ensembl_rapid_release	GCA_963585895.1	Chromosome	Ensembl rapid-release geneset	47388		
+36933	Onchidella celtica	Heterobranchia	Ensembl_rapid_release	GCA_963931925.1	Chromosome	Ensembl rapid-release geneset	18945		
+50417	Mimachlamys varia	Bivalvia	Ensembl_rapid_release	GCA_947623455.1	Chromosome	Ensembl rapid-release geneset	44208		
+70193	Sepiola atlantica	Cephalopoda	Ensembl_rapid_release	GCA_963556195.1	Chromosome	Ensembl rapid-release geneset	27234		
+80831	Tridacna derasa	Bivalvia	Ensembl_rapid_release	GCA_963210305.1	Chromosome	Ensembl rapid-release geneset	30627		
+192920	Bugulina stolonifera	Bryozoa	Ensembl_rapid_release	GCA_935421135.1	Chromosome	Ensembl rapid-release geneset	41553		
+206348	Bathymodiolus brooksi	Bivalvia	Ensembl_rapid_release	GCA_963680875.1	Chromosome	Ensembl rapid-release geneset	34012		
+220392	Bathymodiolus septemdierum	Bivalvia	Ensembl_rapid_release	GCA_963383655.1	Chromosome	Ensembl rapid-release geneset	45546		
+256056	Lepidochitona cinerea	Polyplacophora	Ensembl_rapid_release	GCA_963971465.1	Chromosome	Ensembl rapid-release geneset	26993		
+296134	Acanthosepion lycidas	Cephalopoda	Ensembl_rapid_release	GCA_963932145.1	Chromosome	Ensembl rapid-release geneset	35949		
+334708	Patella ulyssiponensis	Patellogastropoda	Ensembl_rapid_release	GCA_963678685.1	Chromosome	Ensembl rapid-release geneset	35434		
+561460	Fragum sueziense	Bivalvia	Ensembl_rapid_release	GCA_963680895.1	Chromosome	Ensembl rapid-release geneset	118084		
+1954227	Arcuatula senhousia	Bivalvia	Ensembl_rapid_release	GCA_963971305.1	Chromosome	Ensembl rapid-release geneset	33048		
