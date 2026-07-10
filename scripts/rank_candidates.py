@@ -1502,6 +1502,15 @@ def calculate_rank_score(df, weights):
         if row.get('has_og_confidence_data', False):
             score += row.get('og_confidence_score_norm', 0) * weights.get('og_confidence', 0)
             total_weight += weights.get('og_confidence', 0)
+        # Bead 0rg (MEDIUM-4): include the tandem-cluster axis — the field's
+        # signature chemoreceptor signal (TANDEM_CLUSTER_WEIGHT=2.5) — so the
+        # sensitivity analysis actually exercises it instead of reporting a
+        # near-zero weight_importance for the highest-weight axis. (Full
+        # unification with the completeness-based production formula, incl. the
+        # o98 phylo gate, remains a separate refactor — see bead 0rg.)
+        if row.get('has_tandem_cluster_data', False):
+            score += row.get('tandem_cluster_score_norm', 0) * weights.get('tandem_cluster', 0)
+            total_weight += weights.get('tandem_cluster', 0)
 
         # Normalize to max possible
         if total_weight > 0:

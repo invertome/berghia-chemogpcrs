@@ -178,3 +178,18 @@ def test_purifying_axis_also_scaled(calc) -> None:
     # contributing to the numerator, and the score would be > 0.
     assert calc(df_zero, WEIGHTS).iloc[0] == pytest.approx(0.0)
     assert calc(df_full, WEIGHTS).iloc[0] > 0.0
+
+
+def test_tandem_cluster_axis_included_in_sensitivity(calc) -> None:
+    """Bead 0rg (MEDIUM-4): the sensitivity scorer (calculate_rank_score) must
+    include the tandem-cluster axis — the field's signature chemoreceptor signal
+    — not silently ignore it. Previously the sensitivity perturbed the tandem
+    weight while the score never used it, so weight_importance for tandem read
+    ~0 (misleading for the highest-weight axis)."""
+    row = _row(positive=0.0, dnds_rw=1.0)
+    row['has_tandem_cluster_data'] = True
+    row['tandem_cluster_score_norm'] = 1.0
+    df = pd.DataFrame([row])
+    w = {**WEIGHTS, 'tandem_cluster': 2.5}
+    out = calc(df, w).iloc[0]
+    assert out > 0, "tandem-cluster contribution must reach the sensitivity score"
