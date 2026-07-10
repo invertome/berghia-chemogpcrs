@@ -121,7 +121,7 @@ RANK_METHOD = os.getenv('RANK_METHOD', 'weighted')
 
 # Ranking weights
 PHYLO_WEIGHT = float(os.getenv('PHYLO_WEIGHT', 2))
-PURIFYING_WEIGHT = float(os.getenv('PURIFYING_WEIGHT', 1))  # New: separate from positive
+PURIFYING_WEIGHT = float(os.getenv('PURIFYING_WEIGHT', 0))  # adopted default 0 (matches config.sh + _rank_candidates_lib); chemoreceptor ID rewards positive selection, not whole-gene purifying
 POSITIVE_WEIGHT = float(os.getenv('POSITIVE_WEIGHT', 1))    # New: separate from purifying
 
 # Bead -8st: per-OG dN/dS reliability gating. The dN/dS axis is built from
@@ -2054,7 +2054,15 @@ def calculate_fair_rank_score(row):
         'og_confidence': OG_CONFIDENCE_WEIGHT,
         'tandem_cluster': TANDEM_CLUSTER_WEIGHT,
     }
-    return _calculate_fair_rank_score_corrected(scores, weights, completeness_floor=0.4)
+    # Bead -8st: down-weight the dN/dS axes (positive + purifying) by the per-OG
+    # reliability weight, applied to BOTH the score and the completeness
+    # denominator (clean removal). Missing/NaN -> 1.0 (no-op) for legacy CSVs;
+    # an explicit 0.0 (unresolved OG) correctly drops the dN/dS axes.
+    dnds_rw = row.get('dnds_reliability_weight', 1.0)
+    if pd.isna(dnds_rw):
+        dnds_rw = 1.0
+    return _calculate_fair_rank_score_corrected(
+        scores, weights, completeness_floor=0.4, dnds_reliability=float(dnds_rw))
 
 
 df['rank_score'] = df.apply(calculate_fair_rank_score, axis=1, result_type='reduce')

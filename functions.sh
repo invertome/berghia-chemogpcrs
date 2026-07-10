@@ -545,6 +545,33 @@ check_file() {
     done
 }
 
+# --- Assert no duplicate FASTA sequence IDs (fail-loud) ---
+# Arguments: $1 - FASTA file; $2 - optional context label for the message.
+# Returns 1 (and logs an ERROR) if any sequence ID — the first whitespace-
+# delimited token of a header — occurs more than once. IQ-TREE aborts on
+# duplicate taxon names, so this guards the stage-04 per-class combined pool
+# against silent double-adds (bead berghia-chemogpcrs-3sd).
+assert_no_duplicate_fasta_ids() {
+    local fasta="$1"
+    local label="${2:-$fasta}"
+    if [ ! -f "$fasta" ]; then
+        log --level=ERROR "assert_no_duplicate_fasta_ids: file not found: $fasta"
+        return 1
+    fi
+    local dups
+    # `|| true`: a header-less file makes grep exit 1, which would trip the
+    # caller's `set -o pipefail`; we only care about the (possibly empty) output.
+    dups=$(grep '^>' "$fasta" | sed 's/^>//; s/[[:space:]].*//' | sort | uniq -d) || true
+    if [ -n "$dups" ]; then
+        local n examples
+        n=$(printf '%s\n' "$dups" | sed '/^$/d' | wc -l | tr -d ' ')
+        examples=$(printf '%s\n' "$dups" | sed '/^$/d' | head -3 | tr '\n' ' ')
+        log --level=ERROR "Duplicate FASTA IDs in ${label}: ${n} id(s) occur more than once (e.g. ${examples})"
+        return 1
+    fi
+    return 0
+}
+
 # --- Check Directory ---
 # Arguments: $1+ - Directory paths
 check_dir() {
@@ -874,6 +901,124 @@ get_taxids_from_fasta() {
 # Returns: Space-separated list of unique taxids (excluding references)
 get_non_ref_taxids_from_fasta() {
     get_taxids_from_fasta "$1" --exclude-refs
+}
+
+# --- Find nucleotide sequences for an orthogroup's protein alignment ---
+# Arguments: $1 - protein alignment (headers give seq_ids); $2 - output FASTA
+# Reads globals TRANSCRIPTOME_DIR and REFERENCE_CDS_FILE. Returns 0 if a
+# majority of sequences were found, 1 otherwise.
+find_nucleotide_sequences() {
+    local protein_file="$1"
+    local output_file="$2"
+
+    > "$output_file"
+    local found_count=0
+    local missing_count=0
+    local ref_count=0
+
+    # Extract sequence IDs from protein alignment
+    while IFS= read -r header; do
+        seq_id=$(echo "$header" | sed 's/>//')
+
+        # Check if this is a reference sequence
+        is_ref=$(is_reference_seq "$seq_id" && echo "yes" || echo "no")
+
+        # Use metadata lookup to get taxid (with fallback to header parsing)
+        taxid=$(get_taxid_for_seq "$seq_id")
+
+        # Extract protein ID portion (after taxid prefix)
+        # For ref_TAXID_N format: protein_id is N
+        # For TAXID_N format: protein_id is N
+        if [[ "$seq_id" == ref_* ]]; then
+            protein_id=$(echo "$seq_id" | cut -d'_' -f3-)
+        else
+            protein_id=$(echo "$seq_id" | cut -d'_' -f2-)
+        fi
+
+        found=false
+
+        # --- Check reference CDS file first for reference sequences ---
+        if [ "$is_ref" = "yes" ] && [ -f "$REFERENCE_CDS_FILE" ]; then
+            # Try exact match with the seq_id
+            if grep -q "^>${seq_id}" "$REFERENCE_CDS_FILE"; then
+                # Extract sequence (handle multi-line FASTA)
+                awk -v id="$seq_id" '
+                    /^>/ { if (match($0, "^>" id "($|[[:space:]])")) { print; found=1; next } else { found=0 } }
+                    found { print }
+                ' "$REFERENCE_CDS_FILE" >> "$output_file"
+                found=true
+                ((ref_count++))
+            fi
+        fi
+
+        # --- Search transcriptome directory for non-reference sequences ---
+        if [ "$found" = false ]; then
+            # nullglob so the per-species glob below drops out cleanly when it
+            # has no match, leaving the literal patterns to run.
+            shopt -s nullglob
+            for ext in mrna cds fna fa; do
+                # Naming conventions: bare taxid, taxid_taxid, and the canonical
+                # per-species <taxid>_<genus>_<species> layout (config.sh
+                # BERGHIA_FILE_PREFIX) — the last matched with a glob.
+                for nuc_file in "${TRANSCRIPTOME_DIR}/${taxid}.${ext}" \
+                               "${TRANSCRIPTOME_DIR}/taxid_${taxid}.${ext}" \
+                               "${TRANSCRIPTOME_DIR}/${taxid}_${taxid}.${ext}" \
+                               "${TRANSCRIPTOME_DIR}/${taxid}_"*".${ext}"; do
+                    if [ -f "$nuc_file" ]; then
+                        # Extract the corresponding nucleotide sequence
+                        # Try exact match first, then partial match
+                        if grep -q "^>${seq_id}" "$nuc_file"; then
+                            # Handle multi-line FASTA
+                            awk -v id="$seq_id" '
+                                /^>/ { if (match($0, "^>" id "($|[[:space:]])")) { print; found=1; next } else { found=0 } }
+                                found { print }
+                            ' "$nuc_file" >> "$output_file"
+                            found=true
+                            break 2
+                        elif grep -q "^>${protein_id}" "$nuc_file"; then
+                            # Extract and rename header to match protein
+                            awk -v id="$protein_id" -v new_id="$seq_id" '
+                                /^>/ { if (match($0, "^>" id "($|[[:space:]])")) { print ">" new_id; found=1; next } else { found=0 } }
+                                found { print }
+                            ' "$nuc_file" >> "$output_file"
+                            found=true
+                            break 2
+                        fi
+                    fi
+                done
+            done
+            shopt -u nullglob
+        fi
+
+        # --- Fallback: check all reference CDS for non-reference sequences too ---
+        if [ "$found" = false ] && [ -f "$REFERENCE_CDS_FILE" ]; then
+            if grep -q "^>${seq_id}" "$REFERENCE_CDS_FILE"; then
+                awk -v id="$seq_id" '
+                    /^>/ { if (match($0, "^>" id "($|[[:space:]])")) { print; found=1; next } else { found=0 } }
+                    found { print }
+                ' "$REFERENCE_CDS_FILE" >> "$output_file"
+                found=true
+            fi
+        fi
+
+        if [ "$found" = true ]; then
+            ((found_count++))
+        else
+            ((missing_count++))
+            log "Warning: No nucleotide sequence found for ${seq_id}"
+        fi
+    done < <(grep "^>" "$protein_file")
+
+    # Log summary
+    log "Nucleotide lookup: found=${found_count} (${ref_count} from refs), missing=${missing_count}"
+
+    # Return success if we found at least some sequences (majority required for meaningful analysis)
+    local total=$((found_count + missing_count))
+    if [ "$found_count" -gt 0 ] && [ "$found_count" -ge $((total / 2)) ]; then
+        return 0
+    else
+        return 1
+    fi
 }
 
 # =============================================================================
@@ -1464,6 +1609,37 @@ validate_array_index() {
         log "Array task $task_id exceeds orthogroup count ($max_index). Exiting gracefully."
         exit 0
     fi
+}
+
+# --- Assert the SLURM array range covers the whole manifest (fail-loud) ---
+# Arguments: $1 - orthogroup count (get_orthogroup_count / OG_COUNT)
+#            $2 - highest scheduled array index (default: SLURM_ARRAY_TASK_MAX)
+# Returns 1 (and logs an ERROR) when the array's top index is below OG_COUNT-1,
+# i.e. orthogroups at index > that top would be silently never scheduled. The
+# hardcoded `#SBATCH --array=0-999` truncates any larger manifest without
+# warning; the submit wrapper must size --array from OG_COUNT (chunk if it
+# exceeds MaxArraySize). Bead berghia-chemogpcrs-fxx.
+assert_array_covers_manifest() {
+    local og_count="$1"
+    local array_max="${2:-${SLURM_ARRAY_TASK_MAX}}"
+
+    # Not an array job (local / non-array run) → nothing to check.
+    if [ -z "$array_max" ]; then
+        return 0
+    fi
+    # Count unknown → warn but do not block (fail-open on missing info).
+    if [ -z "$og_count" ] || ! [ "$og_count" -gt 0 ] 2>/dev/null; then
+        log --level=WARN "assert_array_covers_manifest: orthogroup count unknown ($og_count); skipping array-range check"
+        return 0
+    fi
+
+    local needed=$((og_count - 1))
+    if [ "$array_max" -lt "$needed" ]; then
+        local missing=$((og_count - array_max - 1))
+        log --level=ERROR "SLURM array range too small: top index ${array_max} < ${needed} (OG_COUNT=${og_count}); ${missing} orthogroup(s) at index >${array_max} would be silently skipped. Resize the submit array (--array=0-${needed}%K, chunk if > MaxArraySize) and resubmit."
+        return 1
+    fi
+    return 0
 }
 
 # --- Create Array Job Checkpoint ---

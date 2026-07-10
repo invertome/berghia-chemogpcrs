@@ -144,10 +144,13 @@ if [ "${STAGE04_PHASE}" != "ogs" ]; then
 
 # --- Per-OG class table (bead vo8.2) ---
 # Derive results/classification/og_class_majority.tsv (orthogroup<TAB>class) so
-# the OG-array phase routes each orthogroup tree to its real class instead of
-# defaulting every OG to class_A. Majority GPCR class of each OG's classified
-# members (from the per-sequence classifier output). Best-effort: if inputs are
-# missing the producer writes nothing and OG routing falls back to class_A.
+# the OG-array phase routes each orthogroup tree to its real class. Each OG gets
+# the majority GPCR class of its classified members (from the per-sequence
+# classifier output). An OG with NO classified member is omitted from the table
+# and the OG-array phase routes it to class_unclassified — we never assert a
+# class we have no evidence for (a divergent/unclassifiable or non-GPCR OG still
+# gets its own per-OG tree, just not a class backbone). Only if the whole table
+# cannot be built (inputs missing) does per-OG routing fall back to class_A.
 ORTHOGROUPS_TSV=$(find "${RESULTS_DIR}/orthogroups" -name "Orthogroups.tsv" -path "*/Orthogroups/*" 2>/dev/null | head -1)
 CLASSIFY_DIR=$(dirname "${BERGHIA_CLASS_TSV}")
 # Collect every per-sequence class table classify_gpcr_by_class.py writes into
@@ -203,27 +206,12 @@ for CLASS in ${GPCR_CLASSES:-A B C F}; do
         exit 1
     fi
 
-    # Berghia subset for this class — extract from the full Berghia FASTA
-    # using the class column from the P1 classifier output.
-    BERGHIA_CLASS_FA="${CLASS_DIR}/berghia_class_${CLASS}.fa"
-    if [ -f "${BERGHIA_CLASS_TSV}" ] && [ -f "${BERGHIA_FA}" ]; then
-        # Extract sequence IDs for this class from TSV (col 1=seq_id, col 2=class; skip header)
-        awk -F'\t' -v cls="${CLASS}" 'NR>1 && $2==cls {print $1}' \
-            "${BERGHIA_CLASS_TSV}" > "${CLASS_DIR}/berghia_class_${CLASS}_ids.txt"
-        N_IDS=$(wc -l < "${CLASS_DIR}/berghia_class_${CLASS}_ids.txt")
-        if [ "${N_IDS}" -gt 0 ]; then
-            # Use seqtk (already on PATH per config.sh SEQTK) for ID-based extraction
-            "${SEQTK:-seqtk}" subseq "${BERGHIA_FA}" \
-                "${CLASS_DIR}/berghia_class_${CLASS}_ids.txt" > "${BERGHIA_CLASS_FA}"
-            log "Class ${CLASS}: extracted ${N_IDS} Berghia sequences"
-        else
-            log "WARN: no Berghia sequences assigned to class ${CLASS} in ${BERGHIA_CLASS_TSV}"
-            : > "${BERGHIA_CLASS_FA}"
-        fi
-    else
-        log "WARN: ${BERGHIA_CLASS_TSV} not found — class ${CLASS} tree skips Berghia inclusion"
-        : > "${BERGHIA_CLASS_FA}"
-    fi
+    # Berghia sequences for this class are ALREADY embedded in the P2 pool:
+    # build_per_class_reference_pools.py writes refs_class_${CLASS}.fa as
+    # (Berghia + anchors + refs). Stage 04 must NOT re-extract them here — doing
+    # so added every Berghia record twice, and IQ-TREE aborts on duplicate taxon
+    # names (bead berghia-chemogpcrs-3sd). The dedup assert below enforces the
+    # invariant; the per-class Berghia count is reported from pool_members.
 
     # Outgroup: first ${OUTGROUP_BUDGET_PER_CLASS} sequences from the
     # swap-map source class's ref pool (locked decision 2026-05-28).
@@ -243,11 +231,20 @@ for CLASS in ${GPCR_CLASSES:-A B C F}; do
         : > "${OUTGROUP_FA}"
     fi
 
-    # Combine into one FASTA for the filter stack
+    # Combine the P2 pool (refs + anchors + Berghia) with the outgroup.
     COMBINED="${CLASS_DIR}/class_${CLASS}_combined.fa"
-    cat "${REFS_FA}" "${BERGHIA_CLASS_FA}" "${OUTGROUP_FA}" > "${COMBINED}"
+    cat "${REFS_FA}" "${OUTGROUP_FA}" > "${COMBINED}"
+    # Fail loud on any duplicate sequence ID — IQ-TREE aborts on duplicate
+    # taxon names (bead berghia-chemogpcrs-3sd).
+    assert_no_duplicate_fasta_ids "${COMBINED}" "class ${CLASS} combined pool" || exit 1
     N_INPUT=$(grep -c '^>' "${COMBINED}")
-    log "Class ${CLASS}: combined input = ${N_INPUT} sequences (refs + Berghia + outgroup, cap 3000)"
+    POOL_MEMBERS="${PER_CLASS_POOL_DIR}/pool_members_class_${CLASS}.tsv"
+    N_BERGHIA=0
+    [ -f "${POOL_MEMBERS}" ] && N_BERGHIA=$(awk -F'\t' 'NR>1 && $3=="berghia"' "${POOL_MEMBERS}" | wc -l | tr -d ' ')
+    log "Class ${CLASS}: combined input = ${N_INPUT} sequences (pool[refs+anchors+Berghia] + outgroup; ${N_BERGHIA} Berghia from pool)"
+    if [ "${N_BERGHIA}" -eq 0 ]; then
+        log --level=WARN "Class ${CLASS}: pool_members reports 0 Berghia — verify refs_class_${CLASS}.fa was built with --berghia-fasta"
+    fi
 
     # Length filter: remove extreme outliers before alignment
     COMBINED_FILTERED="${CLASS_DIR}/class_${CLASS}_combined_filtered.fa"
@@ -461,6 +458,9 @@ fi
 # Handle SLURM array indexing using new helper
 if [ -n "$SLURM_ARRAY_TASK_ID" ]; then
     validate_array_index "$SLURM_ARRAY_TASK_ID" "$OG_COUNT"
+    # Fail loud if the submitted array is too small to cover the manifest —
+    # otherwise OGs at index > the array top are silently skipped (bead fxx).
+    assert_array_covers_manifest "$OG_COUNT" || exit 1
 
     # Get orthogroup name from manifest
     if [ -f "$MANIFEST_FILE" ]; then

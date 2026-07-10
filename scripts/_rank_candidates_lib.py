@@ -234,6 +234,8 @@ def calculate_fair_rank_score(
     weights: Mapping[str, float],
     *,
     completeness_floor: float = 0.4,
+    dnds_reliability: float = 1.0,
+    dnds_axes: Iterable[str] = ("positive", "purifying"),
     return_diagnostics: bool = False,
 ):
     """Combine per-axis scores into a single composite, penalizing missing data.
@@ -258,7 +260,18 @@ def calculate_fair_rank_score(
         out = {"score": 0.0, "evidence_completeness": 0.0, "available_weight": 0.0}
         return out if return_diagnostics else 0.0
 
-    total_weight = float(sum(max(w, 0.0) for w in weights.values()))
+    # dN/dS reliability (bead -8st): scale the positive/purifying axes' weight
+    # by dnds_reliability in [0, 1] everywhere — the score AND the completeness
+    # denominator (total_weight) — so an under-supported omega estimate cleanly
+    # falls out and the candidate is judged on its other axes (clean-removal).
+    _dnds = set(dnds_axes)
+    _rw = max(0.0, min(1.0, float(dnds_reliability)))
+
+    def _eff_weight(name, w):
+        w = max(float(w), 0.0)
+        return w * _rw if name in _dnds else w
+
+    total_weight = float(sum(_eff_weight(k, w) for k, w in weights.items()))
     if total_weight <= 0.0:
         out = {"score": 0.0, "evidence_completeness": 0.0, "available_weight": 0.0}
         return out if return_diagnostics else 0.0
@@ -271,8 +284,9 @@ def calculate_fair_rank_score(
             continue
         if isinstance(v, float) and math.isnan(v):
             continue
-        avail_weight += float(w)
-        weighted_sum += float(w) * float(v)
+        ew = _eff_weight(k, w)
+        avail_weight += ew
+        weighted_sum += ew * float(v)
 
     if avail_weight <= 0.0:
         out = {"score": 0.0, "evidence_completeness": 0.0, "available_weight": 0.0}

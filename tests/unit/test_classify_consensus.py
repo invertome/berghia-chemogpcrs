@@ -220,3 +220,36 @@ def test_candidate_in_hmm_but_not_og(tmp_path: Path) -> None:
     row = df[df["candidate_id"] == "orphan"].iloc[0]
     # Only HMM signal → not enough for non-chemo call
     assert row["classification"] == "chemoreceptor-candidate"
+
+
+# --- Strict HMM+OG rule for the medium tier (bead berghia-chemogpcrs, 06c) ---
+# Adopted decision (user-confirmed): 'likely-non-chemoreceptor' (medium) requires
+# the two ANNOTATION-based sources — HMM and OG — to agree. Phylogenetic
+# placement alone cannot substitute for either, because placement of divergent
+# invertebrate LSE sequences is the least reliable of the three signals.
+
+def test_hmm_plus_placement_without_og_is_candidate() -> None:
+    """HMM + placement agree, but OG abstains → NOT medium (placement can't
+    substitute for OG)."""
+    fam, label, n = cc._consensus("aminergic", "unclassified-og", "aminergic")
+    assert label == "chemoreceptor-candidate"
+
+
+def test_og_plus_placement_without_hmm_is_candidate() -> None:
+    """OG + placement agree, but HMM abstains → NOT medium."""
+    fam, label, n = cc._consensus("unclassified-hmm", "aminergic", "aminergic")
+    assert label == "chemoreceptor-candidate"
+
+
+def test_hmm_and_og_agree_is_medium_regression() -> None:
+    """HMM + OG agree (placement absent/disagreeing) → still medium."""
+    fam, label, n = cc._consensus("aminergic", "aminergic", "unclassified-placement")
+    assert label == "likely-non-chemoreceptor"
+    assert fam == "aminergic"
+
+
+def test_all_three_agree_is_high_regression() -> None:
+    """All three agree → high confidence, unchanged."""
+    fam, label, n = cc._consensus("aminergic", "aminergic", "aminergic")
+    assert label == "non-chemoreceptor"
+    assert n == 3

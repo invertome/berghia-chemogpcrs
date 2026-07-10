@@ -59,29 +59,34 @@ def _consensus(hmm_fam: str, og_fam: str, placement_fam: str | None
     """Determine consensus from up to three family calls.
 
     Returns (consensus_family, classification_label, n_agree) where:
-        consensus_family: the family if ≥2 sources agree; "" otherwise
-        classification_label: 'non-chemoreceptor' (3/3), 'likely-non-
-            chemoreceptor' (2/3), or 'chemoreceptor-candidate' (else)
-        n_agree: number of sources that agreed on consensus_family
-    """
-    calls = [hmm_fam, og_fam]
-    if placement_fam is not None:
-        calls.append(placement_fam)
-    real_calls = [c for c in calls if _is_real_call(c)]
+        consensus_family: the family for a high/medium call; "" otherwise
+        classification_label:
+            'non-chemoreceptor'         — all three sources agree (high)
+            'likely-non-chemoreceptor'  — HMM + OG agree (medium)
+            'chemoreceptor-candidate'   — otherwise (default)
+        n_agree: 3 (high), 2 (medium), 1 (some real call, no override), 0 (none)
 
-    if not real_calls:
+    The medium tier requires the two ANNOTATION-based sources (HMM + OG) to
+    agree. Phylogenetic placement alone cannot substitute for either: placement
+    of divergent invertebrate LSE sequences is the least reliable of the three
+    signals, so an HMM+placement or OG+placement pair (with the HMM/OG pair
+    itself split) stays a conservative 'chemoreceptor-candidate'.
+    """
+    hmm_real = _is_real_call(hmm_fam)
+    og_real = _is_real_call(og_fam)
+    placement_real = placement_fam is not None and _is_real_call(placement_fam)
+
+    if not (hmm_real or og_real or placement_real):
         return ("", "chemoreceptor-candidate", 0)
 
-    # Count agreement on each candidate family
-    counts: dict[str, int] = {}
-    for c in real_calls:
-        counts[c] = counts.get(c, 0) + 1
-    top_family, top_count = max(counts.items(), key=lambda x: x[1])
+    # High: all three sources present and agree on the same family.
+    if hmm_real and og_real and placement_real and hmm_fam == og_fam == placement_fam:
+        return (hmm_fam, "non-chemoreceptor", 3)
 
-    if top_count >= 3:
-        return (top_family, "non-chemoreceptor", 3)
-    if top_count >= 2:
-        return (top_family, "likely-non-chemoreceptor", 2)
+    # Medium: HMM + OG (the annotation-based sources) agree.
+    if hmm_real and og_real and hmm_fam == og_fam:
+        return (hmm_fam, "likely-non-chemoreceptor", 2)
+
     return ("", "chemoreceptor-candidate", 1)
 
 
