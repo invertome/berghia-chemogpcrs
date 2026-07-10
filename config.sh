@@ -542,6 +542,14 @@ export POSITIVE_WEIGHT=1        # Weight for positive selection (omega > 1, prim
 # by the log-scale + min_max_anchors=5 normalization in _rank_candidates_lib.
 export SYNTENY_WEIGHT=2         # Weight for synteny conservation (intra-genome anchors)
 export TANDEM_CLUSTER_WEIGHT=2.5  # Weight for intra-genome tandem clusters (the field's signature chemoreceptor signal)
+# Bead f2e: classification-based rank suppression. 06c-classified non-
+# chemoreceptors are down-weighted in rank_score (suppress, don't drop, so a
+# mislabelled divergent candidate stays recoverable; set to 1.0 to disable).
+# Applied post-ranking in add_classification_columns.py. The old crude phylo=0.0
+# penalty (removed by o98) wrongly hit divergent class-A candidates too; this
+# suppresses on classification identity instead.
+export NONCHEMO_RANK_FACTOR="${NONCHEMO_RANK_FACTOR:-0.1}"                # high-confidence (3/3) non-chemoreceptor
+export LIKELY_NONCHEMO_RANK_FACTOR="${LIKELY_NONCHEMO_RANK_FACTOR:-0.5}"  # medium (HMM+OG) likely-non-chemoreceptor
 # Bead -ar8: tandem-cluster sliding-window detection parameters.
 export TANDEM_WINDOW_KB="${TANDEM_WINDOW_KB:-100}"   # Max gap between consecutive cluster members (kb)
 export TANDEM_MIN_SIZE="${TANDEM_MIN_SIZE:-3}"       # Minimum cluster size to flag

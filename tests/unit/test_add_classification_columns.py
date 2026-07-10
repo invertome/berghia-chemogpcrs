@@ -15,6 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 import add_classification_columns as acc
 
@@ -109,3 +110,75 @@ def test_subfamily_empty_when_no_subfamily_call(tmp_path: Path) -> None:
     df = pd.read_csv(out_csv, keep_default_na=False, dtype=str)
     assert df.iloc[0]["classification_family"] == "opsin"
     assert df.iloc[0]["classification_subfamily"] == ""
+
+
+# --- f2e: classification-based rank suppression -----------------------------
+# 06c classification is a post-hoc annotation, not a hard filter. Without this,
+# a non-chemoreceptor with strong non-phylo signals could surface in the
+# shortlist (made more likely by o98 dropping the crude phylo penalty). Suppress
+# (don't drop) 06c-classified non-chemoreceptors in rank_score, tunably.
+
+def _consensus_tsv(tmp_path, rows):
+    """rows: list of (candidate_id, classification). Other cols left blank."""
+    lines = ["candidate_id\tclassification\tclassification_confidence\t"
+             "classification_family\tclassification_subfamily\tclassification_evidence"]
+    for cid, cls in rows:
+        lines.append(f"{cid}\t{cls}\t\t\t\t")
+    p = tmp_path / "classifications.tsv"
+    p.write_text("\n".join(lines) + "\n")
+    return p
+
+
+def _run(tmp_path, ranked_text, consensus_rows, **kw):
+    ranked = tmp_path / "ranked.csv"
+    ranked.write_text(ranked_text)
+    consensus = _consensus_tsv(tmp_path, consensus_rows)
+    out = tmp_path / "out.csv"
+    acc.add_classification_columns(str(ranked), str(consensus), str(out), **kw)
+    return pd.read_csv(out)
+
+
+def test_nonchemoreceptor_rank_score_suppressed(tmp_path):
+    df = _run(tmp_path, "id,rank_score\nbste_g1,0.9\n",
+              [("bste_g1", "non-chemoreceptor")])
+    row = df[df["id"] == "bste_g1"].iloc[0]
+    assert float(row["rank_score"]) == pytest.approx(0.9 * 0.1)
+    assert float(row["rank_score_prefilter"]) == pytest.approx(0.9)
+    assert float(row["classification_rank_factor"]) == pytest.approx(0.1)
+
+
+def test_likely_nonchemoreceptor_moderately_suppressed(tmp_path):
+    df = _run(tmp_path, "id,rank_score\nbste_g1,0.8\n",
+              [("bste_g1", "likely-non-chemoreceptor")])
+    row = df[df["id"] == "bste_g1"].iloc[0]
+    assert float(row["rank_score"]) == pytest.approx(0.8 * 0.5)
+
+
+def test_chemoreceptor_candidate_unchanged(tmp_path):
+    # Default (not in consensus) and explicit chemoreceptor-candidate are x1.0.
+    df = _run(tmp_path, "id,rank_score\nbste_g1,0.7\nbste_g2,0.6\n",
+              [("bste_g2", "chemoreceptor-candidate")])
+    assert float(df[df["id"] == "bste_g1"].iloc[0]["rank_score"]) == pytest.approx(0.7)
+    assert float(df[df["id"] == "bste_g2"].iloc[0]["rank_score"]) == pytest.approx(0.6)
+
+
+def test_suppression_reorders_shortlist(tmp_path):
+    # A high-composite non-chemoreceptor must fall below a lower-composite
+    # chemoreceptor-candidate after suppression.
+    df = _run(tmp_path, "id,rank_score\nbste_hi,0.9\nbste_lo,0.5\n",
+              [("bste_hi", "non-chemoreceptor")])
+    assert df.iloc[0]["id"] == "bste_lo"   # 0.5 now outranks 0.9*0.1=0.09
+
+
+def test_factors_configurable_can_disable(tmp_path):
+    df = _run(tmp_path, "id,rank_score\nbste_g1,0.9\n",
+              [("bste_g1", "non-chemoreceptor")],
+              nonchemo_rank_factor=1.0, likely_nonchemo_rank_factor=1.0)
+    assert float(df[df["id"] == "bste_g1"].iloc[0]["rank_score"]) == pytest.approx(0.9)
+
+
+def test_no_rank_score_column_is_noop(tmp_path):
+    # A ranked CSV without rank_score must not error (annotation still applied).
+    df = _run(tmp_path, "id,gene_name\nbste_g1,Bste_g1\n",
+              [("bste_g1", "non-chemoreceptor")])
+    assert df[df["id"] == "bste_g1"].iloc[0]["classification"] == "non-chemoreceptor"

@@ -1913,6 +1913,13 @@ for cand_id in candidates['id']:
     results.append({
         'id': cand_id,
         'phylo_score': phylo_score,
+        # o98: whether the candidate is a leaf of the class-A chemoreceptor tree.
+        # Non-members (class B/C/F, unclassified, or too divergent to be pooled)
+        # have no meaningful phylo/lse_depth signal, so those axes are dropped
+        # (not scored as a present 0.0) and the candidate is judged on its other
+        # axes rather than penalized. Berghia GPCR chemoreceptors are class-A
+        # rhodopsin-like; class C chemoreceptors are a vertebrate-only innovation.
+        'has_phylo_data': cand_id in leaf_lookup,
         'purifying_score': purifying_score,
         'positive_score': positive_score,
         'selection_significant': selection_significant,
@@ -2026,10 +2033,14 @@ def calculate_fair_rank_score(row):
     # Build scores/weights dicts; missing axes set to None so the lib's
     # evidence-completeness multiplier applies correctly.
     scores = {
-        'phylo': row.get('phylo_score_norm'),
+        # o98: phylo/lse_depth are class-A-tree signals; drop them (None) for
+        # candidates not in that tree so they fall out of fair-scoring instead
+        # of carrying a full-weight present-zero. Mirrors the has_*_data gating
+        # used by synteny/expression/etc. below.
+        'phylo': row.get('phylo_score_norm') if row.get('has_phylo_data') else None,
         'purifying': row.get('purifying_score_norm'),
         'positive': row.get('positive_score_norm'),
-        'lse_depth': row.get('lse_depth_score_norm'),
+        'lse_depth': row.get('lse_depth_score_norm') if row.get('has_phylo_data') else None,
         'synteny': row.get('synteny_score_norm') if row.get('has_synteny_data') else None,
         'expression': row.get('expression_score_norm') if row.get('has_expression_data') else None,
         'chemosensory_expr': row.get('chemosensory_expr_score_norm') if row.get('has_chemosensory_expr_data') else None,

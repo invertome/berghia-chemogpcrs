@@ -22,7 +22,10 @@ Candidates not in the consensus TSV (e.g. 06c hasn't run, or the
 candidate had no orthogroup membership and thus no entry) default to
 'chemoreceptor-candidate' / 'NA' / '' / '' / ''.
 
-Doesn't change the rank ordering — purely an annotation join.
+Also applies classification-based rank suppression (bead f2e): 06c-classified
+non-chemoreceptors are down-weighted in rank_score and the CSV re-sorted
+(configurable via NONCHEMO_RANK_FACTOR / LIKELY_NONCHEMO_RANK_FACTOR; suppress,
+don't drop — a mislabelled divergent candidate stays recoverable).
 
 Usage:
     python3 add_classification_columns.py \\
@@ -51,9 +54,12 @@ NEW_COLUMNS = [
 def add_classification_columns(ranked_csv_path: str,
                                 consensus_tsv_path: str,
                                 out_path: str,
-                                id_column: str = "id") -> int:
+                                id_column: str = "id",
+                                nonchemo_rank_factor: float = 0.1,
+                                likely_nonchemo_rank_factor: float = 0.5) -> int:
     """Read ranked CSV + consensus TSV, join, write annotated CSV. Returns
-    number of rows annotated."""
+    number of rows annotated. Also applies classification-based rank suppression
+    (bead f2e) — see the suppression block below."""
     df = pd.read_csv(ranked_csv_path, keep_default_na=False, dtype=str)
 
     if (consensus_tsv_path and os.path.exists(consensus_tsv_path)
@@ -89,6 +95,28 @@ def add_classification_columns(ranked_csv_path: str,
         df[col] = df[id_column].astype(str).map(
             lambda cid: lookup.get(cid, defaults).get(col, defaults[col]))
 
+    # f2e: classification-based rank suppression. The 06c classification is a
+    # post-hoc annotation, not a hard filter, so without this a non-chemoreceptor
+    # with strong non-phylo signals could surface in the shortlist (more likely
+    # now that o98 dropped the crude phylo-absence penalty). Multiply rank_score
+    # by a per-classification factor (default: non-chemoreceptor x0.1,
+    # likely-non-chemoreceptor x0.5, chemoreceptor-candidate x1.0), preserve the
+    # unsuppressed score, and re-sort. This SUPPRESSES rather than drops, so a
+    # mislabelled divergent candidate stays recoverable from the full list; set
+    # both factors to 1.0 to disable.
+    if "rank_score" in df.columns:
+        factor = df["classification"].map({
+            "non-chemoreceptor": float(nonchemo_rank_factor),
+            "likely-non-chemoreceptor": float(likely_nonchemo_rank_factor),
+        }).fillna(1.0)
+        df["rank_score_prefilter"] = df["rank_score"]
+        df["classification_rank_factor"] = factor
+        df["rank_score"] = pd.to_numeric(df["rank_score"], errors="coerce") * factor
+        df = df.sort_values("rank_score", ascending=False,
+                            kind="mergesort").reset_index(drop=True)
+        if "rank" in df.columns:
+            df["rank"] = range(1, len(df) + 1)
+
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(out_path, index=False)
     return len(df)
@@ -104,8 +132,10 @@ def main() -> int:
                     help="Column in ranked CSV that holds the candidate ID "
                          "(default 'id')")
     args = ap.parse_args()
-    n = add_classification_columns(args.ranked_csv, args.consensus_tsv,
-                                    args.out, args.id_column)
+    n = add_classification_columns(
+        args.ranked_csv, args.consensus_tsv, args.out, args.id_column,
+        nonchemo_rank_factor=float(os.getenv("NONCHEMO_RANK_FACTOR", 0.1)),
+        likely_nonchemo_rank_factor=float(os.getenv("LIKELY_NONCHEMO_RANK_FACTOR", 0.5)))
     print(f"Annotated {n} rows -> {args.out}", file=sys.stderr)
     return 0
 

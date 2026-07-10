@@ -158,6 +158,7 @@ def _extract_results_append_dict() -> dict:
     # We only care that 'orthogroup' is a key — not the actual values.
     ns: dict = {
         'cand_id': 'dummy_id',
+        'leaf_lookup': {},  # o98: 'has_phylo_data': cand_id in leaf_lookup
         'phylo_score': 0.0,
         'purifying_score': 0.0,
         'positive_score': 0.0,
