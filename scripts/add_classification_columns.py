@@ -50,6 +50,32 @@ NEW_COLUMNS = [
     "classification_evidence",
 ]
 
+# cl2: a source (hmm/og) is "dark" when it made no real family call.
+_DARK_SOURCE_LABELS = {"", "na", "unclassified-hmm", "unclassified-og",
+                       "unclassified-placement"}
+
+
+def _source_is_dark(evidence: str, source: str) -> bool:
+    """True if `source` (e.g. 'hmm'/'og') made no real family call in the
+    evidence string 'hmm:X;og:Y;placement:Z'. A source absent from the string
+    counts as dark (no signal)."""
+    for part in str(evidence).split(";"):
+        src, sep, label = part.partition(":")
+        if sep and src.strip() == source:
+            return label.strip().lower() in _DARK_SOURCE_LABELS
+    return True
+
+
+def needs_manual_review(classification: str, evidence: str) -> bool:
+    """cl2: flag a default 'chemoreceptor-candidate' whose HMM and OG sources
+    BOTH went dark — the divergent/unclassifiable case where the two
+    annotation-based classifiers give no signal, so a human should eyeball it
+    before a divergent real chemoreceptor is silently deprioritized. Placement
+    alone does not rescue (least-reliable source)."""
+    return (str(classification) == "chemoreceptor-candidate"
+            and _source_is_dark(evidence, "hmm")
+            and _source_is_dark(evidence, "og"))
+
 
 def add_classification_columns(ranked_csv_path: str,
                                 consensus_tsv_path: str,
@@ -94,6 +120,17 @@ def add_classification_columns(ranked_csv_path: str,
     for col in NEW_COLUMNS:
         df[col] = df[id_column].astype(str).map(
             lambda cid: lookup.get(cid, defaults).get(col, defaults[col]))
+
+    # cl2: flag candidates the automated classifiers can't decide (HMM + OG both
+    # dark) for manual review, so a divergent real chemoreceptor isn't lost.
+    df["needs_manual_review"] = [
+        "yes" if needs_manual_review(c, e) else ""
+        for c, e in zip(df["classification"], df["classification_evidence"])
+    ]
+    n_flagged = int((df["needs_manual_review"] == "yes").sum())
+    if n_flagged:
+        print(f"cl2: {n_flagged} candidate(s) flagged needs_manual_review "
+              f"(chemoreceptor-candidate with HMM+OG both dark)", file=sys.stderr)
 
     # f2e: classification-based rank suppression. The 06c classification is a
     # post-hoc annotation, not a hard filter, so without this a non-chemoreceptor

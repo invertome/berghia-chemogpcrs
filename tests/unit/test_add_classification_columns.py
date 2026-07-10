@@ -182,3 +182,78 @@ def test_no_rank_score_column_is_noop(tmp_path):
     df = _run(tmp_path, "id,gene_name\nbste_g1,Bste_g1\n",
               [("bste_g1", "non-chemoreceptor")])
     assert df[df["id"] == "bste_g1"].iloc[0]["classification"] == "non-chemoreceptor"
+
+
+# --- cl2: needs_manual_review flag ------------------------------------------
+# Flag candidates that defaulted to 'chemoreceptor-candidate' only because BOTH
+# annotation-based sources (HMM + OG) went dark — the divergent/unclassifiable
+# case where automated classification gives no signal, so a human should eyeball
+# them before a real divergent chemoreceptor is silently deprioritized. Placement
+# alone does NOT rescue (least reliable source).
+
+def _consensus_evidence_tsv(tmp_path, rows):
+    """rows: list of (candidate_id, classification, evidence)."""
+    header = ("candidate_id\tclassification\tclassification_confidence\t"
+              "classification_family\tclassification_subfamily\tclassification_evidence")
+    lines = [header]
+    for cid, cls, ev in rows:
+        lines.append(f"{cid}\t{cls}\t\t\t\t{ev}")
+    p = tmp_path / "classifications.tsv"
+    p.write_text("\n".join(lines) + "\n")
+    return p
+
+
+def _run_ev(tmp_path, ranked_text, consensus_rows):
+    ranked = tmp_path / "ranked.csv"
+    ranked.write_text(ranked_text)
+    consensus = _consensus_evidence_tsv(tmp_path, consensus_rows)
+    out = tmp_path / "out.csv"
+    acc.add_classification_columns(str(ranked), str(consensus), str(out))
+    return pd.read_csv(out, keep_default_na=False, dtype=str)
+
+
+def _flag(df, cid):
+    return df[df["id"] == cid].iloc[0]["needs_manual_review"]
+
+
+def test_flagged_when_both_hmm_and_og_dark(tmp_path):
+    df = _run_ev(tmp_path, "id,rank_score\nc1,0.5\n",
+                 [("c1", "chemoreceptor-candidate",
+                   "hmm:unclassified-hmm;og:unclassified-og;placement:unclassified-placement")])
+    assert _flag(df, "c1") == "yes"
+
+
+def test_not_flagged_when_hmm_makes_a_call(tmp_path):
+    df = _run_ev(tmp_path, "id,rank_score\nc1,0.5\n",
+                 [("c1", "chemoreceptor-candidate",
+                   "hmm:aminergic;og:unclassified-og;placement:NA")])
+    assert _flag(df, "c1") == ""
+
+
+def test_not_flagged_when_og_makes_a_call(tmp_path):
+    df = _run_ev(tmp_path, "id,rank_score\nc1,0.5\n",
+                 [("c1", "chemoreceptor-candidate",
+                   "hmm:unclassified-hmm;og:peptide;placement:NA")])
+    assert _flag(df, "c1") == ""
+
+
+def test_placement_alone_does_not_rescue(tmp_path):
+    # HMM+OG dark, placement classifies -> still 'chemoreceptor-candidate' and
+    # still flagged (placement alone is the least-reliable source).
+    df = _run_ev(tmp_path, "id,rank_score\nc1,0.5\n",
+                 [("c1", "chemoreceptor-candidate",
+                   "hmm:unclassified-hmm;og:unclassified-og;placement:aminergic")])
+    assert _flag(df, "c1") == "yes"
+
+
+def test_not_flagged_when_classified_non_chemoreceptor(tmp_path):
+    df = _run_ev(tmp_path, "id,rank_score\nc1,0.5\n",
+                 [("c1", "non-chemoreceptor", "hmm:aminergic;og:aminergic;placement:aminergic")])
+    assert _flag(df, "c1") == ""
+
+
+def test_flagged_when_no_consensus_entry(tmp_path):
+    # Candidate absent from the consensus TSV -> default chemoreceptor-candidate,
+    # empty evidence -> both sources dark -> flag for review.
+    df = _run_ev(tmp_path, "id,rank_score\nc1,0.5\n", [])
+    assert _flag(df, "c1") == "yes"
