@@ -565,6 +565,20 @@ export TANDEM_CLUSTERS_PLOT_PREFIX="${TANDEM_CLUSTERS_PLOT_PREFIX:-${TANDEM_CLUS
 export EXPR_WEIGHT=1            # Weight for expression data (tissue-specific enrichment) — soft signal
 export LSE_DEPTH_WEIGHT=1       # Weight for lineage-specific expansion depth
 
+# --- Two ranked views (bead 1nr) ---
+# scripts/emit_ranked_views.py re-projects the single composite-sorted ranked
+# CSV into two complementary views (it does NOT re-score anything):
+#   * CONFIDENCE view — the safe-bet HCR shortlist (confident chemoreceptor
+#     candidates with complete evidence, sorted by rank_score).
+#   * DISCOVERY view  — high-novelty divergent-LSE candidates a single
+#     completeness-rewarding composite would bury, sorted by a divergence-
+#     rewarding discovery score = weight-normalized mean of the [0,1] tandem
+#     and positive-selection *_norm signals.
+export CONFIDENCE_MIN_COMPLETENESS="${CONFIDENCE_MIN_COMPLETENESS:-0.7}"  # confidence-view evidence_completeness floor
+export DISCOVERY_TANDEM_HIGH="${DISCOVERY_TANDEM_HIGH:-0.5}"              # tandem_cluster_score_norm "high" cutoff for discovery membership (~cluster size >=4)
+export DISCOVERY_TANDEM_WEIGHT="${DISCOVERY_TANDEM_WEIGHT:-2.0}"          # discovery-score weight on the tandem-cluster signal
+export DISCOVERY_POSITIVE_WEIGHT="${DISCOVERY_POSITIVE_WEIGHT:-1.0}"      # discovery-score weight on the positive-selection signal
+
 # --- Reference Weighting (for phylogenetic distance) ---
 # These weights control how references affect candidate ranking in rank_candidates.py.
 # Higher weight = stronger influence on the phylogenetic score component.

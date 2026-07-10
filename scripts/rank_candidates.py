@@ -2149,7 +2149,7 @@ if RANK_METHOD == 'rankagg':
 # Select columns for output (updated with new score columns)
 output_cols = [
     'id', 'orthogroup', 'rank_score', 'confidence_tier', 'evidence_completeness',
-    'phylo_score', 'purifying_score', 'positive_score', 'selection_significant',
+    'phylo_score', 'purifying_score', 'positive_score', 'positive_score_norm', 'selection_significant',
     # Bead -urk: BUSTED/MEME diagnostic columns
     'busted_s_p', 'busted_s_significant', 'busted_mh_p', 'busted_mh_significant',
     'meme_n_episodic_sites', 'meme_fraction_episodic_sites',
@@ -2165,7 +2165,7 @@ output_cols = [
     'expansion_score', 'has_expansion_data',
     'og_confidence_score', 'has_og_confidence_data',
     # Bead -ar8: tandem cluster columns
-    'tandem_cluster_score', 'tandem_cluster_size', 'tandem_cluster_id',
+    'tandem_cluster_score', 'tandem_cluster_score_norm', 'tandem_cluster_size', 'tandem_cluster_id',
     'has_tandem_cluster_data',
     # Bead -325: CDS provenance (native vs miniprot-recovered)
     'cds_source',
@@ -2364,7 +2364,7 @@ if RUN_CROSSVAL and len(ref_ids) >= CROSSVAL_FOLDS:
 # --- Update output columns if sensitivity was run ---
 output_cols = [
     'id', 'orthogroup', 'rank_score', 'confidence_tier', 'evidence_completeness',
-    'phylo_score', 'purifying_score', 'positive_score', 'selection_significant',
+    'phylo_score', 'purifying_score', 'positive_score', 'positive_score_norm', 'selection_significant',
     # Bead -urk: BUSTED/MEME diagnostic columns
     'busted_s_p', 'busted_s_significant', 'busted_mh_p', 'busted_mh_significant',
     'meme_n_episodic_sites', 'meme_fraction_episodic_sites',
@@ -2380,7 +2380,7 @@ output_cols = [
     'expansion_score', 'has_expansion_data',
     'og_confidence_score', 'has_og_confidence_data',
     # Bead -ar8: tandem cluster columns
-    'tandem_cluster_score', 'tandem_cluster_size', 'tandem_cluster_id',
+    'tandem_cluster_score', 'tandem_cluster_score_norm', 'tandem_cluster_size', 'tandem_cluster_id',
     'has_tandem_cluster_data',
     # Bead -325: CDS provenance (native vs miniprot-recovered)
     'cds_source',

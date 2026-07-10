@@ -244,6 +244,22 @@ elif [ -f "$HCR_AUG_INPUT" ]; then
     log --level=WARN "Skipping classification columns: $CLASS_TSV not found (run 06c first)"
 fi
 
+# Bead 1nr: two ranked views. Re-project the composite-sorted, fully-augmented
+# ranked CSV into a CONFIDENCE shortlist (safe-bet chemoreceptor candidates with
+# complete evidence) and a DISCOVERY view (high-novelty divergent-LSE candidates
+# — reference-poor / manual-review / high tandem signal — that a single
+# composite sort would bury). Emits two sibling CSVs; doesn't touch the ranked
+# CSV. Must run AFTER add_classification_columns.py (needs classification +
+# needs_manual_review) and add_og_coverage_columns.py (needs og_dnds_reliability).
+if [ -f "$HCR_AUG_INPUT" ]; then
+    python3 "${SCRIPTS_DIR}/emit_ranked_views.py" \
+        --ranked-csv "$HCR_AUG_INPUT" \
+        --confidence-out "${RESULTS_DIR}/ranking/ranked_candidates_confidence.csv" \
+        --discovery-out "${RESULTS_DIR}/ranking/ranked_candidates_discovery.csv" \
+        2>> "${LOGS_DIR}/ranked_views.err" \
+        || log --level=WARN "Two-ranked-views emission failed (kept ranked CSV)"
+fi
+
 # --- Weighted-vs-rank-aggregation comparison (always emitted; non-fatal) ---
 # Descriptive audit only: reports how far the label-free rank-aggregation order
 # would differ from the production weighted order (Spearman, top-k overlap,

@@ -265,3 +265,31 @@ def test_rank_candidates_output_cols_include_orthogroup() -> None:
             f"the column is written in both code paths.\n"
             f"List fragment: {list_src[:200]!r}"
         )
+
+
+def test_output_cols_include_norm_signals_for_discovery_view() -> None:
+    """Bead 1nr: emit_ranked_views.py's discovery score needs
+    positive_score_norm and tandem_cluster_score_norm in the ranked CSV. Both
+    output_cols lists in rank_candidates.py must include them so the discovery
+    view scores on BOTH novelty signals (not tandem-only via the fallback)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    repo = os.path.normpath(os.path.join(here, '..', '..'))
+    with open(os.path.join(repo, 'scripts', 'rank_candidates.py')) as f:
+        src = f.read()
+    occurrences = [m.start() for m in re.finditer(r'output_cols\s*=\s*\[', src)]
+    assert len(occurrences) == 2
+    for pos in occurrences:
+        bracket_depth = 0
+        list_start = src.index('[', pos)
+        end = None
+        for j in range(list_start, len(src)):
+            if src[j] == '[':
+                bracket_depth += 1
+            elif src[j] == ']':
+                bracket_depth -= 1
+                if bracket_depth == 0:
+                    end = j + 1
+                    break
+        list_src = src[list_start:end]
+        assert "'positive_score_norm'" in list_src, "output_cols missing positive_score_norm"
+        assert "'tandem_cluster_score_norm'" in list_src, "output_cols missing tandem_cluster_score_norm"
