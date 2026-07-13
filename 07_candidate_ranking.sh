@@ -140,14 +140,23 @@ if [ "${RANK_METHOD:-weighted}" = "rankagg" ]; then
 
     # Embedding channel (ESM-C candidate vs non-chemoreceptor family centroids; Glue G2).
     # Gated on BOTH the candidate-side and reference-side embeddings existing.
-    ESMC_CANDIDATE_NPZ="${ESMC_CANDIDATE_NPZ:-${RESULTS_DIR}/ranking/embeddings/candidates_esmc300m.npz}"
-    ESMC_REFERENCE_NPZ="${ESMC_REFERENCE_NPZ:-${RESULTS_DIR}/ranking/embeddings/reference_esmc300m.npz}"
+    # EMB_SCORER=cosine (default) -> ESM-C 300M cosine exclusion/recall channel;
+    # =maha -> ESM-C 600M tied-covariance Mahalanobis multi-prototype channel
+    # (the bake-off winner), emitting emb_novelty as a positive ranking axis.
+    if [ "${EMB_SCORER:-cosine}" = "maha" ]; then
+        _emb_tag="esmc600m"; _emb_scorer_args="--scorer maha"
+    else
+        _emb_tag="esmc300m"; _emb_scorer_args=""
+    fi
+    ESMC_CANDIDATE_NPZ="${ESMC_CANDIDATE_NPZ:-${RESULTS_DIR}/ranking/embeddings/candidates_${_emb_tag}.npz}"
+    ESMC_REFERENCE_NPZ="${ESMC_REFERENCE_NPZ:-${RESULTS_DIR}/ranking/embeddings/reference_${_emb_tag}.npz}"
     if [ -f "${ESMC_CANDIDATE_NPZ}" ] && [ -f "${ESMC_REFERENCE_NPZ}" ]; then
-        log "RANK_METHOD=rankagg: building ESM-C embedding evidence channel..."
+        log "RANK_METHOD=rankagg: building ESM-C embedding evidence channel (scorer=${EMB_SCORER:-cosine})..."
         python3 "${SCRIPTS_DIR}/build_embedding_channel.py" \
             --candidate-npz "${ESMC_CANDIDATE_NPZ}" \
             --ref-npz "${ESMC_REFERENCE_NPZ}" \
             --ref-labels "${REFERENCE_DIR}/anchors/anchor_set.tsv" \
+            ${_emb_scorer_args} \
             --out "${CHANNELS_DIR}/embedding_channel.tsv" \
             2>> "${LOGS_DIR}/build_embedding_channel.err" \
             || log --level=WARN "Embedding channel producer failed (channel stays dormant)"

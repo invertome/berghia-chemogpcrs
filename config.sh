@@ -528,6 +528,13 @@ export RUN_MODE="${RUN_MODE:-slurm}"
 # This is a non-disruptive compare mode; switching the production shortlist is a
 # separate, gated decision. See scripts/compare_ranking_methods.py.
 export RANK_METHOD="${RANK_METHOD:-weighted}"
+# EMB_SCORER selects the ESM-C embedding-channel scorer (stage 07, rankagg path).
+# 'cosine' (default) = the original cosine exclusion/recall channel on the ESM-C
+# 300M embeddings (prior behavior, unchanged). 'maha' = the Phase-0 tied-covariance
+# Mahalanobis + multi-prototype scorer on the ESM-C 600M embeddings (the bake-off
+# winner, family-acc 0.752), emitting emb_novelty as a POSITIVE ranking axis
+# (bead cw3). Opt-in; flipping the production default is a separate gated decision.
+export EMB_SCORER="${EMB_SCORER:-cosine}"
 export PHYLO_WEIGHT=2           # Weight for phylogenetic distance to references
 # Bead -ea9: PURIFYING_WEIGHT defaults to 0 because chemoreceptor identification
 # rewards diversifying selection on extracellular loops, not whole-gene
