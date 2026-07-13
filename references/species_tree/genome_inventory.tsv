@@ -1,5 +1,5 @@
 taxid	binomial	clade	policy_class	source	accession	assembly_level	annotation_status	est_protein_count	submission_date	contig_n50	total_length_bp	drop_reason	source_batch
-6161	Dugesia japonica	platyhelminthes		GenBank	GCA_001938525.1	Scaffold		0		1166	854187087		nath_phase1e
+6161	Dugesia japonica	platyhelminthes		GenBank	GCA_001938525.1	Scaffold		0		1166	854187087	dropped_runaway_braker	nath_phase1e
 6162	Girardia tigrina	platyhelminthes		GenBank	GCA_001938485.1	Scaffold		0		5133	1428149015		nath_phase1e
 6189	Schistosoma spindalis	Platyhelminthes	outgroup_platyhelminthes	GenBank	GCA_946903255.1	Chromosome		9330		3920158	390075707	harvested_annotated	extension_phase1d
 6192	Fasciola hepatica	platyhelminthes		GenBank	GCA_948099385.2	Contig		0	2024-08-27	9838557	1506673460	dropped_redundant_outgroup	phase1a_recover
