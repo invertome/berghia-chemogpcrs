@@ -199,6 +199,11 @@ SIGNAL_SPEC = [
     ("struct_nonchemo_corrob", "has_struct_data", "struct_nonchemo_corrob", True),
     ("emb_classA_sim", "has_emb_data", "emb_classA_sim", False),
     ("emb_nonchemo_sim", "has_emb_data", "emb_nonchemo_sim", True),
+    # Phase-0 maha channel: S_novel as a POSITIVE voter (high = divergent from
+    # known families = surface it). Dormant unless the maha channel populated
+    # emb_novelty (cosine channel emits emb_nonchemo_sim/emb_classA_sim instead);
+    # the two schemas are mutually dormant, so nothing changes unless maha is used.
+    ("emb_novelty", "has_emb_data", "emb_novelty", False),
     ("or_microswitch", "has_or_microswitch_data", "or_microswitch", False),
 ]
 
@@ -292,8 +297,8 @@ def merge_evidence_channels(df, struct_tsv=None, emb_tsv=None,
         (struct_tsv, "has_struct_data",
          ["struct_novelty", "struct_nonchemo_corrob", "struct_state"]),
         (emb_tsv, "has_emb_data",
-         ["emb_classA_sim", "emb_nonchemo_sim", "emb_nonchemo_family",
-          "emb_leakage_flag"]),
+         ["emb_classA_sim", "emb_nonchemo_sim", "emb_novelty",
+          "emb_nonchemo_family", "emb_leakage_flag"]),
         (microswitch_tsv, "has_or_microswitch_data", ["or_microswitch"]),
     )
     for tsv_path, flag_col, value_cols in channels:
