@@ -54,7 +54,12 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from embedding_evidence import centroid, embedding_channel, load_embeddings
+from embedding_evidence import (
+    centroid,
+    embedding_channel,
+    load_embeddings,
+    mahalanobis_channel,
+)
 
 # Columns of the output TSV, in order. MUST stay exactly these 5 value keys
 # (plus id) -- rank_aggregation.merge_evidence_channels reads
@@ -66,6 +71,18 @@ TSV_COLUMNS: List[str] = [
     "emb_nonchemo_sim",
     "emb_nonchemo_family",
     "emb_classA_sim",
+    "has_emb_data",
+    "emb_leakage_flag",
+]
+
+# Columns of the Mahalanobis (`maha`) channel TSV, in order. Emits emb_novelty
+# (S_novel, the positive ranking axis) instead of the cosine channel's
+# emb_nonchemo_sim/emb_classA_sim; rank_aggregation reads emb_novelty as a
+# positive voter and emb_nonchemo_family as annotation.
+MAHA_TSV_COLUMNS: List[str] = [
+    "id",
+    "emb_nonchemo_family",
+    "emb_novelty",
     "has_emb_data",
     "emb_leakage_flag",
 ]
@@ -203,17 +220,46 @@ def build_embedding_channel(
     return embedding_channel(candidate_embeddings, nonchemo_centroids, classA_centroid)
 
 
-def write_channel_tsv(channel: Dict[str, Dict[str, object]], path: str) -> None:
-    """Write `build_embedding_channel`'s output as a TSV keyed by id.
+def build_embedding_channel_maha(
+    candidate_npz: str,
+    ref_npz: str,
+    ref_labels_tsv: str,
+    k: int = 3,
+    relative: bool = False,
+) -> Dict[str, Dict[str, object]]:
+    """Mahalanobis multi-prototype embedding channel (the Phase-0 scorer path).
 
-    Columns are exactly `TSV_COLUMNS` (id + the 5 keys
-    `embedding_evidence.embedding_channel()` documents) -- this is the exact
-    schema `rank_aggregation.merge_evidence_channels`'s `emb_tsv` argument
-    expects (see its `value_cols` list). Rows are sorted by id so re-runs
-    diff cleanly. An empty `channel` still writes a header-only TSV.
+    Thin glue over `embedding_evidence.mahalanobis_channel`: loads the candidate +
+    reference embeddings + the family-labeled anchor TSV, then emits per candidate
+    `emb_nonchemo_family` (annotation), `emb_novelty` (S_novel — the POSITIVE
+    ranking axis), `has_emb_data`, `emb_leakage_flag`. Preferred with the ESM-C
+    600M embeddings (the bake-off winner). Missing/empty inputs degrade to `{}`,
+    never a crash (mirrors `build_embedding_channel`).
+    """
+    candidate_embeddings = load_embeddings(candidate_npz)
+    ref_embeddings = load_embeddings(ref_npz)
+    ref_labels = load_ref_labels(ref_labels_tsv)
+    if not candidate_embeddings or not ref_embeddings or not ref_labels:
+        return {}
+    return mahalanobis_channel(
+        candidate_embeddings, ref_embeddings, ref_labels, k=k, relative=relative
+    )
+
+
+def write_channel_tsv(
+    channel: Dict[str, Dict[str, object]],
+    path: str,
+    columns: List[str] = TSV_COLUMNS,
+) -> None:
+    """Write a channel dict as a TSV keyed by id, with the given column order.
+
+    `columns` defaults to the cosine `TSV_COLUMNS` (id + the 5 keys
+    `embedding_evidence.embedding_channel()` documents); pass `MAHA_TSV_COLUMNS`
+    for the Mahalanobis channel. Rows are sorted by id so re-runs diff cleanly.
+    An empty `channel` still writes a header-only TSV.
     """
     rows = [{"id": candidate_id, **channel[candidate_id]} for candidate_id in sorted(channel)]
-    pd.DataFrame(rows, columns=TSV_COLUMNS).to_csv(path, sep="\t", index=False)
+    pd.DataFrame(rows, columns=columns).to_csv(path, sep="\t", index=False)
 
 
 def main(argv: Optional[List[str]] = None) -> None:
@@ -233,12 +279,34 @@ def main(argv: Optional[List[str]] = None) -> None:
         help="Family/class-labeled reference TSV (e.g. references/anchors/anchor_set.tsv)",
     )
     parser.add_argument("--out", required=True, help="Output channel TSV path")
+    parser.add_argument(
+        "--scorer", choices=["cosine", "maha"], default="cosine",
+        help="cosine (default, unchanged) or maha (tied-covariance Mahalanobis + "
+             "multi-prototype centroids; use with the ESM-C 600M embeddings)",
+    )
+    parser.add_argument(
+        "--relative", action="store_true",
+        help="maha only: relative Mahalanobis for emb_novelty (conservative "
+             "variant); default is plain Mahalanobis",
+    )
+    parser.add_argument(
+        "--k", type=int, default=3,
+        help="maha only: k-means sub-prototypes per family (default 3)",
+    )
     args = parser.parse_args(argv)
 
-    channel = build_embedding_channel(args.candidate_npz, args.ref_npz, args.ref_labels)
-    write_channel_tsv(channel, args.out)
+    if args.scorer == "maha":
+        channel = build_embedding_channel_maha(
+            args.candidate_npz, args.ref_npz, args.ref_labels,
+            k=args.k, relative=args.relative,
+        )
+        write_channel_tsv(channel, args.out, columns=MAHA_TSV_COLUMNS)
+    else:
+        channel = build_embedding_channel(args.candidate_npz, args.ref_npz, args.ref_labels)
+        write_channel_tsv(channel, args.out)
     print(
-        f"[build_embedding_channel] wrote {len(channel)} candidates -> {args.out}",
+        f"[build_embedding_channel] scorer={args.scorer} wrote {len(channel)} "
+        f"candidates -> {args.out}",
         file=sys.stderr,
     )
 
