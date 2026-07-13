@@ -31,10 +31,11 @@
 # change that caveat, it only supplies the centroids the candidate side is
 # compared against.
 #
-# Prerequisites: the `berghia-gpcr` conda env needs the `esm` package
-# (EvolutionaryScale's SDK: `pip install esm`) plus a torch build with CUDA
-# support -- the same prerequisite as run_esmc_embeddings.sh. Install once with:
-#   conda activate berghia-gpcr && pip install esm
+# Prerequisites: a DEDICATED `esmc` conda env (NOT berghia-gpcr) holding the
+# `esm` package (EvolutionaryScale's SDK) on a cu118-pinned torch -- the same
+# prerequisite as run_esmc_embeddings.sh, whose header documents the one-time
+# build recipe. esm is isolated because it pulls torchvision(latest)->torch 2.13
+# (cu130), which would clobber the pipeline's pinned cu118 torch.
 #
 # Usage:
 #   sbatch scripts/unity/run_esmc_reference_embeddings.sh
@@ -53,7 +54,7 @@
 
 set -eo pipefail
 source "$HOME/.miniconda3/etc/profile.d/conda.sh"
-conda activate berghia-gpcr                      # needs `esm` (pip) + CUDA torch
+conda activate "${ESMC_ENV:-esmc}"               # dedicated env: esm + cu118 torch
 set -u
 
 # --- Paths + params (override via env) ---------------------------------------

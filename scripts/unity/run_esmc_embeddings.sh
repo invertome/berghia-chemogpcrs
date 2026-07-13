@@ -16,7 +16,14 @@
 # Prerequisites: the `berghia-gpcr` conda env needs the `esm` package
 # (EvolutionaryScale's SDK: `pip install esm`) plus a torch build with CUDA
 # support. Neither is a default dependency of the rest of the pipeline, so
-# install once with:  conda activate berghia-gpcr && pip install esm
+# The `esm` SDK pulls torchvision(latest)->torch==2.13 (cu130), which clobbers
+# the pipeline's pinned cu118 torch. So esm lives in a DEDICATED `esmc` env, not
+# berghia-gpcr. Build it once with cu118-pinned torch/torchvision:
+#   mamba create -n esmc python=3.10 -y
+#   conda activate esmc
+#   pip install 'torch==2.7.1+cu118' 'torchvision==0.22.1+cu118' \
+#       --index-url https://download.pytorch.org/whl/cu118
+#   pip install esm -c <(printf 'torch==2.7.1+cu118\ntorchvision==0.22.1+cu118\n')
 #
 # Usage:
 #   sbatch scripts/unity/run_esmc_embeddings.sh
@@ -35,7 +42,7 @@
 
 set -eo pipefail
 source "$HOME/.miniconda3/etc/profile.d/conda.sh"
-conda activate berghia-gpcr                      # needs `esm` (pip) + CUDA torch
+conda activate "${ESMC_ENV:-esmc}"               # dedicated env: esm + cu118 torch
 set -u
 
 # --- Paths + params (override via env) ---------------------------------------
