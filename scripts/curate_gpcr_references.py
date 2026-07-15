@@ -176,7 +176,22 @@ _FAMILY_PATTERNS: list[tuple[re.Pattern, str]] = [
         r"\bdaf-3[78]\b|\baex-2\b|"
         r"\btrissin\b|"
         r"\bECTH\b|\bETHR\b|"
-        r"\bproctolin\b",
+        r"\bproctolin\b|"
+        # --- invertebrate neuropeptide receptors (2026-07-14 granularity pass) ---
+        r"\bpheromone biosynthesis[- ]activating\b|\bPBAN\b|"
+        r"\bACP receptor\b|adipokinetic hormone/corazonin|"
+        r"\ballatotropin\b|"
+        r"\bCAPA\b|\bperiviscerokinin\b|"
+        r"\bdiapause hormone\b|"
+        r"\belevenin\b|"
+        r"\bcardioacceleratory\b|"
+        r"\bthyrotropin-releasing hormone\b|\bTRH-?R\b|"
+        r"\bachatin\b|"
+        r"\bleucokinin\b|"
+        r"\bNPYLR\b|\bneuropeptide Y-like\b|"
+        r"\bsulfakinin\b|"
+        r"\bRYamide\b|\bluqin\b|\bnatalisin\b|\bFLRFamide\b|"
+        r"\bTK receptor\b",
         re.I), "peptide"),
 ]
 
@@ -203,6 +218,26 @@ _PEPTIDE_SUBFAMILY_PATTERNS = [
     (re.compile(r"\bopioid\b|\bOPR[KMD]\b", re.I), "opioid"),
     (re.compile(r"\bmelatonin\b|\bMTNR\d", re.I), "melatonin"),
     (re.compile(r"\bsomatostatin\b|\bSSTR\d", re.I), "somatostatin"),
+    # invertebrate neuropeptide subfamilies (2026-07-14 granularity pass)
+    (re.compile(r"pheromone biosynthesis|\bPBAN\b|\bpyrokinin\b", re.I), "PBAN-pyrokinin"),
+    (re.compile(r"\bACP receptor\b|adipokinetic hormone/corazonin", re.I), "ACP"),
+    (re.compile(r"\bAKH\b|\badipokinetic\b", re.I), "AKH"),
+    (re.compile(r"\ballatotropin\b", re.I), "allatotropin"),
+    (re.compile(r"\bCAPA\b|\bperiviscerokinin\b|\bcapability\b", re.I), "CAPA"),
+    (re.compile(r"\bdiapause hormone\b", re.I), "diapause-hormone"),
+    (re.compile(r"\belevenin\b", re.I), "elevenin"),
+    (re.compile(r"\bthyrotropin-releasing\b|\bTRH\b", re.I), "TRH"),
+    (re.compile(r"\bleucokinin\b|\bLkr\b|\bkinin\b", re.I), "kinin"),
+    (re.compile(r"\bproctolin\b", re.I), "proctolin"),
+    (re.compile(r"\bSIFamide\b", re.I), "SIFamide"),
+    (re.compile(r"\bcorazonin\b|\bCrzR\b", re.I), "corazonin"),
+    (re.compile(r"\bmyosuppressin\b", re.I), "myosuppressin"),
+    (re.compile(r"\bFMRFamide\b|\bFLRFamide\b", re.I), "FMRFamide"),
+    (re.compile(r"\bsulfakinin\b", re.I), "sulfakinin"),
+    (re.compile(r"\bachatin\b", re.I), "achatin"),
+    (re.compile(r"\bcrustacean cardioactive\b|\bCCAP\b", re.I), "CCAP"),
+    (re.compile(r"\bCCHamide\b", re.I), "CCHamide"),
+    (re.compile(r"\ballatostatin\b|\bAst[ABC]", re.I), "allatostatin"),
     (re.compile(r"\bcholecystokinin\b|\bCCKR\b|\bCCK[12]R?\b", re.I),
      "cholecystokinin"),
 ]
