@@ -49,7 +49,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, FrozenSet, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -107,6 +107,39 @@ def family_to_class(family: str) -> str:
         if family.startswith(prefix):
             return gpcr_class
     return "A"
+
+
+# Class-A families whose members have NO known ligand/function. An orphan is not
+# a *known non-chemoreceptor* -- it is an unknown, and some orphans may in fact be
+# chemoreceptors (the reference set's own orphan bucket held a C. elegans str-33
+# and an olfactory receptor before curation). They therefore must not define
+# "known" space for novelty; they remain valid class-A anchors for the broad
+# class-A recall centroid only.
+UNCHARACTERIZED_FAMILIES: FrozenSet[str] = frozenset({"orphan"})
+
+
+def novelty_reference_labels(ref_labels: Dict[str, str]) -> Dict[str, str]:
+    """`ref_labels` restricted to CHARACTERIZED class-A families.
+
+    S_novel is a MIN over family prototypes, so every extra prototype can only
+    pull a candidate's novelty DOWN. Two kinds of reference must therefore be
+    kept out of the novelty prototypes (and out of the tied covariance and
+    background mean, which `mahalanobis_channel` derives from these same labels):
+
+      * out-of-class families (class-B/C/F) -- they exist to support the upstream
+        class-A gate, not to explain a class-A candidate away. Without this a
+        divergent class-A candidate that happens to land nearest a class-C
+        centroid is scored "known", which masks novelty exactly on the most
+        divergent LSE candidates -- the ones we most want surfaced.
+      * `UNCHARACTERIZED_FAMILIES` (orphan) -- see that constant.
+
+    Novelty is thus "unlike any CHARACTERIZED non-chemoreceptor family".
+    """
+    return {
+        ref_id: family
+        for ref_id, family in ref_labels.items()
+        if family_to_class(family) == "A" and family not in UNCHARACTERIZED_FAMILIES
+    }
 
 
 def load_ref_labels(path: str) -> Dict[str, str]:
@@ -238,7 +271,7 @@ def build_embedding_channel_maha(
     """
     candidate_embeddings = load_embeddings(candidate_npz)
     ref_embeddings = load_embeddings(ref_npz)
-    ref_labels = load_ref_labels(ref_labels_tsv)
+    ref_labels = novelty_reference_labels(load_ref_labels(ref_labels_tsv))
     if not candidate_embeddings or not ref_embeddings or not ref_labels:
         return {}
     return mahalanobis_channel(
