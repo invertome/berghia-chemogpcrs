@@ -10,7 +10,7 @@ def test_concat_fuse_intersects_and_reports_dropped():
     assert fused["x"].shape == (4,)
     assert np.isclose(np.linalg.norm(fused["x"][:2]), 1.0)      # each half unit-norm
 
-def test_concat_fuse_pca_dim_and_no_overlap():
+def test_concat_fuse_no_overlap():
     a = {"x": np.array([1.0, 0.0]), "y": np.array([0.0, 1.0])}
     b = {"p": np.array([1.0, 0.0])}
     fused, dropped = concat_fuse(a, b)

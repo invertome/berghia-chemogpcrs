@@ -286,6 +286,9 @@ def select_consensus(
         conf_lo, conf_hi = _paired_confound_diff_ci(
             nov, best_single_novelty, confounds, n_boot, seed, alpha
         )
+        # "confound"/"famacc" are the combiner's own POINT metrics; the "*_ci"
+        # entries are CIs of the (combiner − best_single) DIFFERENCE, not of the
+        # point metric — the decision below is on the difference CIs.
         info = {
             "confound": conf, "famacc": fam,
             "famacc_ci": (fam_lo, fam_hi), "confound_ci": (conf_lo, conf_hi),
@@ -463,6 +466,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
     per_model_novelty: Dict[str, Dict[str, float]] = {}
     per_model_family: Dict[str, Dict[str, str]] = {}
+    per_model_confound: Dict[str, Dict[str, float]] = {}
     identity_any: Dict[str, float] = {}
 
     for spec in args.models:
@@ -479,23 +483,43 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         per_model_novelty[tag] = dict(zip(df["candidate_id"], df["novelty"]))
         per_model_family[tag] = dict(zip(df["candidate_id"], df["nearest_family"]))
         rep = confound_report(df)
+        per_model_confound[tag] = {c: float(r["spearman"]) for c, r in rep.items()}
         conf_str = ", ".join(
             f"{c}:{r['spearman']:+.3f}" for c, r in rep.items()
         )
         print(f"[fusion_consensus] {tag}: {len(df)} candidates cached -> {cache}"
               f"  (confounds {conf_str})")
 
-    confounds = {
+    # Only gate on confounds with real coverage over the scored candidates. An
+    # empty/low-coverage map (no identity TSV given, or mmseqs omits the no-hit
+    # divergent candidates that matter most) would otherwise reduce the gate to a
+    # meaningless nan verdict on an empty candidate set.
+    cand_ids = {c for m in per_model_novelty.values() for c in m}
+    raw_confounds = {
         "identity_to_nearest": identity_any,
         "seq_len": {i: float(v) for i, v in seq_len.items()},
     }
-    resid = confound_residuals(per_model_novelty, confounds)
-    gate = residual_independence(resid, threshold=args.indep_threshold)
-    verdict = "GO (partly-independent confounds)" if gate["independent"] else \
-        "STOP (common-mode confound — fusion unjustified)"
-    print(f"[fusion_consensus] confound-independence gate: {verdict}")
-    for (a, b), rho in gate["pairwise"].items():
-        print(f"    residual ρ({a},{b}) = {rho:+.3f}")
+    confounds: Dict[str, Dict[str, float]] = {}
+    for name, cmap in raw_confounds.items():
+        cov = len(cand_ids & set(cmap)) / len(cand_ids) if cand_ids else 0.0
+        if cov >= 0.5:
+            confounds[name] = cmap
+        else:
+            print(f"[fusion_consensus] WARNING: confound {name!r} coverage "
+                  f"{cov:.0%} < 50% — excluded from the independence gate")
+
+    if not confounds or len(per_model_novelty) < 2:
+        print("[fusion_consensus] confound-independence gate SKIPPED "
+              f"(usable confounds={list(confounds)}, models={len(per_model_novelty)})")
+        gate = {"pairwise": {}, "independent": None, "max_abs_rho": float("nan")}
+    else:
+        resid = confound_residuals(per_model_novelty, confounds)
+        gate = residual_independence(resid, threshold=args.indep_threshold)
+        verdict = "GO (partly-independent confounds)" if gate["independent"] else \
+            "STOP (common-mode confound — fusion unjustified)"
+        print(f"[fusion_consensus] confound-independence gate: {verdict}")
+        for (a, b), rho in gate["pairwise"].items():
+            print(f"    residual ρ({a},{b}) = {rho:+.3f}")
 
     channel = build_consensus_channel(
         per_model_novelty, per_model_family, combiner=args.combiner
@@ -506,6 +530,27 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     )
     print(f"[fusion_consensus] combiner={args.combiner} wrote {len(channel)} "
           f"candidates -> {args.out}")
+
+    # Persist the decision context (spec data-flow: "consensus TSV + summary").
+    import json
+    summary = {
+        "models": list(per_model_novelty),
+        "n_candidates": len(channel),
+        "combiner": args.combiner,
+        "per_model_confound_spearman": per_model_confound,
+        "gate": {
+            "independent": gate["independent"],
+            "threshold": args.indep_threshold,
+            "max_abs_resid_rho": gate["max_abs_rho"],
+            "pairwise_resid_rho": {
+                f"{a}|{b}": r for (a, b), r in gate["pairwise"].items()
+            },
+        },
+    }
+    summary_path = args.out.rsplit(".", 1)[0] + ".summary.json"
+    with open(summary_path, "w") as fh:
+        json.dump(summary, fh, indent=2)
+    print(f"[fusion_consensus] summary -> {summary_path}")
 
 
 if __name__ == "__main__":
