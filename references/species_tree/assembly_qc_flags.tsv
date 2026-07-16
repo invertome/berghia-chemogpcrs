@@ -1,0 +1,468 @@
+taxid	binomial	clade	accession	total_length_bp	pct_of_clade_median	contig_n50	verdict	existing_drop_reason
+6161	Dugesia japonica	platyhelminthes	GCA_001938525.1	854187087	376.7	1166	watch_fragmented_but_complete	dropped_runaway_braker
+6162	Girardia tigrina	platyhelminthes	GCA_001938485.1	1428149015	629.8	5133	watch_fragmented_but_complete	
+6189	Schistosoma spindalis	Platyhelminthes	GCA_946903255.1	390075707	172.0	3920158	ok	harvested_annotated
+6192	Fasciola hepatica	platyhelminthes	GCA_948099385.2	1506673460	664.5	9838557	ok	dropped_redundant_outgroup
+6206	Taenia saginata	platyhelminthes	GCA_001693075.2	169104283	74.6	142979	ok	
+6212	Echinococcus oligarthrus	platyhelminthes	GCA_900683695.1	105959096	46.7	2071	watch_fragmented_but_complete	
+6344	Arenicola marina	Annelida	GCA_964019135.1	869392476	100.0	360722	ok	harvested_ensembl
+6359	Platynereis dumerilii	annelida	GCA_043381215.1	1417221938	163.0	6346343	ok	
+6398	Lumbricus terrestris	annelida	GCA_949752735.1	1056531248	121.5	1589769	ok	harvested_ensembl
+6421	Hirudo medicinalis	annelida	GCA_011800805.1	187546627	21.6	24951	ok	
+6426	Riftia pachyptila	annelida		0		0	UNASSESSED_no_size	no_proteome_in_ncbi
+6432	Urechis unicinctus	Annelida	GCA_034190875.2	1193833463	137.3	546570	ok	
+6446	Sipunculus nudus	annelida	GCA_026874595.2	1423334195	163.7	28461674	ok	
+6494	Conus textile	Caenogastropoda	GCA_055473965.1	3351847729	215.9	188487	ok	
+6511	Dolabella auricularia	Heterobranchia	GCA_982957055.1	1170037518	112.2	603969	ok	
+6535	Cornu aspersum	Heterobranchia	GCA_964187895.1	2908448789	278.8	1303995	ok	
+6551	Mytilus trossulus	Bivalvia	GCF_036588685.1	1298571991	96.7	4973962	ok	harvested_annotated
+6610	Sepia officinalis	Cephalopoda	GCA_964300435.1	5752151390	177.0	2020660	ok	
+6625	Watasenia scintillans	cephalopoda	GCA_015471945.1	649175396	20.0	1283	FLAG_unusable	
+6655	Cryptochiton stelleri	Polyplacophora	GCA_031471745.1	783734439	85.1	3056	watch_fragmented_but_complete	
+12928	Alviniconcha hessleri	Caenogastropoda	GCA_965642515.1	481719669	31.0	70926	ok	
+12966	Bathymodiolus thermophilus	Bivalvia	GCA_971856555.1	1832514932	136.4	2931286	ok	
+13016	Codakia orbicularis	Bivalvia	GCA_977930555.1	1729527016	128.7	51581000	ok	
+28835	Cepaea nemoralis	Heterobranchia	GCA_964166675.2	3270717112	313.6	651301	ok	
+28841	Moniezia expansa	platyhelminthes	GCA_019097775.1	142225902	62.7	3386365	ok	
+31199	Argopecten irradians	Bivalvia	GCF_041381155.1	845889701	63.0	3547744	ok	harvested_annotated
+31201	Spisula solida	bivalvia	GCA_947247005.1	932088914	69.4	15021671	ok	harvested_ensembl
+31202	Spisula subtruncata	Bivalvia	GCA_963678985.1	930842501	69.3	3953165	ok	
+31210	Acanthosepion esculentum	Cephalopoda	GCA_964036315.1	5142313129	158.3	1721682	ok	
+31216	Littorina littorea	Caenogastropoda	GCA_964330335.1	849613989	54.7	169519	ok	
+31218	Littorina obtusata	Caenogastropoda	GCA_965235085.1	1077495798	69.4	326000	ok	
+31220	Littorina saxatilis	Caenogastropoda	GCF_037325665.1	1256192465	80.9	270961	ok	harvested_annotated
+34570	Sepioteuthis lessoniana	Cephalopoda	GCA_963585895.1	5056232740	155.6	657215	ok	harvested_ensembl
+34573	Nautilus pompilius	cephalopoda	GCA_047652355.1	784797206	24.2	2482390	ok	
+34576	Nautilus macromphalus	Cephalopoda	GCA_976954165.2	949282482	29.2	20336530	ok	
+34587	Katharina tunicata	Polyplacophora	GCA_032466195.1	684265396	74.3	5405	watch_fragmented_but_complete	
+36097	Haliotis laevigata	gastropoda	GCA_008038995.1	1762655385	184.0	3353	watch_fragmented_but_complete	
+36099	Haliotis ovina	Vetigastropoda	GCA_977061855.1	1295767206	100.0	19998011	ok	
+36103	Haliotis tuberculata	Vetigastropoda	GCA_965183735.2	1357147226	104.7	23232335	ok	
+36933	Onchidella celtica	Heterobranchia	GCA_963931925.1	1141015970	109.4	1962700	ok	harvested_ensembl
+37629	Gyrodactylus salaris	platyhelminthes	GCA_000715275.1	67380660	29.7	14673	ok	
+37643	Crassostrea rhizophorae	Bivalvia	GCA_977013615.1	508242776	37.8	8143000	ok	
+37655	Octopus rubescens	cephalopoda	GCA_027564515.1	2757134468	84.9	2937	watch_fragmented_but_complete	
+38744	Schistosoma mekongi	Platyhelminthes	GCA_034768735.1	404245338	178.3	1168079	ok	harvested_annotated
+40130	Donax trunculus	Bivalvia	GCA_964273945.3	1578539939	117.5	19973170	ok	
+42344	Haliotis discus hannai	gastropoda	GCA_044707095.1	1883591751	196.7	28490	ok	
+43123	Pedicellina cernua	other_lophotrochozoan_phyla		0		0	UNASSESSED_no_size	no_proteome_in_ncbi
+43341	Phorcus turbinatus	Vetigastropoda	GCA_965237135.1	951685553	73.4	50589882	ok	
+44597	Arca noae	Bivalvia	GCA_964261245.2	1495912614	111.4	20465118	ok	
+45748	Littorina brevicula	Caenogastropoda	GCA_043748665.1	678469528	43.7	78940	ok	
+45949	Corbicula fluminea	bivalvia	GCA_001632725.1	662517	0.0	849	FLAG_unusable	
+45985	Arianta arbustorum	Heterobranchia	GCA_973947135.1	2641094562	253.2	1409077	ok	
+46595	Harmothoe impar	annelida	GCA_947462335.1	1512304043	173.9	1337000	ok	
+49198	Atrina pectinata	Bivalvia	GCA_045489415.1	951196948	70.8	5288518	ok	
+50417	Mimachlamys varia	Bivalvia	GCA_947623455.1	975359695	72.6	19361000	ok	harvested_ensembl
+50426	Pinctada fucata	bivalvia	GCA_028142955.1	930916280	69.3	2496427	ok	
+52793	Radix auricularia	gastropoda	GCA_002072015.1	909750324	95.0	24354	ok	
+52918	Antalis vulgaris	Scaphopoda	GCA_977070855.1	4073218234	122.5	673000	ok	
+55521	Rapana venosa	gastropoda	GCA_028751875.1	2300182741	240.1	433295	ok	
+55704	Acanthochitona fascicularis	Polyplacophora	GCA_965278365.1	1702298342	184.9	7997289	ok	
+55710	Cerastoderma edule	bivalvia	GCA_947846245.1	755460783	56.2	1015184	ok	
+55715	Venus verrucosa	Bivalvia	GCA_964200665.2	2087848406	155.4	15529060	ok	
+55720	Uroteuthis edulis	Cephalopoda	GCA_965641475.1	4234062252	130.3	802163	ok	
+55729	Melanoides tuberculata	gastropoda	GCA_028565955.2	970667096	101.3	1059	watch_fragmented_but_complete	
+55810	Bulinus truncatus	Heterobranchia	GCA_021962125.1	1221776979	117.1	234305	ok	harvested_annotated
+55837	Unio pictorum	bivalvia	GCA_030141615.1	2434325818	181.2	10612599	ok	
+56141	Oncomelania hupensis	Caenogastropoda	GCA_036898135.1	1449858197	93.4	1346093	ok	
+57642	Siphonaria pectinata	Heterobranchia	GCA_978134735.1	817401451	78.4	1866751	ok	
+60958	Piscicola geometra	annelida	GCA_943735955.1	171080115	19.7	1427829	watch_small_but_contiguous	
+61363	Acanthopleura granulata	other_molluscan_classes	GCA_016165875.1	606536932	100.0	1098986	ok	
+61716	Hapalochlaena maculosa	cephalopoda	GCA_015501135.1	4009598772	123.4	1130	watch_fragmented_but_complete	
+61718	Japetella diaphana	cephalopoda	GCA_029822975.1	661078023	20.3	985	watch_fragmented_but_complete	
+61751	Thysanoteuthis rhombus	Cephalopoda	GCA_963457665.1	2735858501	84.2	2764709	ok	
+66787	Dipylidium caninum	platyhelminthes	GCA_028455885.1	82493519	36.4	18023	ok	
+66828	Isognomon alatus	Bivalvia	GCA_977066705.1	669218457	49.8	13403000	ok	
+67896	Cristatella mucedo	other_lophotrochozoan_phyla	GCA_009760855.2	573869636	108.5	4115582	ok	
+69427	Albinaria teres	Heterobranchia	GCA_964271275.2	1710602076	164.0	7880036	ok	
+69553	Bullina lineata	Heterobranchia	GCA_039654405.1	654185262	62.7	2243	watch_fragmented_but_complete	
+70192	Sepiola affinis	Cephalopoda	GCA_964339045.1	5452604274	167.8	2285831	ok	
+70193	Sepiola atlantica	Cephalopoda	GCA_963556195.1	5586413499	171.9	3845630	ok	harvested_ensembl
+71288	Ancula gibbosa	Heterobranchia	GCA_031833985.1	638039246	61.2	1728	watch_fragmented_but_complete	
+71319	Limacia clavigera	Heterobranchia	GCA_977872505.1	1351402326	129.6	482265	ok	
+71516	Clione limacina	Heterobranchia	GCA_032362205.1	1262273510	121.0	3345	watch_fragmented_but_complete	
+73031	Perna viridis	bivalvia	GCA_037379345.1	723115551	53.8	10239545	ok	
+75124	Cypraea tigris	Caenogastropoda	GCA_977966385.1	1545364487	99.5	8957251	ok	
+75126	Marisa cornuarietis	Caenogastropoda	GCA_050626395.1	539647188	34.8	26179417	ok	
+76178	Melibe leonina	Heterobranchia	GCA_031471865.1	565344392	54.2	2931	watch_fragmented_but_complete	
+78549	Callista chione	Bivalvia	GCA_964377925.1	1937186266	144.2	22152544	ok	
+79327	Schmidtea mediterranea	platyhelminthes	GCA_045838265.1	840173815	370.5	9624337	ok	
+80818	Hippopus hippopus	bivalvia	GCA_965239675.1	1443098613	107.4	25820117	ok	
+80821	Fragum fragum	bivalvia	GCA_946902895.1	1153070089	85.8	2298020	ok	harvested_ensembl
+80829	Tridacna gigas	bivalvia	GCA_945859785.2	1175943104	87.5	9438000	ok	harvested_ensembl
+80831	Tridacna derasa	Bivalvia	GCA_963210305.1	1060226362	78.9	4700035	ok	harvested_ensembl
+80832	Tridacna maxima	Bivalvia	GCA_045685785.1	1322576068	98.5	142146	ok	
+80833	Tridacna crocea	bivalvia	GCA_057475835.1	1056795272	78.7	20037603	ok	
+81899	Pseudocardium sachalinense	Bivalvia	GCA_056956995.1	864734751	64.4	30750029	ok	
+82660	Gyrodactylus bullatarudis	platyhelminthes	GCA_012064415.1	84346884	37.2	124054	ok	
+83531	Octopus mimus	cephalopoda	GCA_027568975.1	2057065956	63.3	1141	watch_fragmented_but_complete	
+84402	Sepietta obscura	Cephalopoda	GCA_965124075.1	4547004607	139.9	618317	ok	
+85432	Taenia pisiformis	platyhelminthes	GCA_023968675.1	211455966	93.3	945746	ok	
+87841	Euhadra peliomphala	Heterobranchia	GCA_040496235.1	1435807335	137.7	571	watch_fragmented_but_complete	
+87850	Mandarina hirasei	Heterobranchia	GCA_040496215.1	1305687384	125.2	575	watch_fragmented_but_complete	
+87854	Mandarina suenoae	Heterobranchia	GCA_040496255.1	1352920210	129.7	535	watch_fragmented_but_complete	
+87960	Patella depressa	gastropoda	GCA_948474765.1	683711263	71.4	13889351	ok	harvested_ensembl
+87964	Patella rustica	Patellogastropoda	GCA_965111895.1	719386390	121.0	8519583	ok	
+88005	Patella pellucida	gastropoda	GCA_917208275.1	712057054	74.3	3173890	ok	harvested_ensembl
+89764	Conus betulinus	gastropoda	GCA_016801955.1	3429626206	358.1	182638	ok	
+94034	Taenia multiceps	platyhelminthes	GCA_001923025.3	240596867	106.1	756412	ok	
+94722	Cerastoderma glaucum	Bivalvia	GCA_964341395.1	1003242564	74.7	844920	ok	
+95170	Membranipora membranacea	other_lophotrochozoan_phyla	GCA_914767715.1	339359933	64.1	7007262	ok	harvested_ensembl
+95538	Streblospio benedicti	annelida	GCA_019095985.1	701453095	80.7	48523	ok	
+97200	Cepaea hortensis	Heterobranchia	GCA_963921405.1	3168990361	303.8	1208264	ok	
+98288	Sphaerium corneum	Bivalvia	GCA_965230695.1	3625506042	269.9	1472648	ok	
+98310	Sinonovacula constricta	bivalvia	GCA_007844125.1	1220848272	90.9	976936	ok	
+99802	Spirometra erinaceieuropaei	platyhelminthes	GCA_000951995.1	1258717181	555.1	1236	watch_fragmented_but_complete	
+101297	Conus consors	gastropoda	GCA_004193615.1	2049318684	214.0	749	watch_fragmented_but_complete	
+101761	Conus tribblei	gastropoda	GCA_001262575.1	2160493082	225.6	854	watch_fragmented_but_complete	
+102321	Hyotissa hyotis	Bivalvia	GCA_051557925.1	1643229474	122.3	801138	ok	
+102329	Pinctada margaritifera	Bivalvia	GCA_977064395.2	1129698345	84.1	1606680	ok	
+102876	Eledone cirrhosa	Cephalopoda	GCA_964016885.1	2995825281	92.2	818412	ok	
+104385	Ruditapes decussatus	Bivalvia	GCA_977926895.1	1398147054	104.1	1729466	ok	
+104660	Pinctada maxima	Bivalvia	GCA_050580605.1	1264926820	94.2	649306	ok	
+106299	Chlamys farreri	bivalvia		0		0	UNASSESSED_no_size	no_proteome_in_ncbi
+109174	Haliotis asinina	Vetigastropoda	GCF_037392515.1	1143434573	88.2	38260015	ok	harvested_annotated
+109628	Illex coindetii	Cephalopoda	GCA_977009265.1	3990732263	122.8	7048351	ok	
+112136	Lithophaga nigra	bivalvia	GCA_028566555.1	1492027032	111.1	2277	watch_fragmented_but_complete	
+112209	Pinctada radiata	Bivalvia	GCA_964261305.2	930972745	69.3	8065000	ok	
+112526	Biomphalaria straminea	gastropoda	GCA_021533235.1	1004745081	104.9	9530	watch_fragmented_but_complete	
+112527	Biomphalaria sudanica	Heterobranchia	GCA_036873155.1	944194633	90.5	978061	ok	
+113549	Pteria penguin	Bivalvia	GCA_035048485.1	838713081	62.4	5032149	ok	
+114453	Bathymodiolus heckerae	Bivalvia	GCA_965117275.1	1551524815	115.5	504637	ok	
+114759	Phyllaplysia taylori	Heterobranchia	GCA_032273245.1	806246940	77.3	3479	watch_fragmented_but_complete	
+115415	Phoronis australis	other_lophotrochozoan_phyla	GCA_055505105.1	529053937	100.0	9691388	ok	
+116851	Eudiplozoon nipponicum	platyhelminthes	GCA_029291075.1	939802929	414.5	87067	ok	
+117992	Conus ventricosus	Caenogastropoda	GCA_018398815.2	3591590809	231.3	114326	ok	
+120394	Peltodoris atromaculata	Heterobranchia	GCA_965112245.2	1335750715	128.1	1427876	ok	
+120439	Limaria hians	Bivalvia	GCA_965230825.1	1121252228	83.5	13045000	ok	
+120460	Striarca lactea	Bivalvia	GCA_977012395.1	1765443780	131.4	6465682	ok	
+120570	Mactra quadrangularis	bivalvia	GCA_025267735.1	979316952	72.9	7487386	ok	
+126420	Acanthochitona crinita	other_molluscan_classes		0		0	UNASSESSED_no_size	no_proteome_in_ncbi
+134471	Stramonita haemastoma	Caenogastropoda	GCA_030674155.1	2236578135	144.0	200811	ok	
+135721	Corbicula fluminalis	Bivalvia	GCA_048771855.1	1149359062	85.6	31110544	ok	
+138984	Chamelea gallina	Bivalvia	GCA_977927505.1	1888514228	140.6	99135139	ok	
+141464	Corbicula japonica	Bivalvia	GCA_038501625.2	1069813790	79.6	616602	ok	
+145626	Bradybaena similaris	Heterobranchia	GCA_050415755.1	2289373504	219.5	17198119	ok	harvested_annotated
+147581	Deroceras laeve	Heterobranchia	GCA_051403575.1	1783141715	171.0	1583774	ok	
+148819	Scapharca broughtonii	bivalvia		0		0	UNASSESSED_no_size	no_proteome_in_ncbi
+152013	Congeria kusceri	bivalvia	GCA_027627225.1	1550098618	115.4	6387040	ok	
+154625	Elysia timida	Heterobranchia	GCA_043644045.1	754417147	72.3	1920000	ok	
+154630	Thuridilla hopei	Heterobranchia	GCA_965242825.1	1076169729	103.2	1039305	ok	
+154632	Tylodina perversa	Heterobranchia	GCA_977019725.1	1541970296	147.8	3565190	ok	
+154642	Cratena peregrina	Heterobranchia	GCA_975085575.1	795812008	76.3	12254148	ok	
+154647	Marionia blainvillea	Heterobranchia	GCA_965362205.1	1257981301	120.6	1347335	ok	
+157363	Meretrix lamarckii	Bivalvia	GCA_049244375.1	883045730	65.7	46538327	ok	
+157728	Saccostrea glomerata	bivalvia	GCA_003671525.1	788100799	58.7	39540	ok	
+161078	Omphiscola glabra	Heterobranchia	GCA_964017045.1	744783700	71.4	3669713	ok	
+165446	Cristaria plicata	bivalvia		0		0	UNASSESSED_no_size	no_proteome_in_ncbi
+165450	Hyriopsis cumingii	bivalvia	GCA_028554795.2	2905009185	216.2	5295426	ok	
+165599	Solen grandis	Bivalvia	GCA_051362365.1	1223914037	91.1	718648	ok	
+167016	Acanthopleura gemmata	Polyplacophora	GCA_977063515.1	719716592	78.2	32847218	ok	
+169957	Eudrilus eugeniae	annelida	GCA_020405105.1	475020277	54.6	906	watch_fragmented_but_complete	
+179646	Bolinus brandaris	Caenogastropoda	GCA_965120365.1	2487942006	160.2	1097130	ok	
+179648	Hexaplex trunculus	Caenogastropoda	GCA_977070975.2	2059466971	132.6	24661824	ok	
+190912	Dendrodoris denisoni	Heterobranchia	GCA_056523665.1	748767013	71.8	1954	watch_fragmented_but_complete	
+191775	Bulinus ugandae	Heterobranchia	GCA_057383705.1	1197570150	114.8	6863688	ok	harvested_annotated
+192920	Bugulina stolonifera	Bryozoa	GCA_935421135.1	234968257		12561000	UNASSESSED_small_clade	harvested_ensembl
+195873	Aeolidia papillosa	Heterobranchia	GCA_032466315.1	166752208	16.0	273	FLAG_unusable	
+200191	Sinotaia quadrata	Caenogastropoda	GCA_028829895.1	984328742	63.4	37213934	ok	
+203155	Fustiaria rubescens	Scaphopoda	GCA_048127375.1	2577739986	77.5	760232	ok	
+205083	Dreissena rostriformis	bivalvia	GCA_055670145.1	1613145916	120.1	1391067	ok	
+205593	Hermissenda crassicornis	Heterobranchia	GCA_031471375.1	482625898	46.3	1549	watch_fragmented_but_complete	
+206348	Bathymodiolus brooksi	Bivalvia	GCA_963680875.1	2002726235	149.1	2892184	ok	harvested_ensembl
+216125	Steromphala cineraria	Vetigastropoda	GCA_916613615.1	1270484905	98.0	6200493	ok	
+216257	Chrysomallon squamiferum	gastropoda	GCA_012295275.1	404610835	42.2	1883489	ok	
+216498	Hydroides elegans	annelida	GCA_001703475.1	1026046400	118.0	5980	watch_fragmented_but_complete	
+217773	Ovula ovum	Caenogastropoda	GCA_977061905.1	1635329931	105.3	2008797	ok	
+220392	Bathymodiolus septemdierum	Bivalvia	GCA_963383655.1	1428147140	106.3	2330011	ok	harvested_ensembl
+220900	Ctenoides ales	Bivalvia	GCA_042257175.1	2237305496	166.5	1202487	ok	
+225169	Lottia scabra	gastropoda	GCA_029955415.2	412339995	43.0	5334417	ok	
+225303	Nipponacmea schrenckii	Patellogastropoda	GCA_030562195.1	418103701	70.3	558043	ok	
+225457	Polymita picta	Heterobranchia	GCA_051020465.1	1848778765	177.3	82728	ok	
+225476	Hygromia cinctella	Heterobranchia	GCA_974392715.2	1432880999	137.4	222033	ok	
+228297	Argopecten purpuratus	bivalvia		0		0	UNASSESSED_no_size	no_proteome_in_ncbi
+228457	Laternula elliptica	bivalvia	GCA_050575415.1	1153961776	85.9	2884873	ok	
+231223	Elysia crispata	Heterobranchia	GCA_033675545.1	786336081	75.4	458731	ok	harvested_annotated
+231999	Epimenia babai	other_molluscan_classes	GCA_011762755.2	537167073	88.6	5209	watch_fragmented_but_complete	
+238240	Lamellibrachia luymesi	annelida	GCA_009193005.1	687706213	79.1	24086	ok	
+241154	Acanthocardia echinata	Bivalvia	GCA_977930445.1	1351164484	100.6	4250610	ok	
+241156	Americardia media	Bivalvia	GCA_964300355.1	1299874530	96.8	5603043	ok	
+244458	Anodontia alba	Bivalvia	GCA_964016985.1	1862853998	138.7	1839011	ok	
+244460	Loripinus fragilis	Bivalvia	GCA_964019695.1	1987459943	147.9	3765059	ok	
+244482	Lucinoma borealis	Bivalvia	GCA_982297085.1	4219651467	314.1	4586255	ok	
+244486	Phacoides pectinatus	Bivalvia	GCA_965230325.1	1423376792	106.0	480354	ok	
+244489	Rugalucina vietnamica	Bivalvia	GCA_056413925.1	1231657823	91.7	19177643	ok	
+251531	Ensis siliqua	Bivalvia	GCA_978270025.1	1889295646	140.6	1974000	ok	
+256056	Lepidochitona cinerea	Polyplacophora	GCA_963971465.1	705712942	76.7	8732403	ok	harvested_ensembl
+256058	Tonicella lineata	Polyplacophora	GCA_034781015.1	920468757	100.0	2841	watch_fragmented_but_complete	
+256063	Ischnochiton rissoi	Polyplacophora	GCA_965250495.2	1496883596	162.6	21887000	ok	
+256104	Mopalia muscosa	Polyplacophora	GCA_031763545.1	661939908	71.9	6693	watch_fragmented_but_complete	
+256108	Chiton olivaceus	Polyplacophora	GCA_964264625.4	1430682616	155.4	11619751	ok	
+256131	Chaetoderma nitidulum	Caudofoveata	GCA_048127305.1	3970177988		684374	UNASSESSED_small_clade	
+256136	Architeuthis dux	cephalopoda	GCA_006491835.1	2693618964	82.9	5397	watch_fragmented_but_complete	
+256138	Callochiton septemvalvis	Polyplacophora	GCA_047826735.1	1231324671	133.8	608062	ok	
+259632	Hydatina physis	Heterobranchia	GCA_040966635.1	779952995	74.8	2074	watch_fragmented_but_complete	
+262603	Goniobranchus geometricus	gastropoda	GCA_028565895.1	907216199	94.7	2464	watch_fragmented_but_complete	
+262604	Goniobranchus kuniei	gastropoda	GCA_025770095.1	1190951304	124.3	2720	watch_fragmented_but_complete	
+262605	Goniobranchus leopardus	gastropoda	GCA_028566475.1	432546281	45.2	1176	watch_fragmented_but_complete	
+265994	Monacha cantiana	Heterobranchia	GCA_964261925.1	2063343632	197.8	941584	ok	
+271027	Armiger crista	Heterobranchia	GCA_056783845.1	755554428	72.4	8336	watch_fragmented_but_complete	
+271030	Anisus vortex	gastropoda	GCA_949126835.1	869531111	90.8	3531458	ok	
+271774	Alentia gelatinosa	annelida	GCA_950022655.1	1237499423	142.3	3858780	ok	harvested_ensembl
+291251	Meretrix meretrix	Bivalvia	GCA_978046135.1	835139699	62.2	42715300	ok	
+294695	Argonauta argo	cephalopoda		0		0	UNASSESSED_no_size	no_proteome_in_ncbi
+296134	Acanthosepion lycidas	Cephalopoda	GCA_963932145.1	5155670113	158.7	1670757	ok	harvested_ensembl
+302032	Aporrectodea caliginosa	annelida	GCA_977118385.1	1091964218	125.6	276345	ok	
+307678	Tetrastemma melanocephalum	Nemertea	GCA_977011905.1	521620361		1554285	UNASSESSED_small_clade	
+310899	Modiolus philippinarum	bivalvia	GCA_002080025.1	2629556424	195.7	18389	ok	
+310900	Lithophaga antillarum	bivalvia	GCA_028566495.1	1419759205	105.7	2637	watch_fragmented_but_complete	
+311198	Meretrix petechialis	Bivalvia	GCA_046203225.1	1044147259	77.7	9125470	ok	
+311201	Saxidomus purpurata	bivalvia	GCA_022818135.2	1005500135	74.8	1493895	ok	
+311461	Hirudo verbana	annelida	GCA_965178065.1	177750590	20.4	1338446	ok	
+318265	Meghimatium bilineatum	Heterobranchia	GCA_034231615.1	1612388812	154.6	1358026	ok	
+329893	Dirona picta	Heterobranchia	GCA_056523585.1	535689827	51.4	2749	watch_fragmented_but_complete	
+334708	Patella ulyssiponensis	Patellogastropoda	GCA_963678685.1	693560843	116.7	16753147	ok	harvested_ensembl
+335511	Cardicola forsteri	platyhelminthes	GCA_025895645.1	216531548	95.5	430422	ok	
+335759	Tricolia pullus	Vetigastropoda	GCA_964273465.1	769492681	59.4	6492662	ok	
+335776	Bolma rugosa	Vetigastropoda	GCA_964656265.1	3034723167	234.2	18070829	ok	
+351200	Scurria scurra	Patellogastropoda	GCA_044232375.1	393493031	66.2	581035	ok	
+351238	Amynthas corticis	annelida	GCA_900184025.1	1017224661	117.0	510	watch_fragmented_but_complete	
+356393	Limnoperna fortunei	bivalvia	GCA_944474755.1	1335559959	99.4	1498882	ok	harvested_ensembl
+358449	Laevipilina antarctica	other_molluscan_classes		0		0	UNASSESSED_no_size	no_proteome_in_ncbi
+366651	Atrina japonica	bivalvia	GCA_030159075.1	835332209	62.2	911473	ok	
+380556	Elysia papillosa	Heterobranchia	GCA_977015215.2	1023596221	98.1	629667	ok	
+380564	Costasiella ocellifera	Heterobranchia	GCA_978018115.1	638908995	61.3	51000	ok	
+387458	Aliger gallus	Caenogastropoda	GCA_978021195.1	1877643533	120.9	4086803	ok	
+406540	Lucinella divaricata	Bivalvia	GCA_964194035.1	1914457123	142.5	3117319	ok	
+410350	Clinocardium nuttallii	Bivalvia	GCA_977929165.1	1359207508	101.2	2480468	ok	
+413423	Mopalia ciliata	Polyplacophora	GCA_034783835.1	661851316	71.9	5022	watch_fragmented_but_complete	
+413425	Mopalia kennerleyi	Polyplacophora	GCA_034783855.1	743018383	80.7	4396	watch_fragmented_but_complete	
+413429	Mopalia swanii	other_molluscan_classes	GCA_030265315.1	860836749	141.9	2201	watch_fragmented_but_complete	
+416868	Notospermus geniculatus	other_lophotrochozoan_phyla	GCA_002633025.1	858599399	162.3	22604	ok	
+427924	Dreissena rostriformis bugensis	Bivalvia	GCA_055670145.1	1613145916	120.1	1391067	ok	
+429176	Glycymeris glycymeris	Bivalvia	GCA_978048415.1	3667539238	273.0	14499000	ok	
+429181	Laevicardium crassum	Bivalvia	GCA_964662305.1	1507392325	112.2	7549063	ok	
+430714	Mopalia vespertina	other_molluscan_classes	GCA_030265115.1	676010105	111.5	6583	watch_fragmented_but_complete	
+444096	Nassarius nitidus	Caenogastropoda	GCA_975086585.1	2458585862	158.3	2362126	ok	
+453592	Pomacea diffusa	Caenogastropoda	GCA_050626375.1	531446324	34.2	22742251	ok	
+457845	Lutraria lutraria	Bivalvia	GCA_964023205.1	815452058	60.7	1075722	ok	
+460703	Glossodoris hikuerensis	Heterobranchia	GCA_977927305.1	2506344627	240.3	8165290	ok	
+461120	Unio delphinus	bivalvia	GCA_029339505.1	2505958346	186.5	10231822	ok	
+463371	Indoaustriella scarlatoi	Bivalvia	GCA_046867355.1	1580604568	117.7	4414248	ok	
+480380	Phymorhynchus buccinoides	Caenogastropoda	GCA_017654935.2	2123773519	136.8	224718	ok	
+481892	Neptunea cumingii	Caenogastropoda	GCA_055474155.1	5506255681	354.6	6450967	ok	
+483686	Nerita plicata	Neritimorpha	GCA_977112095.1	1179867941		3648574	UNASSESSED_small_clade	
+486152	Whitmania pigra	annelida	GCA_041430665.1	169347427	19.5	9883571	watch_small_but_contiguous	
+488663	Naticarius hebraeus	Caenogastropoda	GCA_964341215.1	2232907201	143.8	4029449	ok	
+488664	Naticarius stercusmuscarum	Caenogastropoda	GCA_965120495.2	2115962307	136.3	27474996	ok	
+488666	Neverita josephinia	Caenogastropoda	GCA_964340425.3	1731083505	111.5	5574000	ok	
+492055	Phoronis ovalis	other_lophotrochozoan_phyla	GCA_028565635.1	326042390	61.6	4788	watch_fragmented_but_complete	
+492056	Phoronis pallida	other_lophotrochozoan_phyla	GCA_028565715.1	425364260	80.4	2318	watch_fragmented_but_complete	
+494601	Epitonium clathrus	Caenogastropoda	GCA_977870945.1	1101863264	71.0	339722	ok	
+499925	Chromodoris orientalis	gastropoda	GCA_028571245.1	727712454	76.0	1791	watch_fragmented_but_complete	
+499938	Melibe viridis	Heterobranchia	GCA_039654465.1	805869450	77.3	2273	watch_fragmented_but_complete	
+500109	Peronia verruculata	Heterobranchia	GCA_038406235.1	1211529371	116.2	4825	watch_fragmented_but_complete	
+508130	Goniobranchus fidelis	gastropoda	GCA_028565935.1	929280104	97.0	2036	watch_fragmented_but_complete	
+515817	Amphioctopus fangsiao	Cephalopoda	GCA_051529975.1	4341033427	133.6	2312534	ok	
+515824	Octopus minor	cephalopoda		0		0	UNASSESSED_no_size	no_proteome_in_ncbi
+519352	Echinococcus canadensis	platyhelminthes	GCA_052523225.1	127330992	56.2	2222043	ok	
+527796	Cipangopaludina chinensis	Caenogastropoda	GCA_050437285.1	1560258163	100.5	7458187	ok	
+544679	Schizoporella errata	Bryozoa	GCA_980783175.1	332651546		3436012	UNASSESSED_small_clade	
+558755	Cryptosula pallasiana	other_lophotrochozoan_phyla	GCA_945261195.1	605593191	114.5	1788101	ok	harvested_ensembl
+561460	Fragum sueziense	Bivalvia	GCA_963680895.1	1206121789	89.8	689039	ok	harvested_ensembl
+582868	Ampullaceana balthica	gastropoda	GCA_944989445.1	1105887359	115.5	435188	ok	
+584774	Dosinia exoleta	Bivalvia	GCA_977035745.1	1644274073	122.4	51077196	ok	
+623738	Octopus maya	cephalopoda	GCA_027122535.1	2341750473	72.1	2361	watch_fragmented_but_complete	
+627230	Ostrea lurida	bivalvia	GCA_903981925.1	1140787867	84.9	7815	watch_fragmented_but_complete	
+669229	Wirenia argentea	other_molluscan_classes	GCA_025802215.1	528769856	87.2	2969	watch_fragmented_but_complete	
+672921	Tubulanus polymorphus	Nemertea	GCF_964204645.1	267806677		9529141	UNASSESSED_small_clade	harvested_annotated
+683711	Macrostomum hystrix	platyhelminthes	GCA_950097015.1	220453370	97.2	13505968	ok	
+703304	Gibbula magus	gastropoda	GCA_936450465.1	1470388822	153.5	3416053	ok	harvested_ensembl
+703305	Steromphala pennanti	Vetigastropoda	GCA_972017475.2	1230639586	95.0	19544000	ok	
+761904	Acanthochitona rubrolineata	Polyplacophora	GCA_045838495.1	1076259922	116.9	24272969	ok	
+763122	Dirona albolineata	Heterobranchia	GCA_031763155.1	522790490	50.1	3229	watch_fragmented_but_complete	
+763133	Tritonia festiva	Heterobranchia	GCA_030265255.1	908035819	87.1	1418	watch_fragmented_but_complete	
+797219	Dendronotus venustus	Heterobranchia	GCA_031834005.1	680167874	65.2	1832	watch_fragmented_but_complete	
+797262	Scyllaea pelagica	Heterobranchia	GCA_031833965.1	646912406	62.0	2442	watch_fragmented_but_complete	
+857299	Botula fusca	bivalvia	GCA_028566455.1	1333706665	99.3	2129	watch_fragmented_but_complete	
+869964	Phyllodesmium magnum	Heterobranchia	GCA_056904015.1	34020019	3.3	2388	FLAG_unusable	
+869965	Phyllodesmium colemani	Heterobranchia	GCA_056903995.1	49750174	4.8	2439	FLAG_unusable	
+869970	Phyllodesmium koehleri	Heterobranchia	GCA_056904055.1	74480403	7.1	2640	FLAG_unusable	
+869980	Nemesignis banyulensis	Heterobranchia	GCA_965263765.1	651286936	62.4	1370689	ok	
+872509	Tylodina fungina	Heterobranchia	GCA_031762815.1	674588215	64.7	2143	watch_fragmented_but_complete	
+880429	Alitta virens	annelida	GCA_932294295.1	671154093	77.2	7783370	ok	
+881212	Ctena decussata	Bivalvia	GCA_963989385.1	1658050510	123.4	4641525	ok	
+881214	Ctena imbricatula	Bivalvia	GCA_965111775.1	1957022519	145.7	890627	ok	
+881239	Lucinisca nassula	Bivalvia	GCA_963580285.1	2926454868	217.8	1800303	ok	
+881254	Stewartia floridana	Bivalvia	GCA_964194395.1	1908891966	142.1	700449	ok	
+904360	Dendronotus rufus	Heterobranchia	GCA_032358575.1	466668337	44.7	2254	watch_fragmented_but_complete	
+926810	Atrina seminuda	Bivalvia	GCA_977927275.1	820503550	61.1	13135000	ok	
+928741	Cochlostoma elegans	Caenogastropoda	GCA_965636705.1	1074968247	69.2	1092107	ok	
+929453	Spurilla neapolitana	Heterobranchia	GCA_056592395.1	747065164	71.6	3227	watch_fragmented_but_complete	
+934979	Pruvotfolia pselliotes	Heterobranchia	GCA_981328385.1	1103536993	105.8	31238996	ok	
+989235	Modiolus barbatus	Bivalvia	GCA_977971965.1	2192256230	163.2	5192939	ok	
+999236	Peronia peronii	Heterobranchia	GCA_039654565.1	1306781825	125.3	4616	watch_fragmented_but_complete	
+1028561	Gari depressa	Bivalvia	GCA_965649845.1	1966425717	146.4	39712000	ok	
+1028565	Arcopagia crassa	Bivalvia	GCA_977017625.1	1959244340	145.8	43718000	ok	
+1028688	Arion vulgaris	gastropoda	GCA_020796225.1	1541026261	160.9	8603329	ok	
+1048598	Ctenoides mitis	Bivalvia	GCA_978015095.1	1422408291	105.9	49475702	ok	
+1048606	Talochlamys pusio	Bivalvia	GCA_977012135.2	1126839705	83.9	31685418	ok	
+1049056	Panopea generosa	bivalvia	GCA_029582155.1	1474161289	109.7	1571249	ok	
+1051067	Doryteuthis pealeii	Cephalopoda	GCA_023376005.1	4598001602	141.5	230938	ok	
+1069815	Sinanodonta woodiana	Bivalvia	GCA_046254885.1	2804107447	208.7	4007853	ok	harvested_annotated
+1077242	Gadila tolmiei	other_molluscan_classes		0		0	UNASSESSED_no_size	no_proteome_in_ncbi
+1131437	Terebella lapidaria	annelida	GCA_949152475.1	765232019	88.0	6684000	ok	
+1138471	Boreochiton ruber	Polyplacophora	GCA_048127235.1	1660703474	180.4	4028624	ok	
+1154712	Anteaeolidiella chromosoma	Heterobranchia	GCA_056523245.1	62179785	6.0	635	FLAG_unusable	
+1154738	Glaucilla marginata	Heterobranchia	GCA_056592615.1	816105240	78.2	2134	watch_fragmented_but_complete	
+1170240	Bornella anguilla	Heterobranchia	GCA_040967035.1	1060844557	101.7	2684	watch_fragmented_but_complete	
+1170244	Lomanotus vermiformis	Heterobranchia	GCA_037974715.1	898643329	86.2	1394	watch_fragmented_but_complete	
+1196096	Metaphire vulgaris	annelida	GCA_018105865.1	728619257	83.8	3037406	ok	
+1200667	Doris verrucosa	Heterobranchia	GCA_977009135.2	1223396792	117.3	5756812	ok	
+1209993	Amphiduros pacificus	annelida	GCA_949316495.1	694322451	79.9	7010533	ok	harvested_ensembl
+1210411	Lepidonotus clava	annelida	GCA_975302155.1	1015253628	116.8	15394861	ok	
+1210413	Sthenelais limicola	annelida	GCA_942159475.1	1131133856	130.1	10232024	ok	harvested_ensembl
+1230023	Cattania trizona	Heterobranchia	GCA_982297885.1	2627864951	251.9	112113	ok	
+1245466	Pomacea maculata	Caenogastropoda	GCA_050626345.1	445128466	28.7	22889041	ok	
+1265871	Doris montereyensis	Heterobranchia	GCA_037039925.1	520284697	49.9	237151	ok	
+1288050	Bulbaeolidia alba	Heterobranchia	GCA_056523445.1	102921924	9.9	681	FLAG_unusable	
+1289581	Xenostrobus securis	Bivalvia	GCA_982375365.1	1031460171	76.8	3396427	ok	
+1298703	Plocamopherus imperialis	Heterobranchia	GCA_039654505.1	764770046	73.3	2665	watch_fragmented_but_complete	
+1298704	Plocamopherus tilesii	Heterobranchia	GCA_037974505.1	801631259	76.9	2080	watch_fragmented_but_complete	
+1323128	Limacina bulimoides	Heterobranchia	GCA_009866985.1	2901930333	278.2	884	watch_fragmented_but_complete	
+1325891	Favorinus blianus	Heterobranchia	GCA_981562355.1	839630212	80.5	308223	ok	
+1348078	Hirudinaria manillensis	annelida	GCA_034509925.1	148590564	17.1	9584917	watch_small_but_contiguous	
+1348078	Poecilobdella manillensis	annelida	GCA_034509925.1	148590564	17.1	9584917	watch_small_but_contiguous	
+1353015	Muusoctopus longibrachus	cephalopoda	GCA_027122495.1	1067355155	32.8	1743	watch_fragmented_but_complete	
+1390362	Anadara kagoshimensis	Bivalvia	GCA_021292105.1	1115236308	83.0	1935399	ok	
+1411927	Thracia phaseolina	Bivalvia	GCA_964274215.1	793706609	59.1	11776032	ok	
+1421124	Gastropteron pacificum	Heterobranchia	GCA_031471215.1	549124366	52.6	2448	watch_fragmented_but_complete	
+1421129	Kellia suborbicularis	Bivalvia	GCA_977998095.1	811020905	60.4	5558000	ok	
+1423836	Octopus insularis	cephalopoda	GCA_029874955.1	1617927582	49.8	1978	watch_fragmented_but_complete	
+1449875	Spurilla braziliana	Heterobranchia	GCA_056592375.1	768598462	73.7	4399	watch_fragmented_but_complete	
+1472349	Alviniconcha strummeri	Caenogastropoda	GCA_963584105.1	453801490	29.2	62280	ok	
+1491185	Alviniconcha kojimai	Caenogastropoda	GCA_977066575.1	424696059	27.4	68151	ok	
+1491186	Alviniconcha marisindica	gastropoda	GCA_018857735.1	829610088	86.6	727552	ok	
+1499118	Felimida luteorosea	Heterobranchia	GCA_965183745.2	1547746039	148.4	3206423	ok	
+1522334	Elysia leucolegnote	Heterobranchia	GCA_052815195.1	776755396	74.5	1154	watch_fragmented_but_complete	
+1526741	Xylophaga dorsalis	Bivalvia	GCA_965225065.2	451794626	33.6	1253263	ok	
+1527468	Magallana gigas x Magallana angulata	Bivalvia	GCA_051201775.1	1230392071	91.6	2556815	ok	
+1564611	Felimare picta	Heterobranchia	GCA_964659555.1	1434850509	137.6	3760560	ok	
+1582096	Octopoteuthis deletron	cephalopoda		0		0	UNASSESSED_no_size	no_proteome_in_ncbi
+1620919	Phorcus lineatus	gastropoda	GCA_921293015.1	957834846	100.0	4940451	ok	harvested_ensembl
+1628040	Ellobium chinense	Heterobranchia	GCA_033807755.1	949470026	91.0	21266	ok	
+1676568	Parvicardium scabrum	Bivalvia	GCA_977066215.1	972009762	72.4	2870191	ok	
+1676591	Tritonia hombergii	Heterobranchia	GCA_977118315.1	1610910025	154.4	784129	ok	
+1677693	Doris pseudoargus	Heterobranchia	GCA_973376685.1	1580279066	151.5	2482702	ok	
+1699438	Fragum whitleyi	bivalvia	GCA_948146395.1	1224640636	91.2	2802427	ok	
+1707715	Doriopsilla bertschi	Heterobranchia	GCA_056523625.1	671623784	64.4	2725	watch_fragmented_but_complete	
+1707717	Doriopsilla fulva	Heterobranchia	GCA_056592535.1	981978522	94.1	1987	watch_fragmented_but_complete	
+1707725	Plocamopherus ceylonicus	Heterobranchia	GCA_039654545.1	1093900571	104.9	2010	watch_fragmented_but_complete	
+1747752	Xerocrassa montserratensis	Heterobranchia	GCA_978160285.1	1940274384	186.0	4095416	ok	
+1803738	Conchocele bisecta	bivalvia	GCA_029237695.1	1904932765	141.8	515412	ok	
+1840525	Hermissenda opalescens	Heterobranchia	GCA_056592655.1	615273588	59.0	3867	watch_fragmented_but_complete	
+1899378	Clathrolucina costata	Bivalvia	GCA_965112175.1	1875844969	139.6	1177367	ok	
+1918950	Gymnomenia pellucida	other_molluscan_classes		0		0	UNASSESSED_no_size	no_proteome_in_ncbi
+1920007	Donax variegatus	Bivalvia	GCA_964468855.2	1635777011	121.8	39597000	ok	
+1920014	Mysia undata	Bivalvia	GCA_964106805.1	1613701415	120.1	1923934	ok	
+1954227	Arcuatula senhousia	Bivalvia	GCA_963971305.1	1036819019	77.2	2134782	ok	harvested_ensembl
+1962979	Oreohelix subrudis	Heterobranchia	GCA_049997775.1	2582580476	247.6	111833	ok	
+1980407	Macomangulus tenuis	Bivalvia	GCA_964059415.1	1906560001	141.9	10971308	ok	
+1980904	Metafruticicola noverca	Heterobranchia	GCA_965283255.2	1752025557	168.0	1270493	ok	
+2010383	Bolma henica	Vetigastropoda	GCA_982529885.1	3342486563	258.0	3381697	ok	
+2038759	Dracogyra subfuscus	gastropoda	GCA_016106625.1	1161245404	121.2	4083	watch_fragmented_but_complete	
+2049241	Bathyacmaea lactea	Patellogastropoda	GCA_053477725.1	767484084	129.1	577066	ok	
+2049525	Aegires albopunctatus	Heterobranchia	GCA_032466395.1	684506045	65.6	3666	watch_fragmented_but_complete	
+2053936	Stigmatoteuthis arcturi	Cephalopoda	GCA_964276865.2	3249387216	100.0	10980000	ok	
+2053990	Veleropilina oligotropha	Monoplacophora	GCA_048128005.1	1401304827		252221	UNASSESSED_small_clade	
+2067768	Ariolimax columbianus	Heterobranchia	GCA_036924085.1	2294312288	220.0	3670449	ok	
+2080241	Paraescarpia echinospica	annelida	GCA_020002185.1	1101720295	126.7	237234	ok	
+2126142	Testudinalia testudinalis	Patellogastropoda	GCA_977013425.1	495176862	83.3	8775000	ok	
+2172688	Dirona pellucida	gastropoda	GCA_030265205.1	562136326	58.7	2307	watch_fragmented_but_complete	
+2201794	Muusoctopus leioderma	cephalopoda	GCA_027124095.1	1531747144	47.1	3109	watch_fragmented_but_complete	
+2291463	Prostheceraeus crozieri	platyhelminthes	GCA_907163375.1	2065465794	910.9	287821	ok	
+2291877	Archivesica marissinica	bivalvia	GCA_014843695.1	1544610695	115.0	79144	ok	
+2302425	Mactra antiquata	Bivalvia	GCA_047288015.1	791834592	58.9	8652042	ok	harvested_annotated
+2302672	Eumandya parva	Cephalopoda	GCA_964059275.1	4425887515	136.2	1364429	ok	
+2483392	Flabellinopsis iodinea	Heterobranchia	GCA_056592575.1	700539562	67.2	2954	watch_fragmented_but_complete	
+2496851	Halgerda indotessellata	Heterobranchia	GCA_056593295.1	1094045699	104.9	1480	watch_fragmented_but_complete	
+2496858	Halgerda wasinensis	Heterobranchia	GCA_056593275.1	1018581987	97.7	2119	watch_fragmented_but_complete	
+2496859	Halgerda dichromis	Heterobranchia	GCA_056592555.1	829674849	79.5	2954	watch_fragmented_but_complete	
+2505931	Margaritifera margaritifera	bivalvia	GCA_015947965.1	2472071740	184.0	16891	ok	
+2510888	Bullacta caurina	Heterobranchia	GCA_051558385.1	866471213	83.1	4458732	ok	
+2547956	Mytilisepta virgata	bivalvia	GCA_028015205.1	1034479799	77.0	16191354	ok	
+2559711	Macrostomum cliftonense	platyhelminthes	GCA_950096795.1	226746154	100.0	1017626	ok	
+2584915	Oreohelix idahoensis	gastropoda	GCA_024509875.1	5404385736	564.2	394446	ok	
+2589376	Gari tellinella	bivalvia	GCA_922989275.2	1597614753	118.9	19181371	ok	harvested_ensembl
+2589387	Fabulina fabula	Bivalvia	GCA_977014855.1	1975080867	147.0	4821516	ok	
+2602933	Magallana nippona	Bivalvia	GCA_033439105.1	528986028	39.4	2745000	ok	
+2605667	Achatina immaculata	Heterobranchia	GCA_009760885.1	1653153977	158.5	3802429	ok	
+2653900	Crassostrea hongkongensis	bivalvia	GCA_015776775.1	607923123	45.3	2576225	ok	
+2653900	Magallana hongkongensis	bivalvia	GCA_015776775.1	607923123	45.3	2576225	ok	
+2665993	Gigantidas haimaensis	Bivalvia	GCA_054130545.1	1921510242	143.0	2764839	ok	
+2682772	Atriophallophorus winterbourni	platyhelminthes	GCA_013407085.1	601728533	265.4	33380	ok	
+2695323	Tylodina rafinesquii	Heterobranchia	GCA_978679055.1	1510502747	144.8	1651666	ok	
+2708134	Pomacea occulta	Caenogastropoda	GCA_056746905.1	441504355	28.4	12600255	ok	
+2709805	Rochia nilotica	Vetigastropoda	GCA_978019575.1	1394742580	107.6	15596904	ok	
+2718470	Meretrix taiwanica	Bivalvia	GCA_049244365.1	944717758	70.3	48788946	ok	
+2718619	Terminoflustra membranaceotruncata	other_lophotrochozoan_phyla		0		0	UNASSESSED_no_size	no_proteome_in_ncbi
+2722873	Bithynia leachii	Caenogastropoda	GCA_977064325.1	812808802	52.3	119917	ok	
+2723957	Goniobranchus coi	gastropoda	GCA_025762795.1	677083788	70.7	1634	watch_fragmented_but_complete	
+2724334	Saccostrea mordoides	Bivalvia	GCA_977871665.1	710401649	52.9	4336661	ok	
+2731840	Gibbosula rochechouartii	Bivalvia	GCA_054850785.1	2985579439	222.2	149331216	ok	
+2732485	Hanleya hanleyi	Polyplacophora	GCA_036873755.1	2516606652	273.4	64677	ok	
+2742875	Daudebardia rufa	Heterobranchia	GCA_965653185.1	2071564095	198.6	598689	ok	
+2747510	Peronia okinawensis	Heterobranchia	GCA_040966895.1	1269498014	121.7	3730	watch_fragmented_but_complete	
+2747511	Peronia setoensis	Heterobranchia	GCA_040966875.1	1236193938	118.5	4608	watch_fragmented_but_complete	
+2750724	Conus canariensis	Caenogastropoda	GCA_033310375.1	2867906435	184.7	641429	ok	
+2751870	Arion ater rufus	Heterobranchia	GCA_032362185.1	1081573424	103.7	2382	watch_fragmented_but_complete	
+2780533	Tritonia tetraquetra	gastropoda	GCA_030265355.1	740546519	77.3	3097	watch_fragmented_but_complete	
+2793148	Heteranomia squamula	Bivalvia	GCA_964263325.1	738610251	55.0	10165414	ok	
+2830794	Bathymodiolus platifrons	bivalvia	GCA_040955395.1	1499906421	111.7	28064	ok	
+2831224	Micromelo scriptus	Heterobranchia	GCA_040966915.1	818066392	78.4	1630	watch_fragmented_but_complete	
+2879371	Phyllidia marindica	Heterobranchia	GCA_056593215.1	950056796	91.1	3279	watch_fragmented_but_complete	
+2887373	Helminthoglypta traskii	Heterobranchia	GCA_042920045.1	2123852462	203.6	406568	ok	
+2892552	Ctena cf. galapagana NHMUK 20210086	Bivalvia	GCA_974392585.1	1808744534	134.6	6021660	ok	
+2922058	Azorinus chamasolen	Bivalvia	GCA_963576725.1	1723475634	128.3	1658885	ok	
+2922911	Acholoe squamosa	annelida	GCA_949317995.1	1481470071	170.4	5523906	ok	
+2934182	Phyllidia flava	Heterobranchia	GCA_964266695.1	1900507057	182.2	2379035	ok	
+2962468	Monoplex corrugatus	Caenogastropoda	GCA_030674185.1	3075538138	198.1	2646000	ok	
+2991678	Lepidozona retiporosa	Polyplacophora	GCA_032360285.1	502844018	54.6	2234	watch_fragmented_but_complete	
+2996714	Pictodentalium vernedei	Scaphopoda	GCA_031216915.1	6018017311	181.0	1809125	ok	
+3003519	Proteocephalus fallax	platyhelminthes	GCA_028672205.1	131552618	58.0	333357	ok	
+3019061	Siphonodentalium dalli	Scaphopoda	GCA_032622095.1	2226750531	67.0	2241040	ok	
+3027864	Catillopecten margaritatus	Bivalvia	GCA_055258895.1	1112158965	82.8	1233391	ok	
+3034287	Deroceras lasithionense	Heterobranchia	GCA_964271515.3	1318321416	126.4	2037218	ok	
+3035712	Corambe burchi	Heterobranchia	GCA_031762895.1	805281813	77.2	2307	watch_fragmented_but_complete	
+3038095	Thermocollonia jamsteci	Vetigastropoda	GCA_049901935.1	2538867783	195.9	1060108	ok	
+3043778	Hyalogyrina grasslei	Heterobranchia	GCA_034780735.1	461935457	44.3	331	watch_fragmented_but_complete	
+3051952	Gigantidas childressi	Bivalvia	GCA_965235005.1	1684441835	125.4	346121	ok	
+3054875	Acanthochitona discrepans	Polyplacophora	GCA_048544545.1	1172942069	127.4	3476547	ok	
+3061061	Megaustenia siamemsis	Heterobranchia	GCA_032433765.1	2591266008	248.4	1785144	ok	
+3071549	Anisus vorticulus	Heterobranchia	GCA_964264155.1	1043023846	100.0	2352869	ok	
+3073908	Indrella ampulla	Heterobranchia	GCA_052818635.1	1982309182	190.1	576600	ok	
+3074273	Donax semistriatus	Bivalvia	GCA_965239255.1	1383473781	103.0	17138325	ok	
+3076427	Meledella werneri	Heterobranchia	GCA_977872495.1	2861714789	274.4	3893402	ok	
+3077178	Chaetoderma sp. LZ-2023a	Caudofoveata	GCA_034401795.1	2448388764		785488	UNASSESSED_small_clade	
+3082984	Hydatina amplustre	Heterobranchia	GCA_040966615.1	703981140	67.5	3239	watch_fragmented_but_complete	
+3091327	Thylacodes arenarius	Caenogastropoda	GCA_973495645.1	2944007323	189.6	1284536	ok	
+3105997	Mandarina tomiyamai	Heterobranchia	GCA_040496195.1	1355525506	130.0	616	watch_fragmented_but_complete	
+3115407	Melibe bucephala	Heterobranchia	GCA_039654525.1	834547682	80.0	2278	watch_fragmented_but_complete	
+3119528	Enteroxenos oestergreni	Caenogastropoda	GCA_976914345.1	1121129076	72.2	1532663	ok	
+3139943	Anomalocardia flexuosa	Bivalvia	GCA_047831285.1	1090751803	81.2	4555400	ok	
+3154051	Deshayesiella sirenkoi	Polyplacophora	GCA_045838535.1	1535551138	166.8	5045175	ok	
+3161550	Verpa penis	Bivalvia	GCA_048126915.1	506380282	37.7	5325940	ok	
+3163778	Abra segmentum	Bivalvia	GCA_965244925.1	1704601582	126.9	10647745	ok	
+3167535	Acharax haimaensis	Bivalvia	GCA_054136115.1	4272512286	318.0	10527898	ok	
+3186388	Enigmonia aenigmatica	Bivalvia	GCA_056601665.1	465968615	34.7	42118662	ok	
+3190879	Globivenus rigida	Bivalvia	GCA_982557745.1	1800665150	134.0	26367000	ok	
+3198454	Lima caribaea	Bivalvia	GCA_977909015.1	1636169571	121.8	17215279	ok	
+3198878	Liolophura sinensis	Polyplacophora	GCF_032854445.1	609495693	66.2	764463	ok	harvested_annotated
+3199284	Lotoria lotoria	Caenogastropoda	GCA_977112875.1	2996845438	193.0	1553312	ok	
+3211865	Poecilozonites bermudensis	Heterobranchia	GCA_053573765.1	1355784518	130.0	138507	ok	
+3237505	Sinosolenaia oleivora	Bivalvia	GCA_039955035.1	2052292795	152.8	18762744	ok	
+3244846	Crassostrea ariakensis	bivalvia	GCA_020458035.1	663145247	49.4	5932265	ok	
+3273461	Discradisca antillarum	Brachiopoda	GCA_057556925.1	298231666		22084241	UNASSESSED_small_clade	
+3401147	Veleropilina sp. TBG_4354	Monoplacophora	GCA_048537385.1	1567889638		57862	UNASSESSED_small_clade	
+3410903	Meretrix sp. MF1	Bivalvia	GCA_049244355.1	883279379	65.8	46874007	ok	
