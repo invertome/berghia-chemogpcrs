@@ -14,8 +14,13 @@ plus two nuisance variables carried per candidate (seq_len, identity_to_nearest)
 variable rather than biology: Spearman(novelty, identity_to_nearest) is the
 Dijkhof low-identity-generalization check (our orphan LSEs are low-identity to
 every reference, so a strong negative correlation means the top-novelty ranks are
-an IDENTITY ARTIFACT, not learned novelty — the same failure class as the ESM-C
-length confound, rho -0.53). A trustworthy scorer is ~uncorrelated with both.
+an IDENTITY ARTIFACT, not learned novelty). The two axes are read differently
+(see CONFOUND_ROLE / confound_report): length is a pure artifact to minimize,
+whereas identity is a redundancy/added-value axis — a MODERATE correlation is
+expected (divergent sequences genuinely are more novel), and the decisive test is
+whether novelty still discriminates WITHIN the low-identity tail rather than the
+global correlation alone. The pathological case remains the ESM-C length confound
+(rho -0.53), a pure artifact.
 """
 from __future__ import annotations
 
@@ -36,6 +41,19 @@ from build_embedding_channel import (  # noqa: E402
 DIAG_COLUMNS = ["candidate_id", "novelty", "nearest_family", "margin",
                 "seq_len", "identity_to_nearest"]
 CONFOUNDS = ("seq_len", "identity_to_nearest")
+
+# The two nuisance axes are NOT the same kind of thing:
+#   seq_len            — a pure ARTIFACT (length has no legitimate bearing on
+#                        biological novelty), so we want ~zero correlation.
+#   identity_to_nearest— NOT a pure nuisance: it is a free, alignment-based proxy
+#                        for the same divergence novelty is meant to capture, so a
+#                        MODERATE correlation is expected and healthy. Here the
+#                        check is REDUNDANCY / added-value: a near-perfect global
+#                        correlation means the PLM just re-derives identity (we get
+#                        it for free from mmseqs), and — decisively — novelty must
+#                        still discriminate WITHIN the low-identity tail, where
+#                        alignment is uninformative and the divergent orphans live.
+CONFOUND_ROLE = {"seq_len": "artifact", "identity_to_nearest": "redundancy"}
 
 
 def _tied_precision(emb: Dict[str, np.ndarray], labels: Dict[str, str]) -> np.ndarray:
@@ -90,19 +108,60 @@ def candidate_diagnostics(
     return pd.DataFrame(rows, columns=DIAG_COLUMNS)
 
 
-def confound_report(df: pd.DataFrame, confounds=CONFOUNDS) -> Dict[str, dict]:
-    """Spearman(novelty, confound) per nuisance variable. A trustworthy scorer is
-    ~uncorrelated; a strong |rho| means novelty is (partly) that confound."""
-    rep = {}
+def confound_report(df: pd.DataFrame, confounds=CONFOUNDS,
+                    low_identity_quantile: float = 0.33,
+                    artifact_rho: float = 0.4, redundant_rho: float = 0.85,
+                    generalization_rho: float = 0.4) -> Dict[str, dict]:
+    """Role-aware confound report (see CONFOUND_ROLE for why the axes differ).
+
+    Every entry carries `spearman`/`p`/`n` (global Spearman(novelty, confound)),
+    a `role`, and a `verdict`:
+
+    - artifact axes (length): `verdict` = "artifact-confound" when |rho| >
+      `artifact_rho`, else "clean". Here ~zero is the goal.
+    - redundancy axes (identity): a MODERATE global rho is expected. The entry
+      adds a `low_identity` sub-report — Spearman(novelty, identity) restricted to
+      the bottom `low_identity_quantile` of identity (a scale-free cut, since the
+      subset boundary is a quantile of whatever identity scale is supplied). The
+      verdict is:
+        "redundant-with-identity" if |global rho| > `redundant_rho` (the PLM just
+            re-derives the free alignment identity → no added value);
+        "low-identity-artifact"   if within the low-identity tail novelty still
+            tracks residual identity (|low rho| > `generalization_rho`) → an
+            identity proxy in the regime that matters (the Dijkhof failure);
+        "adds-value"              otherwise (novelty is orthogonal where it counts).
+    """
+    rep: Dict[str, dict] = {}
     for c in confounds:
         if c not in df.columns:
             continue
+        role = CONFOUND_ROLE.get(c, "artifact")
         sub = df[["novelty", c]].dropna()
         if len(sub) < 3:
-            rep[c] = {"spearman": float("nan"), "p": float("nan"), "n": len(sub)}
+            rep[c] = {"spearman": float("nan"), "p": float("nan"), "n": len(sub),
+                      "role": role, "verdict": "insufficient-data"}
             continue
         rho, p = spearmanr(sub["novelty"], sub[c])
-        rep[c] = {"spearman": float(rho), "p": float(p), "n": int(len(sub))}
+        entry = {"spearman": float(rho), "p": float(p), "n": int(len(sub)), "role": role}
+        if role == "redundancy":
+            thr = float(sub[c].quantile(low_identity_quantile))
+            low = sub[sub[c] <= thr]
+            if len(low) >= 3 and low[c].nunique() > 1:
+                rho_low, p_low = spearmanr(low["novelty"], low[c])
+            else:
+                rho_low, p_low = float("nan"), float("nan")
+            entry["low_identity"] = {"spearman": float(rho_low), "p": float(p_low),
+                                     "n": int(len(low)), "threshold": thr,
+                                     "quantile": low_identity_quantile}
+            if abs(rho) > redundant_rho:
+                entry["verdict"] = "redundant-with-identity"
+            elif not np.isnan(rho_low) and abs(rho_low) > generalization_rho:
+                entry["verdict"] = "low-identity-artifact"
+            else:
+                entry["verdict"] = "adds-value"
+        else:
+            entry["verdict"] = "artifact-confound" if abs(rho) > artifact_rho else "clean"
+        rep[c] = entry
     return rep
 
 
@@ -165,8 +224,13 @@ def main(argv=None) -> None:
     rep = confound_report(df)
     print(f"[candidate_diagnostics] {a.model}: {len(df)} candidates -> {a.out}")
     for c, r in rep.items():
-        flag = "  <-- CONFOUND" if abs(r["spearman"]) > 0.4 else ""
-        print(f"  confound novelty~{c}: Spearman={r['spearman']:+.3f} (p={r['p']:.1e}, n={r['n']}){flag}")
+        line = (f"  [{r['role']}] novelty~{c}: Spearman={r['spearman']:+.3f} "
+                f"(p={r['p']:.1e}, n={r['n']}) -> {r['verdict']}")
+        li = r.get("low_identity")
+        if li:
+            line += (f"; low-identity(bottom {li['quantile']:.0%}) "
+                     f"Spearman={li['spearman']:+.3f} (n={li['n']})")
+        print(line)
 
 
 if __name__ == "__main__":

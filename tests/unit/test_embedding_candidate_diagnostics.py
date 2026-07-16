@@ -99,6 +99,93 @@ def test_confound_report_flags_a_clean_scorer_as_uncorrelated():
     assert abs(rep["seq_len"]["spearman"]) < 0.4
 
 
+def test_confound_report_role_labels_and_low_identity_block():
+    # length is a pure ARTIFACT axis (want ~0); identity is a REDUNDANCY axis
+    # (moderate correlation is expected/healthy — the check is added-value, and it
+    # carries a low-identity-subset sub-analysis).
+    rng = np.random.RandomState(0)
+    df = pd.DataFrame({
+        "candidate_id": [f"c{i}" for i in range(30)],
+        "novelty": rng.randn(30),
+        "identity_to_nearest": np.linspace(0, 90, 30),
+        "seq_len": rng.randint(300, 600, 30),
+    })
+    rep = confound_report(df)
+    assert rep["seq_len"]["role"] == "artifact"
+    assert rep["identity_to_nearest"]["role"] == "redundancy"
+    assert "low_identity" in rep["identity_to_nearest"]
+    assert "low_identity" not in rep["seq_len"]
+
+
+def test_length_confound_flagged_as_artifact():
+    n = 60
+    seq_len = np.linspace(200, 800, n)
+    df = pd.DataFrame({
+        "candidate_id": [f"c{i}" for i in range(n)],
+        "novelty": -seq_len + np.random.RandomState(3).normal(0, 5, n),  # tracks length
+        "identity_to_nearest": np.random.RandomState(4).uniform(0, 90, n),
+        "seq_len": seq_len,
+    })
+    assert confound_report(df)["seq_len"]["verdict"] == "artifact-confound"
+
+
+def test_identity_redundant_when_novelty_is_pure_identity_proxy():
+    n = 80
+    ident = np.linspace(0, 90, n)
+    df = pd.DataFrame({
+        "candidate_id": [f"c{i}" for i in range(n)],
+        "novelty": 90 - ident,                       # strictly monotone in identity
+        "identity_to_nearest": ident,
+        "seq_len": np.random.RandomState(5).randint(300, 600, n),
+    })
+    # near-perfect global correlation => the embedding just re-derives identity
+    assert confound_report(df)["identity_to_nearest"]["verdict"] == "redundant-with-identity"
+
+
+def test_identity_adds_value_when_decorrelated_in_low_regime():
+    # moderate global correlation (divergent IS more novel — expected) but within
+    # the low-identity tail novelty is INDEPENDENT of residual identity => the
+    # embedding adds orthogonal signal exactly where alignment can't.
+    n = 300
+    rng = np.random.default_rng(0)
+    ident = rng.uniform(0, 90, n)
+    q = np.quantile(ident, 0.33)
+    novelty = np.empty(n)
+    hi = ident > q
+    novelty[hi] = -0.5 * ident[hi] + rng.normal(0, 20, hi.sum())
+    novelty[~hi] = rng.normal(50, 20, (~hi).sum())
+    df = pd.DataFrame({
+        "candidate_id": [f"c{i}" for i in range(n)],
+        "novelty": novelty, "identity_to_nearest": ident,
+        "seq_len": rng.integers(300, 600, n),
+    })
+    rep = confound_report(df)["identity_to_nearest"]
+    assert rep["verdict"] == "adds-value"
+    assert abs(rep["low_identity"]["spearman"]) < 0.4
+
+
+def test_identity_low_regime_artifact_when_novelty_tracks_identity_among_orphans():
+    # global correlation is only moderate (not flagged redundant), but WITHIN the
+    # low-identity tail novelty still strongly tracks residual identity => it is an
+    # identity proxy in the regime that matters (the Dijkhof failure).
+    n = 300
+    rng = np.random.default_rng(1)
+    ident = rng.uniform(0, 90, n)
+    q = np.quantile(ident, 0.33)
+    novelty = np.empty(n)
+    lo = ident <= q
+    novelty[lo] = 90 - ident[lo] + rng.normal(0, 1, lo.sum())
+    novelty[~lo] = rng.normal(45, 20, (~lo).sum())
+    df = pd.DataFrame({
+        "candidate_id": [f"c{i}" for i in range(n)],
+        "novelty": novelty, "identity_to_nearest": ident,
+        "seq_len": rng.integers(300, 600, n),
+    })
+    rep = confound_report(df)["identity_to_nearest"]
+    assert rep["verdict"] == "low-identity-artifact"
+    assert abs(rep["low_identity"]["spearman"]) > 0.4
+
+
 def test_diagnostics_schema():
     ref, labels = _reference()
     cand = {"x": np.eye(8)[0] * 6}
