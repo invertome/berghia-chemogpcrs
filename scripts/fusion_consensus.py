@@ -210,36 +210,92 @@ def _max_abs_confound(
     )
 
 
-def select_consensus(
-    combiners: Mapping[str, Mapping[str, float]],
-    combiner_famacc: Mapping[str, float],
+def _paired_confound_diff_ci(
+    combiner_nov: Mapping[str, float],
+    best_nov: Mapping[str, float],
     confounds: Mapping[str, Mapping[str, float]],
-    best_single: Mapping[str, float],
+    n: int,
+    seed: int,
+    alpha: float,
+):
+    """CI of (combiner − best) max|confound ρ| over a paired candidate bootstrap.
+
+    Each resample recomputes max_c|Spearman(novelty, confound_c)| for both the
+    combiner and the best single model on the SAME resampled candidates, so the
+    difference respects the pairing. Positive => combiner more confounded.
+    """
+    ids = [
+        i for i in combiner_nov
+        if i in best_nov and all(i in c for c in confounds.values())
+    ]
+    A = np.array([combiner_nov[i] for i in ids])
+    B = np.array([best_nov[i] for i in ids])
+    C = {name: np.array([vals[i] for i in ids]) for name, vals in confounds.items()}
+    rng = np.random.default_rng(seed)
+    idx = np.arange(len(ids))
+    diffs = []
+    for _ in range(n):
+        s = rng.choice(idx, len(idx), replace=True)
+        a = max(abs(spearmanr(A[s], C[name][s])[0]) for name in C)
+        b = max(abs(spearmanr(B[s], C[name][s])[0]) for name in C)
+        diffs.append(a - b)
+    lo, hi = np.quantile(diffs, [alpha / 2, 1 - alpha / 2])
+    return float(lo), float(hi)
+
+
+def select_consensus(
+    combiner_novelty: Mapping[str, Mapping[str, float]],
+    combiner_ref_correct: Mapping[str, Mapping[str, int]],
+    confounds: Mapping[str, Mapping[str, float]],
+    best_single_novelty: Mapping[str, float],
+    best_single_ref_correct: Mapping[str, int],
     n_boot: int = 2000,
     seed: int = 0,
+    alpha: float = 0.05,
 ) -> Dict[str, object]:
-    """Accept a combiner iff BOTH criteria beat the best single model:
+    """Accept a combiner unless it is SIGNIFICANTLY worse than the best single
+    model on either axis, judged by a paired bootstrap CI on the difference
+    (so we don't chase noise-level ρ/famAcc deltas at large n):
 
-      (a) robustness:  max|confound ρ| <= best_single["confound_rho"]
-      (b) known-class: reference vote-famAcc >= best_single["famacc"]
+      (a) known-class: reject if the CI of (combiner − best) reference
+          vote-famAcc is entirely below 0 (robustly worse) → reason ``"famacc"``.
+      (b) robustness:  reject if the CI of (combiner − best) max|confound ρ| is
+          entirely above 0 (robustly more confounded) → reason ``"confound"``.
 
-    famAcc is checked first, so a noise combiner that decorrelates the confound
-    (passes a) but destroys the supervised signal is rejected with reason
-    ``"famacc"``. Among accepted combiners, the one with the best famAcc is
-    selected; if none pass, the finding is "no fusion improves on the single
-    best model" (``selected`` is None).
+    famAcc is the supervised anchor and is checked first, so a noise combiner
+    that decorrelates the confound but destroys family separability is rejected
+    with reason ``"famacc"``. ``combiner_ref_correct`` / ``best_single_ref_correct``
+    are per-reference 0/1 vote-correctness vectors (from the LOO family vote — the
+    real vectors arrive with cw3.16.2; synthetic ones exercise it now). Among
+    accepted combiners the highest point-famAcc is selected; if none pass, the
+    finding is "no fusion improves on the single best model" (``selected`` None).
+    Each verdict carries its point metrics and both CIs for auditability.
     """
+    ref_ids = sorted(best_single_ref_correct)
     accepted: Dict[str, dict] = {}
     rejected: Dict[str, dict] = {}
-    for name, nov in combiners.items():
+    for name, nov in combiner_novelty.items():
         conf = _max_abs_confound(nov, confounds)
-        fam = combiner_famacc[name]
-        if fam < best_single["famacc"]:
-            rejected[name] = {"reason": "famacc", "confound": conf, "famacc": fam}
-        elif conf > best_single["confound_rho"]:
-            rejected[name] = {"reason": "confound", "confound": conf, "famacc": fam}
+        common = [r for r in ref_ids if r in combiner_ref_correct[name]]
+        comb_corr = np.array([combiner_ref_correct[name][r] for r in common])
+        base_corr = np.array([best_single_ref_correct[r] for r in common])
+        fam = float(np.mean(comb_corr)) if len(comb_corr) else float("nan")
+        fam_lo, fam_hi = bootstrap_ci_diff(
+            comb_corr, base_corr, np.mean, n=n_boot, seed=seed, alpha=alpha
+        )
+        conf_lo, conf_hi = _paired_confound_diff_ci(
+            nov, best_single_novelty, confounds, n_boot, seed, alpha
+        )
+        info = {
+            "confound": conf, "famacc": fam,
+            "famacc_ci": (fam_lo, fam_hi), "confound_ci": (conf_lo, conf_hi),
+        }
+        if fam_hi < 0:                      # robustly worse famAcc
+            rejected[name] = {"reason": "famacc", **info}
+        elif conf_lo > 0:                   # robustly more confounded
+            rejected[name] = {"reason": "confound", **info}
         else:
-            accepted[name] = {"confound": conf, "famacc": fam}
+            accepted[name] = info
     selected = (
         max(accepted, key=lambda k: accepted[k]["famacc"]) if accepted else None
     )
@@ -328,11 +384,16 @@ def _self_test() -> None:
         "rra": {c: -float(np.log10(max(rra[c], 1e-300))) for c in rra},
         "rank_average": ranks,
     }
+    refs = [f"r{i}" for i in range(50)]
     sel = select_consensus(
-        combiners=combiners,
-        combiner_famacc={"rra": 0.85, "rank_average": 0.80},
+        combiner_novelty=combiners,
+        combiner_ref_correct={
+            "rra": {r: int(i < 43) for i, r in enumerate(refs)},
+            "rank_average": {r: int(i < 41) for i, r in enumerate(refs)},
+        },
         confounds=confounds,
-        best_single={"confound_rho": 0.5, "famacc": 0.80},
+        best_single_novelty=per_model_novelty["m1"],
+        best_single_ref_correct={r: int(i < 40) for i, r in enumerate(refs)},
         n_boot=200,
         seed=0,
     )

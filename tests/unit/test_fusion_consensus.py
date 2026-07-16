@@ -118,31 +118,42 @@ def test_bootstrap_ci_diff_brackets_the_point_difference():
     assert lo < 1.0 < hi
 
 
-def test_select_rejects_noise_combiner_and_accepts_signal():
+def test_select_ci_rejects_significantly_worse_and_accepts_noninferior():
+    # CI-based dual criterion (cw3.16.1): reject a combiner only if it is
+    # SIGNIFICANTLY worse than the best single model — famAcc CI entirely below 0,
+    # or confound CI entirely above 0. "Don't chase noise": non-inferior combiners
+    # are accepted; the noise combiner is rejected because its famAcc is robustly
+    # worse, not because its point estimate merely differs.
     rng = np.random.default_rng(3)
-    ident = {f"c{i}": float(i) for i in range(80)}
-    length = {f"c{i}": float(rng.normal()) for i in range(80)}
-    # best single model: identity confound rho ~0.70, famAcc 0.80. (DEVIATION from
-    # the plan's 0.50: the plan's own signal_nov below has max|confound|=0.659, so
-    # with best confound 0.50 the spec-faithful select_consensus would correctly
-    # REJECT the signal combiner for "confound" and selected!="rra". Setting the
-    # best single's confound to 0.70 makes the signal combiner genuinely BEAT it
-    # on BOTH axes (0.659<0.70 confound, 0.82>0.80 famAcc) — exactly the Task-4
-    # acceptance criterion "accepts a combiner that beats the best single model on
-    # both axes". The selection logic itself is unchanged.)
-    single = {"protrek": {"confound_rho": 0.70, "famacc": 0.80}}
-    # signal combiner: lower confound AND higher famAcc -> accept
-    signal_nov = {f"c{i}": ident[f"c{i}"] * 0.2 + rng.normal(0, 5) for i in range(80)}
-    # noise combiner: near-zero confound but destroyed famAcc -> reject
-    noise_nov = {f"c{i}": rng.normal() for i in range(80)}
+    cids = [f"c{i}" for i in range(120)]
+    ident = {c: float(i) for i, c in enumerate(cids)}
+    length = {c: float(rng.normal()) for c in cids}
+    confounds = {"identity": ident, "length": length}
+    refs = [f"r{i}" for i in range(100)]
+
+    # best single: moderately identity-confounded novelty, famAcc 0.80
+    best_nov = {c: ident[c] * 0.3 + rng.normal(0, 5) for c in cids}
+    best_correct = {r: int(i < 80) for i, r in enumerate(refs)}
+    # signal combiner: LESS confounded (weaker identity coupling) + higher famAcc
+    signal_nov = {c: ident[c] * 0.05 + rng.normal(0, 5) for c in cids}
+    signal_correct = {r: int(i < 88) for i, r in enumerate(refs)}
+    # noise combiner: near-zero confound but robustly worse famAcc (0.55) -> reject
+    noise_nov = {c: rng.normal() for c in cids}
+    noise_correct = {r: int(i < 55) for i, r in enumerate(refs)}
+
     result = select_consensus(
-        combiners={"rra": signal_nov, "noise": noise_nov},
-        combiner_famacc={"rra": 0.82, "noise": 0.55},
-        confounds={"identity": ident, "length": length},
-        best_single=single["protrek"], n_boot=500, seed=3,
+        combiner_novelty={"rra": signal_nov, "noise": noise_nov},
+        combiner_ref_correct={"rra": signal_correct, "noise": noise_correct},
+        confounds=confounds,
+        best_single_novelty=best_nov,
+        best_single_ref_correct=best_correct,
+        n_boot=400, seed=3,
     )
     assert result["selected"] == "rra"
     assert result["rejected"]["noise"]["reason"] == "famacc"
+    # the accepted signal combiner carries its CIs for auditability
+    assert "famacc_ci" in result["accepted"]["rra"]
+    assert "confound_ci" in result["accepted"]["rra"]
 
 
 # ---------------------------------------------------------------------------
