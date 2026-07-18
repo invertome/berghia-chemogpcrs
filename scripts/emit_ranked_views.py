@@ -32,41 +32,33 @@ re-scores anything):
       Sorted by a DISCOVERY SCORE that rewards divergence/novelty rather than
       evidence completeness (see formula below).
 
-DISCOVERY SCORE (documented, exact):
+DISCOVERY SCORE (documented, exact — cw-lkhu Task 2):
 
-      discovery_score = ( Wt * tandem_cluster_score_norm
-                        +  Wp * positive_score_norm
-                        +  Wn * emb_novelty_minmax )
-                        / ( Wt + Wp + Wn )     # over signals actually present
+      discovery_score = -log10( rho )
 
-  where Wt = DISCOVERY_TANDEM_WEIGHT (default 2.0),
-        Wp = DISCOVERY_POSITIVE_WEIGHT (default 1.0), and
-        Wn = DISCOVERY_NOVELTY_WEIGHT (default 1.0).
+  where rho is the Robust Rank Aggregation (Kolde et al. 2012) score from
+  scripts/rank_aggregation.py's rra_score() over the discovery signals
+      {tandem, positive, novelty, lse_depth}
+  read from the ranked CSV as tandem_cluster_score_norm / positive_score_norm /
+  emb_novelty / lse_depth_score (each falling back to its raw <signal>_score
+  column). RRA ranks each candidate within every signal it has data for and
+  takes the most extreme order statistic across signals, so the score is
+  WEIGHT-FREE: no DISCOVERY_*_WEIGHT knob enters, and rank aggregation is
+  invariant to each signal's monotone normalization. rho is LOWER = better, so
+  -log10(rho) is HIGHER = more consistently novel; the view is sorted by
+  discovery_score descending.
 
-  tandem_cluster_score_norm and positive_score_norm are the pipeline's
-  already-[0,1]-normalized signal columns (rank_candidates.py:
-  tandem_cluster_score_norm is log1p(cluster size) rescaled to [0,1];
-  positive_score_norm is the min-max-normalized aBSREL positive-selection
-  score). emb_novelty is the consensus embedding-novelty channel (cw3.6,
-  unbounded -log10 RRA p) min-max-normalized to [0,1] here. The score is their
-  weight-normalized mean, so it stays in [0,1]. It deliberately excludes
-  phylogeny, synteny, expression and evidence_completeness — a divergent LSE
-  paralog is reference-poor and evidence-poor by nature, so those axes penalize
-  exactly the candidates this view exists to surface. Tandem is up-weighted over
-  positive selection and embedding novelty by default because an intra-genome
-  tandem array is the strongest lineage-specific-expansion signal (it mirrors
-  the composite's TANDEM_CLUSTER_WEIGHT 2.5 vs POSITIVE_WEIGHT 1.0 emphasis).
-  Embedding novelty enters the discovery SCORE only (never the confidence
-  composite, and not as a membership disjunct) — the locked cw3.6 decision.
-
-  If a *_norm signal column is absent, that term is dropped from BOTH the
-  numerator and the denominator (weight-normalized mean over whatever is
-  present); if neither is present, discovery_score is 0 for every row. Because
-  tandem_cluster_score_norm equals tandem_cluster_score by construction in
-  rank_candidates.py, the tandem signal falls back to tandem_cluster_score
-  when the _norm column is missing (identical value, different name).
-  positive_score has no [0,1] fallback (it is not normalized), so it is simply
-  dropped when positive_score_norm is absent.
+  The signal set deliberately excludes phylogeny, synteny, expression and
+  evidence_completeness — a divergent LSE paralog is reference-poor and
+  evidence-poor by nature, so those axes penalize exactly the candidates this
+  view exists to surface. lse_depth IS included (a positive divergence signal
+  the earlier hand-weighted mean omitted). A candidate votes in a signal only
+  where it has data: a missing signal column, or a blank value, simply drops
+  that candidate's vote for that signal (RRA over whatever remains); if NO
+  discovery signal column is present, discovery_score is 0 for every row.
+  Embedding novelty (emb_novelty) enters the discovery SCORE only — never the
+  confidence composite, and never as a membership disjunct (the locked cw3.6
+  decision).
 
 Robustness: every filter column and every signal column is OPTIONAL. A missing
 column is skipped (its filter is dropped / its signal is treated as absent)
@@ -77,9 +69,6 @@ header-only CSV (all columns preserved, zero data rows).
 Config (read from the environment in main(), with defaults):
     CONFIDENCE_MIN_COMPLETENESS   confidence evidence-completeness floor (0.7)
     DISCOVERY_TANDEM_HIGH         tandem_cluster_score_norm "high" cutoff (0.5)
-    DISCOVERY_TANDEM_WEIGHT       discovery-score tandem weight Wt (2.0)
-    DISCOVERY_POSITIVE_WEIGHT     discovery-score positive-selection weight Wp (1.0)
-    DISCOVERY_NOVELTY_WEIGHT      discovery-score embedding-novelty weight Wn (1.0)
 
 Usage:
     python3 emit_ranked_views.py \\
@@ -124,30 +113,6 @@ def _resolve_norm_signal(df: pd.DataFrame, primary: str,
               f"(identical [0,1] value by construction)")
         return _numeric(df[fallback]).fillna(0.0), True
     return pd.Series(0.0, index=df.index), False
-
-
-def _minmax_signal(df: pd.DataFrame, col: str):
-    """Return (Series, present) min-max-normalizing an UNBOUNDED signal to [0,1].
-
-    Unlike ``_resolve_norm_signal`` (which expects an already-[0,1] column), the
-    consensus embedding novelty ``emb_novelty`` is unbounded (``-log10`` RRA p),
-    so it is rescaled to [0,1] here. The range is taken over candidates that
-    actually HAVE the signal (non-null), so a no-emb-data candidate (blank) does
-    not define the floor/ceiling; blank rows map to 0 (no novelty evidence).
-    A missing column, or one that is entirely blank, returns present=False so the
-    caller drops the term from both numerator and denominator; a constant column
-    normalizes to 0 for every row (present, contributes nothing).
-    """
-    if col not in df.columns:
-        return pd.Series(0.0, index=df.index), False
-    v = _numeric(df[col])
-    valid = v.dropna()
-    if len(valid) == 0:                      # present but entirely blank -> no signal
-        return pd.Series(0.0, index=df.index), False
-    lo, hi = float(valid.min()), float(valid.max())
-    if hi > lo:
-        return ((v - lo) / (hi - lo)).fillna(0.0), True
-    return pd.Series(0.0, index=df.index), True
 
 
 def build_confidence_view(df: pd.DataFrame,
@@ -196,36 +161,26 @@ def build_confidence_view(df: pd.DataFrame,
 
 
 def build_discovery_view(df: pd.DataFrame,
-                         tandem_high: float = 0.5,
-                         tandem_weight: float = 2.0,
-                         positive_weight: float = 1.0,
-                         novelty_weight: float = 1.0) -> pd.DataFrame:
+                         tandem_high: float = 0.5) -> pd.DataFrame:
     """The divergent-LSE view: chemoreceptor candidates that trip at least one
     divergence flag (reference-poor OG / manual-review / high tandem signal),
-    sorted by a divergence-rewarding discovery score. See the module header for
-    the exact score formula. Every filter and signal column is optional.
+    sorted by a WEIGHT-FREE discovery score = -log10 of the Robust Rank
+    Aggregation rho over {tandem, positive, novelty, lse_depth}. See the module
+    header for the exact formula. Every filter and signal column is optional.
 
     The consensus embedding-novelty signal (``emb_novelty``, cw3.6) enters the
-    discovery SCORE as a min-max-normalized [0,1] term weighted by
-    ``novelty_weight``; it is deliberately NOT a membership disjunct and NOT a
-    term in the confidence composite (novelty is orthogonal to chemoreceptor-
-    likelihood — the locked cw3.6 routing decision)."""
-    # Resolve the normalized signals ONCE (shared by the tandem filter and the
-    # discovery score) so we warn at most once per missing column.
+    discovery SCORE only (as one of the RRA voters); it is deliberately NOT a
+    membership disjunct and NOT a term in the confidence composite (novelty is
+    orthogonal to chemoreceptor-likelihood — the locked cw3.6 routing
+    decision)."""
+    # Resolve the tandem signal ONCE for the membership filter below (the
+    # discovery SCORE reads its own signals independently via RRA).
     tandem, tandem_present = _resolve_norm_signal(
         df, "tandem_cluster_score_norm", "tandem_cluster_score")
     if not tandem_present:
         _warn("no tandem-cluster score column "
               "('tandem_cluster_score_norm'/'tandem_cluster_score'); "
-              "tandem filter + signal treated as absent")
-    positive, positive_present = _resolve_norm_signal(df, "positive_score_norm")
-    if not positive_present:
-        _warn("no 'positive_score_norm' column; "
-              "positive-selection signal dropped from discovery score")
-    novelty, novelty_present = _minmax_signal(df, "emb_novelty")
-    if not novelty_present:
-        _warn("no 'emb_novelty' column; consensus embedding-novelty signal "
-              "dropped from discovery score")
+              "tandem membership filter treated as absent")
 
     # Hard AND gate: only chemoreceptor candidates are eligible.
     if "classification" in df.columns:
@@ -256,21 +211,36 @@ def build_discovery_view(df: pd.DataFrame,
 
     out = df[chemo & disj].copy()
 
-    # discovery_score = weight-normalized mean of the signals actually present.
-    denom = (tandem_weight if tandem_present else 0.0) \
-        + (positive_weight if positive_present else 0.0) \
-        + (novelty_weight if novelty_present else 0.0)
-    numer = pd.Series(0.0, index=out.index)
-    if tandem_present:
-        numer = numer + float(tandem_weight) * tandem.loc[out.index]
-    if positive_present:
-        numer = numer + float(positive_weight) * positive.loc[out.index]
-    if novelty_present:
-        numer = numer + float(novelty_weight) * novelty.loc[out.index]
-    if denom > 0:
-        out["discovery_score"] = numer / denom
+    # cw-lkhu Task 2: order by a weight-free Robust Rank Aggregation (Kolde et
+    # al. 2012) over the discovery signals, replacing the hand-picked weighted
+    # mean. RRA ranks each candidate within every signal it has data for and
+    # scores the most extreme order statistic across signals; a candidate
+    # consistently top-ranked (or extreme on a signal with few competitors)
+    # rises. lse_depth is included (the weighted mean omitted it).
+    from rank_aggregation import rra_score
+    import numpy as _np
+    _signal_cols = {
+        "tandem": ("tandem_cluster_score_norm", "tandem_cluster_score"),
+        "positive": ("positive_score_norm", "positive_score"),
+        "novelty": ("emb_novelty", None),
+        "lse_depth": ("lse_depth_score_norm", "lse_depth_score"),
+    }
+    per_signal = {}
+    for name, (primary, fallback) in _signal_cols.items():
+        col = primary if primary in out.columns else (
+            fallback if fallback and fallback in out.columns else None)
+        if col is None:
+            continue
+        series = _numeric(out[col])
+        vals = {cid: float(v) for cid, v in zip(out["id"], series) if pd.notna(v)}
+        if vals:
+            per_signal[name] = vals
+    if per_signal:
+        rho = rra_score(per_signal)                       # lower = better
+        out["discovery_score"] = out["id"].map(
+            lambda i: float(-_np.log10(max(rho.get(i, 1.0), 1e-300))))
     else:
-        _warn("no discovery-score signal columns present; discovery_score = 0")
+        _warn("no discovery signal columns present; discovery_score = 0")
         out["discovery_score"] = 0.0
 
     out = out.sort_values("discovery_score", ascending=False, kind="mergesort")
@@ -290,9 +260,6 @@ def main(argv=None) -> int:
 
     min_completeness = float(os.getenv("CONFIDENCE_MIN_COMPLETENESS", "0.7"))
     tandem_high = float(os.getenv("DISCOVERY_TANDEM_HIGH", "0.5"))
-    tandem_weight = float(os.getenv("DISCOVERY_TANDEM_WEIGHT", "2.0"))
-    positive_weight = float(os.getenv("DISCOVERY_POSITIVE_WEIGHT", "1.0"))
-    novelty_weight = float(os.getenv("DISCOVERY_NOVELTY_WEIGHT", "1.0"))
 
     if not os.path.exists(args.ranked_csv):
         _warn(f"ranked CSV not found: {args.ranked_csv}")
@@ -301,10 +268,7 @@ def main(argv=None) -> int:
     df = pd.read_csv(args.ranked_csv, dtype=str, keep_default_na=False)
 
     conf = build_confidence_view(df, min_completeness=min_completeness)
-    disc = build_discovery_view(df, tandem_high=tandem_high,
-                                tandem_weight=tandem_weight,
-                                positive_weight=positive_weight,
-                                novelty_weight=novelty_weight)
+    disc = build_discovery_view(df, tandem_high=tandem_high)
 
     for out_path, view in ((args.confidence_out, conf),
                            (args.discovery_out, disc)):

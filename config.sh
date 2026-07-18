@@ -592,14 +592,18 @@ export LSE_DEPTH_WEIGHT=1       # Weight for lineage-specific expansion depth
 #   * CONFIDENCE view — the safe-bet HCR shortlist (confident chemoreceptor
 #     candidates with complete evidence, sorted by rank_score).
 #   * DISCOVERY view  — high-novelty divergent-LSE candidates a single
-#     completeness-rewarding composite would bury, sorted by a divergence-
-#     rewarding discovery score = weight-normalized mean of the [0,1] tandem,
-#     positive-selection, and consensus embedding-novelty signals (cw3.6).
+#     completeness-rewarding composite would bury, sorted by a weight-free
+#     discovery score = -log10 of the Robust Rank Aggregation over the tandem,
+#     positive-selection, embedding-novelty (cw3.6) and lse_depth signals.
 export CONFIDENCE_MIN_COMPLETENESS="${CONFIDENCE_MIN_COMPLETENESS:-0.7}"  # confidence-view evidence_completeness floor
 export DISCOVERY_TANDEM_HIGH="${DISCOVERY_TANDEM_HIGH:-0.5}"              # tandem_cluster_score_norm "high" cutoff for discovery membership (~cluster size >=4)
-export DISCOVERY_TANDEM_WEIGHT="${DISCOVERY_TANDEM_WEIGHT:-2.0}"          # discovery-score weight on the tandem-cluster signal
-export DISCOVERY_POSITIVE_WEIGHT="${DISCOVERY_POSITIVE_WEIGHT:-1.0}"      # discovery-score weight on the positive-selection signal
-export DISCOVERY_NOVELTY_WEIGHT="${DISCOVERY_NOVELTY_WEIGHT:-1.0}"        # discovery-score weight on the consensus embedding-novelty signal (cw3.6; DISCOVERY view + column only, never the confidence composite)
+# DEPRECATED (cw-lkhu Task 2): the discovery view is now ordered by a weight-free
+# Robust Rank Aggregation over {tandem, positive, novelty, lse_depth}, so these
+# hand-picked discovery-score weights no longer have any effect. Left commented
+# for provenance; emit_ranked_views.py no longer reads them.
+#   DISCOVERY_TANDEM_WEIGHT    (was 2.0)  discovery-score weight on the tandem signal
+#   DISCOVERY_POSITIVE_WEIGHT  (was 1.0)  discovery-score weight on positive selection
+#   DISCOVERY_NOVELTY_WEIGHT   (was 1.0)  discovery-score weight on embedding novelty
 
 # --- Reference Weighting (for phylogenetic distance) ---
 # These weights control how references affect candidate ranking in rank_candidates.py.

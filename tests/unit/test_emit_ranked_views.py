@@ -38,6 +38,8 @@ def _row(**kw):
         "og_dnds_reliability": "high",
         "tandem_cluster_score_norm": "0.0",
         "positive_score_norm": "0.0",
+        "emb_novelty": "0.0",
+        "lse_depth_score": "0.0",
     }
     base.update({k: str(v) for k, v in kw.items()})
     return base
@@ -173,117 +175,164 @@ def test_discovery_excludes_non_chemoreceptors():
 
 
 def test_discovery_sorted_by_discovery_score_desc():
+    # Monotone: high_disc dominates every signal, low_disc is worst -> the RRA
+    # rho is strictly ordered, so discovery_score sorts high > mid > low.
     df = _df(
         _row(id="low_disc", og_dnds_reliability="low",
-             tandem_cluster_score_norm="0.1", positive_score_norm="0.1"),
+             tandem_cluster_score_norm="0.1", positive_score_norm="0.1",
+             emb_novelty="0.1", lse_depth_score="0.1"),
         _row(id="high_disc", og_dnds_reliability="low",
-             tandem_cluster_score_norm="0.9", positive_score_norm="0.9"),
+             tandem_cluster_score_norm="0.9", positive_score_norm="0.9",
+             emb_novelty="0.9", lse_depth_score="0.9"),
         _row(id="mid_disc", og_dnds_reliability="low",
-             tandem_cluster_score_norm="0.5", positive_score_norm="0.5"),
+             tandem_cluster_score_norm="0.5", positive_score_norm="0.5",
+             emb_novelty="0.5", lse_depth_score="0.5"),
     )
     out = erv.build_discovery_view(df)
     assert list(out["id"]) == ["high_disc", "mid_disc", "low_disc"]
 
 
-def test_discovery_score_is_weighted_average_of_norm_signals():
-    df = _df(_row(id="c", og_dnds_reliability="low",
-                  tandem_cluster_score_norm="0.8", positive_score_norm="0.4"))
-    out = erv.build_discovery_view(df, tandem_weight=2.0, positive_weight=1.0)
-    # (2.0*0.8 + 1.0*0.4) / (2.0 + 1.0) = 2.0 / 3.0
-    assert float(out.iloc[0]["discovery_score"]) == pytest.approx(2.0 / 3.0)
-
-
 # --------------------------------------------------------------------------
-# DISCOVERY score — consensus embedding-novelty term (cw3.6)
+# DISCOVERY score — weight-free Robust Rank Aggregation (Task 2, cw-lkhu)
 # --------------------------------------------------------------------------
 
-def test_discovery_score_rewards_novelty_when_present():
-    # emb_novelty (unbounded -log10 RRA p) is min-max normalized to [0,1] over the
-    # input and added as a weighted discovery-score term. Two otherwise-identical
-    # divergent candidates: the one with higher emb_novelty must score higher.
+def test_discovery_score_is_rra_over_ranklists():
+    # The discovery view is ordered by a WEIGHT-FREE Robust Rank Aggregation over
+    # {tandem, positive, novelty, lse_depth}, with discovery_score = -log10(rho).
+    # Each candidate's score must equal -log10 of rank_aggregation.rra_score over
+    # exactly those four signals -- proving all four participate and no weight
+    # enters. rho is computed WITH lse_depth, so an impl that dropped lse_depth
+    # (as the old weighted mean did) could not reproduce these values.
+    import numpy as np
+    from rank_aggregation import rra_score
     df = _df(
-        _row(id="hi_nov", og_dnds_reliability="low",
-             tandem_cluster_score_norm="0.5", positive_score_norm="0.5",
-             emb_novelty="10.0"),
-        _row(id="lo_nov", og_dnds_reliability="low",
-             tandem_cluster_score_norm="0.5", positive_score_norm="0.5",
-             emb_novelty="1.0"),
+        _row(id="a", og_dnds_reliability="low", tandem_cluster_score_norm="0.9",
+             positive_score_norm="0.8", emb_novelty="0.7", lse_depth_score="0.9"),
+        _row(id="b", og_dnds_reliability="low", tandem_cluster_score_norm="0.5",
+             positive_score_norm="0.5", emb_novelty="0.5", lse_depth_score="0.5"),
+        _row(id="c", og_dnds_reliability="low", tandem_cluster_score_norm="0.1",
+             positive_score_norm="0.2", emb_novelty="0.3", lse_depth_score="0.1"),
     )
-    out = erv.build_discovery_view(df, tandem_weight=2.0, positive_weight=1.0,
-                                   novelty_weight=1.0)
-    assert list(out["id"]) == ["hi_nov", "lo_nov"]
-    s = dict(zip(out["id"], out["discovery_score"].astype(float)))
-    # min-max: hi_nov->1.0, lo_nov->0.0; denom = 2+1+1 = 4
-    assert s["hi_nov"] == pytest.approx((2 * .5 + 1 * .5 + 1 * 1.0) / 4)   # 0.625
-    assert s["lo_nov"] == pytest.approx((2 * .5 + 1 * .5 + 1 * 0.0) / 4)   # 0.375
+    out = erv.build_discovery_view(df)
+    per_signal = {
+        "tandem":    {"a": 0.9, "b": 0.5, "c": 0.1},
+        "positive":  {"a": 0.8, "b": 0.5, "c": 0.2},
+        "novelty":   {"a": 0.7, "b": 0.5, "c": 0.3},
+        "lse_depth": {"a": 0.9, "b": 0.5, "c": 0.1},
+    }
+    rho = rra_score(per_signal)
+    got = dict(zip(out["id"], out["discovery_score"].astype(float)))
+    for cid in ("a", "b", "c"):
+        assert got[cid] == pytest.approx(-np.log10(max(rho[cid], 1e-300)))
+    # ordering follows the RRA: lower rho == higher discovery_score, best first
+    assert list(out["id"]) == sorted(rho, key=lambda i: rho[i])
 
 
-def test_discovery_score_ignores_absent_novelty_column():
-    # No emb_novelty column -> novelty term dropped from BOTH numerator and
-    # denominator; the score is the pre-existing tandem/positive weighted mean.
-    df = _df(_row(id="c", og_dnds_reliability="low",
-                  tandem_cluster_score_norm="0.8", positive_score_norm="0.4"))
-    out = erv.build_discovery_view(df, tandem_weight=2.0, positive_weight=1.0,
-                                   novelty_weight=1.0)
-    assert float(out.iloc[0]["discovery_score"]) == pytest.approx(2.0 / 3.0)
-
-
-def test_discovery_novelty_normalized_over_candidates_with_data_only():
-    # A no-emb-data candidate (blank emb_novelty) must NOT define the min-max
-    # floor: normalization is over candidates WITH data. Real novelties {5, 9};
-    # the blank row contributes 0 and the min-data candidate maps to 0 (not a
-    # positive value inflated by the blank sitting at 0).
+def test_discovery_score_includes_novelty_signal():
+    # emb_novelty participates in the RRA. With novelty the only varying signal
+    # (the other signal columns dropped), the discovery order follows it. Input
+    # order is scrambled so a no-op impl would NOT reproduce the expected order.
     df = _df(
+        _row(id="lo_nov", og_dnds_reliability="low", emb_novelty="1.0"),
+        _row(id="hi_nov", og_dnds_reliability="low", emb_novelty="9.0"),
+        _row(id="mid_nov", og_dnds_reliability="low", emb_novelty="5.0"),
+    ).drop(columns=["tandem_cluster_score_norm", "positive_score_norm",
+                    "lse_depth_score"])
+    out = erv.build_discovery_view(df)
+    assert list(out["id"]) == ["hi_nov", "mid_nov", "lo_nov"]
+
+
+def test_discovery_score_includes_lse_depth_signal():
+    # lse_depth participates in the RRA -- it was EXCLUDED from the old weighted
+    # mean (the gap Task 2 closes). With lse_depth the only varying signal, the
+    # discovery order follows it. Scrambled input order proves it is real sorting.
+    df = _df(
+        _row(id="shallow", og_dnds_reliability="low", lse_depth_score="0.1"),
+        _row(id="deep", og_dnds_reliability="low", lse_depth_score="0.9"),
+        _row(id="mid", og_dnds_reliability="low", lse_depth_score="0.5"),
+    ).drop(columns=["tandem_cluster_score_norm", "positive_score_norm",
+                    "emb_novelty"])
+    out = erv.build_discovery_view(df)
+    assert list(out["id"]) == ["deep", "mid", "shallow"]
+
+
+def test_discovery_score_handles_absent_novelty_column():
+    # No emb_novelty column -> RRA runs over the remaining signals (tandem,
+    # positive, lse_depth); graceful, ordered, finite scores.
+    df = _df(
+        _row(id="hi", og_dnds_reliability="low", tandem_cluster_score_norm="0.9",
+             positive_score_norm="0.9", lse_depth_score="0.9"),
+        _row(id="lo", og_dnds_reliability="low", tandem_cluster_score_norm="0.1",
+             positive_score_norm="0.1", lse_depth_score="0.1"),
+    ).drop(columns=["emb_novelty"])
+    out = erv.build_discovery_view(df)
+    assert list(out["id"]) == ["hi", "lo"]
+    assert out["discovery_score"].astype(float).notna().all()
+
+
+def test_discovery_score_all_blank_novelty_column():
+    # Dormant embedding channel: emb_novelty present but entirely blank. No id
+    # votes in novelty, so RRA runs over the remaining signals -- no crash, no
+    # dilution of the order.
+    df = _df(
+        _row(id="hi", og_dnds_reliability="low", tandem_cluster_score_norm="0.9",
+             positive_score_norm="0.9", lse_depth_score="0.9", emb_novelty=""),
+        _row(id="lo", og_dnds_reliability="low", tandem_cluster_score_norm="0.1",
+             positive_score_norm="0.1", lse_depth_score="0.1", emb_novelty=""),
+    )
+    out = erv.build_discovery_view(df)
+    assert list(out["id"]) == ["hi", "lo"]
+
+
+def test_discovery_blank_novelty_row_does_not_crash():
+    # A blank emb_novelty on ONE candidate (mixed with data rows) simply drops
+    # that id from the novelty vote; both rows are retained and ranked.
+    df = _df(
+        _row(id="hasnov", og_dnds_reliability="low",
+             tandem_cluster_score_norm="0.5", positive_score_norm="0.5",
+             lse_depth_score="0.5", emb_novelty="9.0"),
         _row(id="blank", og_dnds_reliability="low",
-             tandem_cluster_score_norm="0.0", positive_score_norm="0.0",
-             emb_novelty=""),
-        _row(id="lo", og_dnds_reliability="low",
-             tandem_cluster_score_norm="0.0", positive_score_norm="0.0",
-             emb_novelty="5.0"),
-        _row(id="hi", og_dnds_reliability="low",
-             tandem_cluster_score_norm="0.0", positive_score_norm="0.0",
-             emb_novelty="9.0"),
+             tandem_cluster_score_norm="0.5", positive_score_norm="0.5",
+             lse_depth_score="0.5", emb_novelty=""),
     )
-    out = erv.build_discovery_view(df, tandem_weight=0.0, positive_weight=0.0,
-                                   novelty_weight=1.0)
-    s = dict(zip(out["id"], out["discovery_score"].astype(float)))
-    assert s["hi"] == pytest.approx(1.0)     # max of the with-data range
-    assert s["lo"] == pytest.approx(0.0)     # min of the with-data range
-    assert s["blank"] == pytest.approx(0.0)  # no data -> 0, doesn't set the floor
+    out = erv.build_discovery_view(df)
+    assert set(out["id"]) == {"hasnov", "blank"}
 
 
-def test_discovery_score_ignores_all_blank_novelty_column():
-    # Dormant embedding channel: emb_novelty column present but entirely blank.
-    # It must be treated as ABSENT (dropped from BOTH numerator and denominator),
-    # so the score equals the tandem/positive-only weighted mean — an empty
-    # column must not dilute the other signals.
-    df = _df(_row(id="c", og_dnds_reliability="low",
-                  tandem_cluster_score_norm="0.8", positive_score_norm="0.4",
-                  emb_novelty=""))
-    out = erv.build_discovery_view(df, tandem_weight=2.0, positive_weight=1.0,
-                                   novelty_weight=1.0)
-    assert float(out.iloc[0]["discovery_score"]) == pytest.approx(2.0 / 3.0)
+def test_build_discovery_view_has_no_weight_params():
+    # The hand-picked discovery weights are removed from the signature; only the
+    # tandem membership cutoff remains.
+    import inspect
+    params = inspect.signature(erv.build_discovery_view).parameters
+    assert "tandem_weight" not in params
+    assert "positive_weight" not in params
+    assert "novelty_weight" not in params
+    assert "tandem_high" in params
 
 
-def test_main_reads_novelty_weight_from_env(tmp_path: Path, monkeypatch):
+def test_discovery_order_ignores_weight_env(tmp_path: Path, monkeypatch):
+    # The DISCOVERY_*_WEIGHT env vars no longer feed the discovery order emitted
+    # by main(): cranking DISCOVERY_TANDEM_WEIGHT (which under the old weighted
+    # mean would surface the tandem-strong candidate 'a') must NOT reorder the
+    # weight-free RRA output.
     ranked = tmp_path / "ranked.csv"
-    # lo_nov listed FIRST: with equal tandem/positive, only the novelty term can
-    # reorder it below hi_nov, so this asserts the env weight actually took effect.
     _df(
-        _row(id="lo_nov", og_dnds_reliability="low",
-             tandem_cluster_score_norm="0.5", positive_score_norm="0.5",
-             emb_novelty="1.0"),
-        _row(id="hi_nov", og_dnds_reliability="low",
-             tandem_cluster_score_norm="0.5", positive_score_norm="0.5",
-             emb_novelty="10.0"),
+        _row(id="a", og_dnds_reliability="low", tandem_cluster_score_norm="0.9",
+             positive_score_norm="0.1", emb_novelty="0.1", lse_depth_score="0.1"),
+        _row(id="b", og_dnds_reliability="low", tandem_cluster_score_norm="0.1",
+             positive_score_norm="0.9", emb_novelty="0.9", lse_depth_score="0.9"),
     ).to_csv(ranked, index=False)
-    conf_out = tmp_path / "c.csv"
-    disc_out = tmp_path / "d.csv"
-    monkeypatch.setenv("DISCOVERY_NOVELTY_WEIGHT", "1.0")
-    erv.main(["--ranked-csv", str(ranked),
-              "--confidence-out", str(conf_out), "--discovery-out", str(disc_out)])
-    disc = pd.read_csv(disc_out, keep_default_na=False, dtype=str)
-    assert list(disc["id"]) == ["hi_nov", "lo_nov"]   # novelty broke the tie
+
+    def run():
+        c = tmp_path / "c.csv"
+        d = tmp_path / "d.csv"
+        erv.main(["--ranked-csv", str(ranked), "--confidence-out", str(c),
+                  "--discovery-out", str(d)])
+        return list(pd.read_csv(d, keep_default_na=False, dtype=str)["id"])
+
+    base = run()
+    monkeypatch.setenv("DISCOVERY_TANDEM_WEIGHT", "99")
+    assert run() == base
 
 
 # --------------------------------------------------------------------------
@@ -304,16 +353,18 @@ def test_missing_classification_column_does_not_crash():
     assert list(disc["id"]) == ["c"]
 
 
-def test_missing_positive_norm_column_discovery_uses_tandem_only():
-    # positive_score_norm absent -> that signal is dropped from the discovery
-    # score; the denominator collapses to the tandem weight alone (no crash).
+def test_missing_positive_norm_column_discovery_no_crash():
+    # positive_score_norm / emb_novelty / lse_depth all absent -> RRA runs over
+    # the single present signal (tandem); no crash, the row is retained with a
+    # finite discovery_score.
     df = pd.DataFrame([{
         "id": "c", "classification": "chemoreceptor-candidate",
         "og_dnds_reliability": "low", "needs_manual_review": "",
         "tandem_cluster_score_norm": "0.6",
     }])
-    out = erv.build_discovery_view(df, tandem_weight=2.0, positive_weight=1.0)
-    assert float(out.iloc[0]["discovery_score"]) == pytest.approx(0.6)
+    out = erv.build_discovery_view(df)
+    assert list(out["id"]) == ["c"]
+    assert pd.notna(float(out.iloc[0]["discovery_score"]))
 
 
 def test_missing_evidence_completeness_column_skips_that_filter():
