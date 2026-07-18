@@ -1454,27 +1454,20 @@ def calculate_rank_score(df, weights):
     max_possible_weight = sum(weights.values())
 
     def calc_row(row):
-        # Bead -8st: per-OG dN/dS reliability multiplier in [0, 1].
-        # Falls back to 1.0 if the column wasn't populated (e.g. legacy
-        # CSVs run through downstream consumers) so we don't silently
-        # zero out the dN/dS axis on inputs that predate the multiplier.
-        dnds_rw = row.get('dnds_reliability_weight', 1.0)
-        try:
-            dnds_rw = float(dnds_rw)
-        except (TypeError, ValueError):
-            dnds_rw = 1.0
-
-        # Base scores always available
+        # Base scores always available. dN/dS reliability is now shrunk into
+        # positive_score_norm/purifying_score_norm upstream (dnds_reliability +
+        # the pre-write shrink block), so it must NOT be re-applied here or it
+        # would double-count the reliability weight.
         score = (
             row['phylo_score_norm'] * weights.get('phylo', 0) +
-            row['purifying_score_norm'] * weights.get('purifying', 0) * dnds_rw +
-            row['positive_score_norm'] * weights.get('positive', 0) * dnds_rw +
+            row['purifying_score_norm'] * weights.get('purifying', 0) +
+            row['positive_score_norm'] * weights.get('positive', 0) +
             row['lse_depth_score_norm'] * weights.get('lse_depth', 0)
         )
         total_weight = (
             weights.get('phylo', 0) +
-            weights.get('purifying', 0) * dnds_rw +
-            weights.get('positive', 0) * dnds_rw +
+            weights.get('purifying', 0) +
+            weights.get('positive', 0) +
             weights.get('lse_depth', 0)
         )
 
@@ -2155,9 +2148,26 @@ if RANK_METHOD == 'rankagg':
 df_sorted = df_sorted.reset_index(drop=True)
 df_sorted['final_rank'] = range(1, len(df_sorted) + 1)
 
+# Task 1: reliability-shrink the selection signals ONCE, on the df BOTH ranking
+# paths read (weighted composite + rankagg ranklist), so an underpowered dN/dS
+# contributes a neutral value, never a penalizing low score.
+from dnds_reliability import reliability_shrink
+if 'dnds_reliability_weight' in df_sorted.columns:
+    _rel = dict(zip(df_sorted['id'], df_sorted['dnds_reliability_weight']))
+    for _sig in ('positive_score_norm', 'purifying_score_norm'):
+        if _sig in df_sorted.columns:
+            _vals = dict(zip(df_sorted['id'],
+                             pd.to_numeric(df_sorted[_sig], errors='coerce').fillna(0.0)))
+            df_sorted[_sig] = df_sorted['id'].map(reliability_shrink(_vals, _rel))
+from rank_aggregation import build_ranklists_from_df as _brl
+_rls = _brl(df_sorted)
+df_sorted['n_signals_present'] = df_sorted['id'].map(
+    lambda i: sum(1 for s in _rls.values() if i in s))
+
 # Select columns for output (updated with new score columns)
 output_cols = [
-    'id', 'final_rank', 'orthogroup', 'rank_score', 'confidence_tier', 'evidence_completeness',
+    'id', 'final_rank', 'dnds_reliability_weight', 'n_signals_present',
+    'orthogroup', 'rank_score', 'confidence_tier', 'evidence_completeness',
     'phylo_score', 'purifying_score', 'positive_score', 'positive_score_norm', 'selection_significant',
     # Bead -urk: BUSTED/MEME diagnostic columns
     'busted_s_p', 'busted_s_significant', 'busted_mh_p', 'busted_mh_significant',

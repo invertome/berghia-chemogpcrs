@@ -1,15 +1,17 @@
-"""Tests for the per-OG dN/dS-axis reliability multiplier (bead -8st,
-2026-05-08).
+"""Tests for the per-OG dN/dS-axis reliability handling (bead -8st, 2026-05-08;
+application point moved 2026-07-18).
 
-`rank_candidates.calculate_rank_score` multiplies each row's dN/dS
-contribution (purifying + positive) by ``dnds_reliability_weight``
-(a value in [0, 1]) so candidates in under-supported OGs (chemoreceptor
-LSE expansions where most paralogs lack a reference CDS) don't get
-full dN/dS weight on what is statistically just noise. The multiplier
-applies to BOTH the score and the total_weight denominator — that is
-the fair-scoring pattern: when the dN/dS axis is unreliable, it falls
-out of both numerator and denominator and the other axes carry the
-candidate.
+The per-OG ``dnds_reliability_weight`` (in [0, 1]) down-weights the dN/dS signal
+for under-supported OGs (chemoreceptor LSE expansions where most paralogs lack a
+reference CDS), where an aBSREL/BUSTED estimate is underpowered. That reliability
+used to be applied as a MULTIPLIER *inside* ``calculate_rank_score``. It has now
+moved UPSTREAM: ``dnds_reliability.reliability_shrink`` shrinks the
+``positive_score_norm``/``purifying_score_norm`` columns toward the cohort NEUTRAL
+(median) once, on the dataframe BOTH ranking paths read (the weighted composite
+and the production rank-aggregation ranklist). So an underpowered candidate
+contributes a neutral value (never a penalizing low score), and
+``calculate_rank_score`` itself is now reliability-AGNOSTIC (re-applying the
+weight here would double-count it). These tests assert that moved behavior.
 """
 from __future__ import annotations
 
@@ -20,6 +22,8 @@ from typing import Any
 
 import pandas as pd
 import pytest
+
+from dnds_reliability import reliability_shrink   # conftest adds scripts/ to path
 
 
 def _import_rank_candidates_lib():
@@ -92,92 +96,70 @@ WEIGHTS = {
 }
 
 
-# ---- Multiplier semantics ------------------------------------------------
+# ---- Reliability now shrinks the norm columns UPSTREAM (not in the scorer) --
 
-def test_full_reliability_matches_no_multiplier(calc) -> None:
-    """At dnds_rw = 1.0 the score must equal the baseline (no down-weight)."""
+def test_full_reliability_matches_baseline(calc) -> None:
+    """At dnds_rw = 1.0 the score must equal the plain baseline (identity)."""
     df = pd.DataFrame([_row(positive=0.8, dnds_rw=1.0)])
     out = calc(df, WEIGHTS).iloc[0]
-    # Hand-compute baseline.
     # Active axes: phylo (0)*2 + purifying (0)*1 + positive (0.8)*1 + lse (0)*1
-    # total_weight = 2 + 1 + 1 + 1 = 5
-    # max_possible_weight = sum(WEIGHTS.values())
+    # total_weight = 2 + 1 + 1 + 1 = 5; max_possible_weight = sum(WEIGHTS).
     expected = (0.0 + 0.0 + 0.8 + 0.0) / 5.0 * sum(WEIGHTS.values())
     assert out == pytest.approx(expected)
 
 
-def test_zero_reliability_drops_dnds_axis(calc) -> None:
-    """At dnds_rw = 0.0 the dN/dS axis falls out of BOTH numerator and
-    denominator. With no other active axes returning a non-zero value,
-    the row's score is the average of remaining axes — i.e. zero here."""
-    df = pd.DataFrame([_row(positive=0.8, dnds_rw=0.0)])
-    out = calc(df, WEIGHTS).iloc[0]
-    # phylo=0, purifying=0, positive=0.8 (dropped), lse=0
-    # Effective numerator = 0; total_weight = 2 (phylo) + 0 + 0 + 1 (lse) = 3
-    # Score = 0/3 * sum_weights = 0
-    assert out == pytest.approx(0.0)
+def test_calculate_rank_score_is_reliability_agnostic(calc) -> None:
+    """Reliability has moved UPSTREAM into the norm columns, so
+    ``calculate_rank_score`` must no longer down-weight dN/dS by
+    ``dnds_reliability_weight``. Varying it on an otherwise identical row must
+    NOT change the score — re-applying it here would double-count the weight
+    (once in the already-shrunk norm value, once in the scorer)."""
+    s_full = calc(pd.DataFrame([_row(positive=0.8, dnds_rw=1.0)]), WEIGHTS).iloc[0]
+    s_half = calc(pd.DataFrame([_row(positive=0.8, dnds_rw=0.5)]), WEIGHTS).iloc[0]
+    s_zero = calc(pd.DataFrame([_row(positive=0.8, dnds_rw=0.0)]), WEIGHTS).iloc[0]
+    assert s_full == pytest.approx(s_half) == pytest.approx(s_zero)
 
 
-def test_zero_reliability_does_not_inflate_other_axes(calc) -> None:
-    """When dN/dS is zeroed and the OTHER axes have signal, the result
-    must NOT exceed what those axes would produce on their own with
-    dnds_rw = 1.0. Otherwise we'd be artificially boosting non-dN/dS
-    axes by removing their normalisation peer — exactly the bug the
-    fair-scoring pattern prevents."""
-    # Row with strong phylo signal but no dN/dS data in the underlying OG
-    df_zeroed = pd.DataFrame([_row(phylo=0.9, positive=0.0, dnds_rw=0.0)])
-    df_full = pd.DataFrame([_row(phylo=0.9, positive=0.0, dnds_rw=1.0)])
-    s_zeroed = calc(df_zeroed, WEIGHTS).iloc[0]
-    s_full = calc(df_full, WEIGHTS).iloc[0]
-    # With purifying=positive=0 in BOTH cases, the only difference is the
-    # denominator (weight 0 vs weight 2). When dnds_rw=0, total_weight is
-    # smaller so the same numerator divides into a slightly higher
-    # normalised value. That's correct fair-scoring (the row's available
-    # evidence is fewer axes), but should not change the absolute order.
-    assert s_zeroed >= s_full, (
-        "fair-scoring expected when dN/dS is dropped — the available "
-        "evidence the row contributes shouldn't shrink"
-    )
+def test_underpowered_positive_shrinks_to_neutral_not_bottom(calc) -> None:
+    """The reliability EFFECT is preserved, only its application point moved:
+    an underpowered (reliability approx 0) candidate whose RAW
+    positive_score_norm is LOW is shrunk to the cohort NEUTRAL (median) before
+    the scorer reads it, so it contributes a neutral value rather than a
+    penalizing low one. After the shrink it must score identically to a
+    candidate that genuinely sits at the median positive signal — not at the
+    bottom — while a fully-powered candidate is unchanged."""
+    raw = {"poor": 0.1, "mid": 0.5, "rich": 0.9}   # median 0.5
+    rel = {"poor": 0.0, "mid": 1.0, "rich": 1.0}
+    shrunk = reliability_shrink(raw, rel)
+    assert shrunk["poor"] == pytest.approx(0.5)          # lifted to neutral
+    assert shrunk["rich"] == pytest.approx(0.9)          # fully-powered unchanged
+    poor = calc(pd.DataFrame([_row(positive=shrunk["poor"])]), WEIGHTS).iloc[0]
+    genuine_mid = calc(pd.DataFrame([_row(positive=0.5)]), WEIGHTS).iloc[0]
+    bottom = calc(pd.DataFrame([_row(positive=0.1)]), WEIGHTS).iloc[0]
+    assert poor == pytest.approx(genuine_mid)
+    assert poor > bottom
 
 
-def test_partial_reliability_linear_ramp(calc) -> None:
-    """A dnds_rw of 0.5 should put the dN/dS contribution at half-credit
-    on both sides of the ratio. The score for a row with positive=0.8
-    and dnds_rw=0.5 should fall between dnds_rw=0 and dnds_rw=1."""
-    df_low = pd.DataFrame([_row(positive=0.8, dnds_rw=0.0)])
-    df_mid = pd.DataFrame([_row(positive=0.8, dnds_rw=0.5)])
-    df_hi = pd.DataFrame([_row(positive=0.8, dnds_rw=1.0)])
-    s_low = calc(df_low, WEIGHTS).iloc[0]
-    s_mid = calc(df_mid, WEIGHTS).iloc[0]
-    s_hi = calc(df_hi, WEIGHTS).iloc[0]
-    assert s_low < s_mid < s_hi
+def test_shrink_applies_to_purifying_axis_too(calc) -> None:
+    """Both norm columns are shrunk in the pre-write block — positive AND
+    purifying share the same aBSREL omega foundation. An underpowered purifying
+    signal is likewise lifted to neutral, so a purifying-only candidate scores
+    the same as one genuinely at the median rather than being penalized."""
+    raw = {"a": 0.9, "b": 0.1}   # median 0.5
+    shrunk = reliability_shrink(raw, {"a": 1.0, "b": 0.0})
+    assert shrunk["b"] == pytest.approx(0.5)   # underpowered purifying -> neutral
+    neutralized = calc(pd.DataFrame([_row(purifying=shrunk["b"])]), WEIGHTS).iloc[0]
+    genuine_mid = calc(pd.DataFrame([_row(purifying=0.5)]), WEIGHTS).iloc[0]
+    assert neutralized == pytest.approx(genuine_mid)
 
 
-def test_missing_dnds_reliability_column_defaults_to_full(calc) -> None:
-    """Rows without the column at all (legacy CSVs reaching downstream
-    consumers via re-rank passes) must default to dnds_rw = 1.0 so the
-    multiplier is a no-op and we don't silently zero pre-fix data."""
-    row = _row(positive=0.8, dnds_rw=1.0)
-    row.pop('dnds_reliability_weight')
-    df = pd.DataFrame([row])
-    expected = pd.DataFrame([_row(positive=0.8, dnds_rw=1.0)])
-    out = calc(df, WEIGHTS).iloc[0]
-    out_expected = calc(expected, WEIGHTS).iloc[0]
-    assert out == pytest.approx(out_expected)
-
-
-def test_purifying_axis_also_scaled(calc) -> None:
-    """Both purifying_score_norm and positive_score_norm must be scaled
-    by dnds_rw — they share the same statistical foundation (the per-OG
-    aBSREL omega estimate). A multiplier that hits only one axis would
-    introduce a bias when PURIFYING_WEIGHT is nonzero (rare in this
-    project but legitimate for conserved-function searches)."""
-    df_full = pd.DataFrame([_row(purifying=0.9, dnds_rw=1.0)])
-    df_zero = pd.DataFrame([_row(purifying=0.9, dnds_rw=0.0)])
-    # If only positive were scaled, df_zero would still have purifying
-    # contributing to the numerator, and the score would be > 0.
-    assert calc(df_zero, WEIGHTS).iloc[0] == pytest.approx(0.0)
-    assert calc(df_full, WEIGHTS).iloc[0] > 0.0
+def test_missing_reliability_defaults_to_full_identity() -> None:
+    """A candidate absent from the reliability map defaults to full reliability
+    (w = 1.0), so its norm value round-trips unchanged through the shrink — the
+    no-op that protects pre-fix / legacy data from being silently neutralized."""
+    out = reliability_shrink({"a": 0.9, "b": 0.1}, {"a": 1.0})   # b absent
+    assert out["b"] == pytest.approx(0.1)
+    assert out["a"] == pytest.approx(0.9)
 
 
 def test_tandem_cluster_axis_included_in_sensitivity(calc) -> None:
