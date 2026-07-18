@@ -1,5 +1,9 @@
 import numpy as np
+import pandas as pd
+import pytest
+
 from dnds_reliability import reliability_shrink   # conftest adds scripts/ to path
+from rank_aggregation import build_ranklists_from_df
 
 
 def test_full_reliability_is_identity():
@@ -24,3 +28,31 @@ def test_partial_reliability_interpolates():
 def test_missing_reliability_defaults_to_full():
     out = reliability_shrink({"a": 0.9, "b": 0.1}, {"a": 1.0})   # b absent
     assert out["b"] == 0.1
+
+
+def test_production_ranklist_reads_shrunk_signal():
+    """End-to-end proof that reliability now reaches the PRODUCTION rankagg path,
+    not just the weighted composite. rank_candidates.py shrinks the selection
+    norm columns on df BEFORE build_ranklists_from_df runs; replicate that exact
+    composition and confirm an underpowered candidate (reliability approx 0)
+    votes with the cohort NEUTRAL (median) value in the 'positive' ranklist,
+    instead of its low raw score."""
+    df = pd.DataFrame({
+        "id": ["poor", "mid", "rich"],
+        "positive_score_norm": [0.1, 0.5, 0.9],      # median 0.5
+        "purifying_score_norm": [0.0, 0.0, 0.0],
+        "phylo_score_norm": [0.5, 0.5, 0.5],
+        "lse_depth_score_norm": [0.0, 0.0, 0.0],
+        "dnds_reliability_weight": [0.0, 1.0, 1.0],   # 'poor' is underpowered
+    })
+    # Exactly what rank_candidates.py's upstream block does to the selection cols.
+    rel = dict(zip(df["id"], df["dnds_reliability_weight"]))
+    for sig in ("positive_score_norm", "purifying_score_norm"):
+        vals = dict(zip(df["id"], df[sig]))
+        df[sig] = df["id"].map(reliability_shrink(vals, rel))
+
+    ranklists = build_ranklists_from_df(df)
+    # The underpowered candidate now contributes the neutral value, not 0.1 ...
+    assert ranklists["positive"]["poor"] == pytest.approx(0.5)
+    # ... while the fully-powered candidate is unchanged.
+    assert ranklists["positive"]["rich"] == pytest.approx(0.9)

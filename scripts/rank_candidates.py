@@ -2012,6 +2012,24 @@ if 'tandem_cluster_score' not in df.columns:
     df['tandem_cluster_score'] = 0.0
 df['tandem_cluster_score_norm'] = df['tandem_cluster_score']
 
+# Task 1: reliability-shrink the dN/dS selection signals ONCE, here on df, so it
+# happens BEFORE every ranking path reads the norm columns -- the weighted
+# rank_score below (calculate_fair_rank_score passes dnds_reliability=1.0 so it
+# is not re-applied), the rankagg ranklist (build_ranklists_from_df on df_sorted,
+# which inherits these shrunk columns), and run_sensitivity_analysis(df, ...).
+# An underpowered candidate (dnds_reliability_weight approx 0) is shrunk to the
+# cohort NEUTRAL (median) selection value, so a low positive/purifying score is
+# never a penalizing signal on any path; a fully-powered candidate is unchanged.
+# Reliability is thus applied exactly once, with no double-count.
+from dnds_reliability import reliability_shrink
+if 'dnds_reliability_weight' in df.columns:
+    _rel = dict(zip(df['id'], df['dnds_reliability_weight']))
+    for _sig in ('positive_score_norm', 'purifying_score_norm'):
+        if _sig in df.columns:
+            _vals = dict(zip(df['id'],
+                             pd.to_numeric(df[_sig], errors='coerce').fillna(0.0)))
+            df[_sig] = df['id'].map(reliability_shrink(_vals, _rel))
+
 # --- Calculate Final Rank Score with Fair Missing Data Handling ---
 # For candidates missing synteny or expression data, we normalize by available weights
 # This prevents penalizing candidates from species without genome assemblies
@@ -2067,15 +2085,13 @@ def calculate_fair_rank_score(row):
         'og_confidence': OG_CONFIDENCE_WEIGHT,
         'tandem_cluster': TANDEM_CLUSTER_WEIGHT,
     }
-    # Bead -8st: down-weight the dN/dS axes (positive + purifying) by the per-OG
-    # reliability weight, applied to BOTH the score and the completeness
-    # denominator (clean removal). Missing/NaN -> 1.0 (no-op) for legacy CSVs;
-    # an explicit 0.0 (unresolved OG) correctly drops the dN/dS axes.
-    dnds_rw = row.get('dnds_reliability_weight', 1.0)
-    if pd.isna(dnds_rw):
-        dnds_rw = 1.0
+    # Bead -8st + Task 1: the per-OG dN/dS reliability weight is now applied ONCE
+    # upstream, by shrinking positive_score_norm/purifying_score_norm toward the
+    # cohort median (see the reliability_shrink block after normalization). It is
+    # therefore already baked into the scores dict here, so pass
+    # dnds_reliability=1.0 to avoid double-counting it.
     return _calculate_fair_rank_score_corrected(
-        scores, weights, completeness_floor=0.4, dnds_reliability=float(dnds_rw))
+        scores, weights, completeness_floor=0.4, dnds_reliability=1.0)
 
 
 df['rank_score'] = df.apply(calculate_fair_rank_score, axis=1, result_type='reduce')
@@ -2148,17 +2164,10 @@ if RANK_METHOD == 'rankagg':
 df_sorted = df_sorted.reset_index(drop=True)
 df_sorted['final_rank'] = range(1, len(df_sorted) + 1)
 
-# Task 1: reliability-shrink the selection signals ONCE, on the df BOTH ranking
-# paths read (weighted composite + rankagg ranklist), so an underpowered dN/dS
-# contributes a neutral value, never a penalizing low score.
-from dnds_reliability import reliability_shrink
-if 'dnds_reliability_weight' in df_sorted.columns:
-    _rel = dict(zip(df_sorted['id'], df_sorted['dnds_reliability_weight']))
-    for _sig in ('positive_score_norm', 'purifying_score_norm'):
-        if _sig in df_sorted.columns:
-            _vals = dict(zip(df_sorted['id'],
-                             pd.to_numeric(df_sorted[_sig], errors='coerce').fillna(0.0)))
-            df_sorted[_sig] = df_sorted['id'].map(reliability_shrink(_vals, _rel))
+# Diagnostic: how many per-signal ranklists actually vote for each candidate,
+# computed on the final df_sorted (post-shrink, post-rankagg -- so it also counts
+# any evidence channels merged in above). The reliability shrink changed signal
+# VALUES upstream, not signal PRESENCE, so this count is unaffected by it.
 from rank_aggregation import build_ranklists_from_df as _brl
 _rls = _brl(df_sorted)
 df_sorted['n_signals_present'] = df_sorted['id'].map(
