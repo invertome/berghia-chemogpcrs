@@ -347,6 +347,21 @@ if [ -f "${RANKED_CSV}" ]; then
         || log --level=WARN "Ranking-method comparison failed (non-fatal)"
 fi
 
+# --- Whole-pipeline permutation null (always emitted; non-fatal) ---
+# Empirical p-value that the ranking's top-k separation exceeds a
+# candidate<->signal-shuffled null (each signal's values permuted across
+# candidates independently, then re-aggregated with the same RRA). The honest
+# "is the ranking distinguishable from noise?" check for a label-free
+# prioritizer. Writes results/ranking/permutation_null.json.
+if [ -f "${RANKED_CSV}" ]; then
+    python3 "${SCRIPTS_DIR}/permutation_null.py" \
+        --ranked-csv "${RANKED_CSV}" \
+        --out "${RESULTS_DIR}/ranking/permutation_null.json" \
+        --k "${RANK_TOPK:-20}" --n-perm "${PERMUTATION_NULL_N:-1000}" \
+        2>> "${LOGS_DIR}/permutation_null.err" \
+        || log --level=WARN "Permutation null failed (non-fatal)"
+fi
+
 # Generate plots
 python3 "${SCRIPTS_DIR}/plot_ranking.py" "${RESULTS_DIR}/ranking/ranked_candidates_sorted.csv" "${RESULTS_DIR}/ranking/ranking_plot" || log "Warning: Ranking plot failed"
 

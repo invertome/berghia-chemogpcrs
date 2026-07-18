@@ -622,6 +622,11 @@ export ABSREL_FDR_THRESHOLD=0.05      # FDR threshold for significant selection
 export BOOTSTRAP_THRESHOLD=70         # Minimum bootstrap support for confident nodes
 export LSE_DEPTH_PERCENTILE=75        # Percentile for "deep" LSE classification
 
+# Whole-pipeline permutation null (scripts/permutation_null.py): empirical p-value
+# that the ranking's top-k separation beats a candidate<->signal-shuffled null.
+export RANK_TOPK="${RANK_TOPK:-20}"                    # top-k block scored for separation
+export PERMUTATION_NULL_N="${PERMUTATION_NULL_N:-1000}" # permutations for the empirical p
+
 # --- GPCRdb Fetch Parameters ---
 export GPCRDB_SEARCH_TERMS="chemoreceptor,invertebrate"
 export GPCRDB_SPECIES="Aplysia,Lottia"
