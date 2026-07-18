@@ -312,6 +312,18 @@ if [ -f "$HCR_AUG_INPUT" ]; then
         || log --level=WARN "Embedding column augmentation failed (kept original CSV)"
 fi
 
+# Task 4: signal-bootstrap rank confidence. Replaces spuriously precise point
+# ranks with rank_ci_lo/rank_ci_hi, P(in top-k) and a coarse rank_tier by
+# resampling the SIGNAL SET with replacement and re-aggregating (RRA) each draw.
+# Joined in place into the ranked CSV BEFORE emit_ranked_views (so both views
+# carry the tiers). Self-gated on the ranked CSV; non-fatal.
+if [ -f "$HCR_AUG_INPUT" ]; then
+    python3 "${SCRIPTS_DIR}/rank_confidence.py" \
+        --ranked-csv "$HCR_AUG_INPUT" --k "${RANK_TOPK:-20}" --n-boot "${RANK_CI_N:-1000}" \
+        2>> "${LOGS_DIR}/rank_confidence.err" \
+        || log --level=WARN "Rank-confidence intervals failed (kept ranked CSV)"
+fi
+
 # Bead 1nr: two ranked views. Re-project the composite-sorted, fully-augmented
 # ranked CSV into a CONFIDENCE shortlist (safe-bet chemoreceptor candidates with
 # complete evidence) and a DISCOVERY view (high-novelty divergent-LSE candidates

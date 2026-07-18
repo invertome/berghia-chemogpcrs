@@ -627,6 +627,11 @@ export LSE_DEPTH_PERCENTILE=75        # Percentile for "deep" LSE classification
 export RANK_TOPK="${RANK_TOPK:-20}"                    # top-k block scored for separation
 export PERMUTATION_NULL_N="${PERMUTATION_NULL_N:-1000}" # permutations for the empirical p
 
+# Signal-bootstrap rank confidence intervals (scripts/rank_confidence.py):
+# number of signal-set resamples used to estimate each candidate's rank CI,
+# P(in top-k) and coarse tier under the label-free RRA aggregator.
+export RANK_CI_N="${RANK_CI_N:-1000}"                  # signal-bootstrap draws for rank CIs
+
 # --- GPCRdb Fetch Parameters ---
 export GPCRDB_SEARCH_TERMS="chemoreceptor,invertebrate"
 export GPCRDB_SPECIES="Aplysia,Lottia"
