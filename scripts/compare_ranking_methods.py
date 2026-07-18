@@ -173,6 +173,36 @@ def _precision_at_k(order, positive_ids, k):
     return (sum(1 for i in topk if i in pos) / denom) if denom else float("nan")
 
 
+def precision_at_k_vs_null(order, positive_ids, k, n_perm=10000, seed=0):
+    """Precision@k of positives + permutation-null p (random control-sets of the
+    same size). Returns (precision, p) or (None, None) if no positives are in
+    ``order``."""
+    pos = [i for i in positive_ids if i in order]
+    if not pos:
+        return (None, None)
+    topk = set(order[:k])
+    obs = sum(1 for i in pos if i in topk) / k
+    rng = np.random.default_rng(seed)
+    n, m = len(order), len(pos)
+    ge = 0
+    for _ in range(n_perm):
+        draw = set(rng.choice(n, m, replace=False))
+        prec = sum(1 for idx in range(k) if idx in draw) / k
+        if prec >= obs:
+            ge += 1
+    return (obs, (ge + 1) / (n_perm + 1))
+
+
+def loo_recovery(positive_ids, recompute_fn):
+    """For each positive, the 1-based rank it recovers to when the ranking is
+    recomputed with it held out. recompute_fn(id) -> best-first order list."""
+    out = {}
+    for pid in positive_ids:
+        order = recompute_fn(pid)
+        out[pid] = order.index(pid) + 1 if pid in order else None
+    return out
+
+
 def map_positive_controls(controls_csv, candidate_ids):
     """Best-effort map of hcr_positive_controls.csv rows to candidate ids.
 
@@ -212,8 +242,12 @@ def _fmt_p(p):
     return "n/a" if p is None else f"{p:.4g}"
 
 
+def _fmt_prec(x):
+    return "n/a" if x is None else f"{x:.3f}"
+
+
 def write_report(df, out_path, positive_ids=None, groups=None, method="rra",
-                 n_perm=10000, seed=0, id_col="id"):
+                 n_perm=10000, seed=0, id_col="id", recompute_fn=None):
     """Write the weighted-vs-rankagg comparison markdown; return its text."""
     positive_ids = list(positive_ids or [])
     res = compare(df, groups=groups, method=method, id_col=id_col)
@@ -277,17 +311,51 @@ def write_report(df, out_path, positive_ids=None, groups=None, method="rra",
                  f"(n_perm={r_enr['n_perm']})")
         L.append("")
         if n_pos >= MIN_POSITIVES_FOR_PRECISION:
-            L.append("### Precision")
+            L.append("### Precision@k vs permutation null")
             L.append("")
+            L.append("Null = random control-sets of the same size; "
+                     "p via (b+1)/(n+1). LOWER p = positives concentrate in the "
+                     "top-k more than chance placement.")
+            L.append("")
+            L.append("| k | weighted precision@k | null p | rankagg precision@k | null p |")
+            L.append("|--:|---------------------:|-------:|--------------------:|-------:|")
             for k in (20, 50):
-                wp = _precision_at_k(res["weighted_order"], positive_ids, k)
-                rp = _precision_at_k(res["rankagg_order"], positive_ids, k)
-                L.append(f"- precision@{k}: weighted={wp:.3f}, rankagg={rp:.3f}")
+                wp, wpp = precision_at_k_vs_null(res["weighted_order"], positive_ids,
+                                                 k, n_perm=n_perm, seed=seed)
+                rp, rpp = precision_at_k_vs_null(res["rankagg_order"], positive_ids,
+                                                 k, n_perm=n_perm, seed=seed)
+                L.append(f"| {k} | {_fmt_prec(wp)} | {_fmt_p(wpp)} | "
+                         f"{_fmt_prec(rp)} | {_fmt_p(rpp)} |")
         else:
             L.append(f"Fewer than {MIN_POSITIVES_FOR_PRECISION} positive controls are "
                      "available, so only the raw positions above are reported:")
             L.append("**insufficient positives for precision estimate.** Any k-wise")
             L.append("precision would be dominated by sampling noise and is omitted.")
+        if recompute_fn is not None:
+            present = [p for p in positive_ids if p in w_enr["positions"]]
+            rec = loo_recovery(present, recompute_fn)
+            ranks = [r for r in rec.values() if r is not None]
+            L.append("")
+            L.append("### Leave-one-control-out recovery")
+            L.append("")
+            L.append("Each control is held out, the ranking is recomputed, and we")
+            L.append("record the 1-based rank the held-out control recovers to.")
+            L.append("")
+            if ranks:
+                L.append("| positive id | recovered rank |")
+                L.append("|-------------|---------------:|")
+                for pid in present:
+                    rr = rec.get(pid)
+                    L.append(f"| {pid} | {rr if rr is not None else 'absent'} |")
+                L.append("")
+                med = float(np.median(ranks))
+                L.append(f"- median recovered rank: {med:.1f} (n={len(ranks)})")
+                for k in (20, 50):
+                    frac = sum(1 for r in ranks if r <= k) / len(ranks)
+                    L.append(f"- fraction recovered within top-{k}: {frac:.3f}")
+            else:
+                L.append("No present positive controls recovered a rank "
+                         "(recompute produced no placement); nothing to report.")
     L.append("")
 
     text = "\n".join(L) + "\n"
