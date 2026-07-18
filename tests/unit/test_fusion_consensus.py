@@ -178,3 +178,43 @@ def test_main_is_importable_and_self_test_runs():
     assert callable(fusion_consensus.main)
     # the synthetic --self-test path runs the full gate->combiners->selection chain
     fusion_consensus.main(["--self-test"])
+
+
+# ---------------------------------------------------------------------------
+# Task 6 (cw3.6) — length-deconfounded consensus channel
+# ---------------------------------------------------------------------------
+def test_deconfound_removes_length_only_novelty():
+    # A pool where novelty tracks length exactly (c0..c9) plus one candidate
+    # ("real") whose novelty far exceeds what its length predicts. RAW RRA ranks
+    # the longest pure-length candidate ("c9") above "real"; after deconfounding
+    # novelty on seq_len, the length-only signal is removed and "real" (novel
+    # beyond its length) must rise above "c9". This is the locked cw3.6 fix:
+    # the consensus channel must combine length-DECONFOUNDED novelties, not raw.
+    length = {f"c{i}": float((i + 1) * 10) for i in range(10)}   # 10..100
+    length["real"] = 25.0
+    base_nov = dict(length)                                      # novelty == length
+    base_nov["real"] = 95.0                                      # novel beyond length
+    nov = {"m1": dict(base_nov), "m2": dict(base_nov)}
+    fam = {m: {c: "amine" for c in base_nov} for m in nov}
+
+    raw = build_consensus_channel(nov, fam)
+    dec = build_consensus_channel(nov, fam, deconfound={"seq_len": length})
+
+    # every candidate is still emitted with the full contract after deconfounding
+    assert set(dec) == set(base_nov)
+    assert set(dec["real"]) == {"emb_novelty", "emb_nonchemo_family",
+                                "has_emb_data", "emb_leakage_flag"}
+    # raw: the longest pure-length candidate outranks the real-novel one
+    assert raw["c9"]["emb_novelty"] > raw["real"]["emb_novelty"]
+    # deconfounded: length-only novelty removed -> real signal rises above c9
+    assert dec["real"]["emb_novelty"] > dec["c9"]["emb_novelty"]
+
+
+def test_deconfound_none_matches_raw_channel():
+    # deconfound=None (default) must be identical to the raw combiner path.
+    nov = {"m1": {"a": 9, "b": 5, "c": 1}, "m2": {"a": 8, "b": 4, "c": 2}}
+    fam = {"m1": {c: "amine" for c in "abc"}, "m2": {c: "amine" for c in "abc"}}
+    explicit_none = build_consensus_channel(nov, fam, deconfound=None)
+    default = build_consensus_channel(nov, fam)
+    for c in "abc":
+        assert explicit_none[c]["emb_novelty"] == default[c]["emb_novelty"]

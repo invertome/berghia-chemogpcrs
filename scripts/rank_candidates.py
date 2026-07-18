@@ -2146,9 +2146,18 @@ if RANK_METHOD == 'rankagg':
     _signal_groups = _load_signal_groups(output_file)
     df_sorted = _rerank_output(df_sorted, 'rankagg', groups=_signal_groups)
 
+# Persist the PRODUCTION order as an explicit 1-based rank. The active
+# RANK_METHOD (weighted or rankagg) determines df_sorted's row order, but
+# rank_score stays the weighted value even under rankagg -- so downstream
+# consumers (emit_ranked_views' confidence view, the report) must key on this
+# column, not re-derive order from rank_score, or a rankagg run's shortlist
+# would be silently re-sorted back into weighted order.
+df_sorted = df_sorted.reset_index(drop=True)
+df_sorted['final_rank'] = range(1, len(df_sorted) + 1)
+
 # Select columns for output (updated with new score columns)
 output_cols = [
-    'id', 'orthogroup', 'rank_score', 'confidence_tier', 'evidence_completeness',
+    'id', 'final_rank', 'orthogroup', 'rank_score', 'confidence_tier', 'evidence_completeness',
     'phylo_score', 'purifying_score', 'positive_score', 'positive_score_norm', 'selection_significant',
     # Bead -urk: BUSTED/MEME diagnostic columns
     'busted_s_p', 'busted_s_significant', 'busted_mh_p', 'busted_mh_significant',

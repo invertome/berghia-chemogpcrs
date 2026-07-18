@@ -312,6 +312,7 @@ def build_consensus_channel(
     per_model_novelty: NoveltyByModel,
     per_model_family: Mapping[str, Mapping[str, str]],
     combiner: str = "rra",
+    deconfound: Optional[Mapping[str, Mapping[str, float]]] = None,
 ) -> Dict[str, Dict[str, object]]:
     """Emit the `mahalanobis_channel` contract from a consensus of per-model
     scores — a drop-in replacement for a single-model embedding channel.
@@ -320,13 +321,27 @@ def build_consensus_channel(
     the mean novelty percentile for ``"rank_average"``. ``emb_nonchemo_family``
     = plurality vote of the per-model nearest families. ``has_emb_data`` and
     ``emb_leakage_flag`` are the blanket True flags the contract requires.
+
+    ``deconfound`` (cw3.6): when given a ``{confound: {cid: value}}`` mapping,
+    each model's novelty is residualized (rank-OLS, :func:`confound_residuals`)
+    on those confounds BEFORE the combiner runs, so the emitted novelty is the
+    length-deconfounded consensus. The RRA/rank combiners re-rank internally, so
+    feeding residuals (higher residual = more novel than the confound predicts)
+    is correct. Pass only ``seq_len`` here to strip the pervasive mean-pooling
+    length artifact while KEEPING identity's added value. Candidates missing any
+    deconfound value are dropped by the residualizer, so deconfound only on a
+    fully-covered confound (seq_len covers every candidate).
     """
     fam = plurality_family(per_model_family)
+    novelty = (
+        confound_residuals(per_model_novelty, deconfound)
+        if deconfound else per_model_novelty
+    )
     if combiner == "rra":
-        p = robust_rank_aggregation(per_model_novelty)
+        p = robust_rank_aggregation(novelty)
         score = {c: float(-np.log10(max(p[c], 1e-300))) for c in p}
     else:
-        score = rank_average_consensus(per_model_novelty)
+        score = rank_average_consensus(novelty)
     return {
         c: {
             "emb_novelty": score[c],
@@ -426,6 +441,13 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         help="channel combiner (default rra: -log10 RRA p)",
     )
     parser.add_argument(
+        "--deconfound", default="",
+        help="comma-separated confound names to residualize novelty on before "
+             "combining (cw3.6 locked decision: 'seq_len' strips the mean-pooling "
+             "length artifact while keeping identity's added value). Names: "
+             "seq_len, identity_to_nearest. Empty = combine raw novelty.",
+    )
+    parser.add_argument(
         "--diag-dir", default="results/ranking/diagnostics",
         help="where to cache per-model novelty TSVs",
     )
@@ -521,8 +543,23 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         for (a, b), rho in gate["pairwise"].items():
             print(f"    residual ρ({a},{b}) = {rho:+.3f}")
 
+    # cw3.6: residualize novelty on the requested confounds (seq_len) before the
+    # combiner so the emitted emb_novelty is the length-deconfounded consensus.
+    # Deconfound off the RAW confound maps (seq_len covers every candidate), not
+    # the coverage-gated `confounds` used by the independence gate.
+    deconfound_names = [s.strip() for s in args.deconfound.split(",") if s.strip()]
+    deconfound_map = {n: raw_confounds[n] for n in deconfound_names if n in raw_confounds}
+    unknown_dc = [n for n in deconfound_names if n not in raw_confounds]
+    if unknown_dc:
+        print(f"[fusion_consensus] WARNING: --deconfound name(s) {unknown_dc} not "
+              f"in confounds {list(raw_confounds)} — ignored")
+    if deconfound_map:
+        print(f"[fusion_consensus] deconfounding novelty on {list(deconfound_map)} "
+              f"before combining")
+
     channel = build_consensus_channel(
-        per_model_novelty, per_model_family, combiner=args.combiner
+        per_model_novelty, per_model_family, combiner=args.combiner,
+        deconfound=deconfound_map or None,
     )
     rows = [{"id": c, **channel[c]} for c in sorted(channel)]
     pd.DataFrame(rows, columns=CONSENSUS_TSV_COLUMNS).to_csv(
@@ -533,11 +570,32 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
     # Persist the decision context (spec data-flow: "consensus TSV + summary").
     import json
+    # cw3.6 audit (non-gating): Spearman of the EMITTED consensus emb_novelty vs
+    # each confound. Verifies the deconfounding did its job — seq_len ρ should be
+    # ~0 after --deconfound seq_len, while identity's added value may remain. This
+    # is the confound arm of select_consensus recorded as an audit line only; the
+    # famAcc arm (and any accept/reject gate) is deferred to cw3.16.2.
+    emitted = {c: channel[c]["emb_novelty"] for c in channel}
+    channel_confound: Dict[str, float] = {}
+    for name, cmap in confounds.items():
+        ids = [i for i in emitted if i in cmap]
+        if len(ids) >= 3:
+            rho, _ = spearmanr([emitted[i] for i in ids], [cmap[i] for i in ids])
+            channel_confound[name] = float(rho)
+
     summary = {
         "models": list(per_model_novelty),
         "n_candidates": len(channel),
         "combiner": args.combiner,
+        "deconfound": list(deconfound_map),
         "per_model_confound_spearman": per_model_confound,
+        "consensus_channel_confound_spearman": channel_confound,
+        "select_consensus_audit": {
+            "status": "deferred",
+            "note": "confound arm shown by consensus_channel_confound_spearman; "
+                    "famAcc arm needs reference LOO vote-famAcc vectors (cw3.16.2). "
+                    "Channel emitted per locked decision (scope A); not gated.",
+        },
         "gate": {
             "independent": gate["independent"],
             "threshold": args.indep_threshold,

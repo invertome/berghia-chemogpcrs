@@ -101,11 +101,12 @@ awk '/^>/ {print substr($1,2)}' "${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa
 # ranked CSV (the signal-correlation structure is stable across runs); on the
 # first run none exists, so rankagg simply treats every signal independently.
 #
-# The structural/embedding/microswitch evidence-channel PRODUCERS (Glue
-# G1/G2/G5: build_structural_channel.py / build_embedding_channel.py /
-# build_microswitch_channel.py) also run here, each independently gated on
-# its own raw Unity inputs -- a producer whose inputs aren't present is
-# skipped (its channel simply stays dormant downstream, never an error).
+# The structural + microswitch evidence-channel PRODUCERS (Glue G1/G5:
+# build_structural_channel.py / build_microswitch_channel.py) run here, each
+# independently gated on its own raw Unity inputs -- a producer whose inputs
+# aren't present is skipped (its channel simply stays dormant downstream, never
+# an error). The embedding producer (Glue G2) now runs unconditionally ABOVE
+# this block (cw3.6) so its emb_novelty surfaces as an always-present column.
 # Outputs land in CHANNELS_DIR, which rank_candidates.py's
 # _merge_channels_if_present() reads (default location: alongside the output
 # CSV, in a channels/ subdirectory).
@@ -114,6 +115,69 @@ awk '/^>/ {print substr($1,2)}' "${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa
 # skipped).
 RANKED_CSV="${RESULTS_DIR}/ranking/ranked_candidates_sorted.csv"
 CHANNELS_DIR="${RESULTS_DIR}/ranking/channels"
+
+# --- Embedding evidence channel PRODUCER (cw3.6: always-on, method-independent) ---
+# Writes ${CHANNELS_DIR}/embedding_channel.tsv, consumed by BOTH (a)
+# add_embedding_columns.py -> the always-present emb_novelty column in the ranked
+# CSV + both views, AND (b) rank_candidates.py's rankagg voter
+# (_merge_channels_if_present). It therefore runs REGARDLESS of RANK_METHOD.
+# Self-gated on its npz inputs: a scorer whose embeddings aren't present is
+# skipped and the channel simply stays dormant downstream (never an error).
+mkdir -p "${CHANNELS_DIR}"
+EMBEDDINGS_DIR="${EMBEDDINGS_DIR:-${RESULTS_DIR}/ranking/embeddings}"
+if [ "${EMB_SCORER:-consensus}" = "consensus" ]; then
+    # Locked cw3.6 decision: length-deconfounded proteinclip3b + protrek RRA
+    # consensus. Build one tag:cand_npz:ref_npz:identity_tsv spec per model,
+    # requiring both npz to exist; run only when >=2 models resolve.
+    _emb_specs=(); _emb_missing=0
+    for _tag in ${EMB_CONSENSUS_MODELS:-proteinclip3b protrek}; do
+        _cand="${EMBEDDINGS_DIR}/candidates_${_tag}_classA.npz"
+        _ref="${EMBEDDINGS_DIR}/reference_${_tag}_PROD.npz"
+        if [ -f "${_cand}" ] && [ -f "${_ref}" ]; then
+            _emb_specs+=("${_tag}:${_cand}:${_ref}:${EMB_CANDIDATE_IDENTITY_TSV}")
+        else
+            _emb_missing=1
+            log "Note: consensus model '${_tag}' npz missing (${_cand} / ${_ref}) -- excluded"
+        fi
+    done
+    if [ "${#_emb_specs[@]}" -ge 2 ] && [ -f "${EMB_CANDIDATE_FASTA}" ]; then
+        log "Building consensus embedding channel (RRA, deconfound seq_len; models: ${EMB_CONSENSUS_MODELS:-proteinclip3b protrek})..."
+        python3 "${SCRIPTS_DIR}/fusion_consensus.py" \
+            --models "${_emb_specs[@]}" \
+            --ref-labels "${EMB_REF_LABELS}" \
+            --candidate-fasta "${EMB_CANDIDATE_FASTA}" \
+            --combiner rra --deconfound seq_len \
+            --out "${CHANNELS_DIR}/embedding_channel.tsv" \
+            2>> "${LOGS_DIR}/embedding_channel.err" \
+            || log --level=WARN "Consensus embedding channel producer failed (channel stays dormant)"
+    else
+        log "Note: consensus embedding channel skipped (need >=2 model npz + candidate FASTA ${EMB_CANDIDATE_FASTA}) -- stays dormant"
+    fi
+else
+    # Legacy single-model scorer: EMB_SCORER=maha -> ESM-C 600M tied-covariance
+    # Mahalanobis; else cosine on ESM-C 300M. Kept for comparison (dominated).
+    if [ "${EMB_SCORER}" = "maha" ]; then
+        _emb_tag="esmc600m"; _emb_scorer_args="--scorer maha"
+    else
+        _emb_tag="esmc300m"; _emb_scorer_args=""
+    fi
+    ESMC_CANDIDATE_NPZ="${ESMC_CANDIDATE_NPZ:-${EMBEDDINGS_DIR}/candidates_${_emb_tag}.npz}"
+    ESMC_REFERENCE_NPZ="${ESMC_REFERENCE_NPZ:-${EMBEDDINGS_DIR}/reference_${_emb_tag}.npz}"
+    if [ -f "${ESMC_CANDIDATE_NPZ}" ] && [ -f "${ESMC_REFERENCE_NPZ}" ]; then
+        log "Building ESM-C embedding channel (scorer=${EMB_SCORER})..."
+        python3 "${SCRIPTS_DIR}/build_embedding_channel.py" \
+            --candidate-npz "${ESMC_CANDIDATE_NPZ}" \
+            --ref-npz "${ESMC_REFERENCE_NPZ}" \
+            --ref-labels "${REFERENCE_DIR}/anchors/anchor_set.tsv" \
+            ${_emb_scorer_args} \
+            --out "${CHANNELS_DIR}/embedding_channel.tsv" \
+            2>> "${LOGS_DIR}/build_embedding_channel.err" \
+            || log --level=WARN "Embedding channel producer failed (channel stays dormant)"
+    else
+        log "Note: ESM-C embeddings not found (${ESMC_CANDIDATE_NPZ}, ${ESMC_REFERENCE_NPZ}) -- embedding channel skipped, stays dormant"
+    fi
+fi
+
 if [ "${RANK_METHOD:-weighted}" = "rankagg" ]; then
     mkdir -p "${CHANNELS_DIR}"
 
@@ -138,31 +202,10 @@ if [ "${RANK_METHOD:-weighted}" = "rankagg" ]; then
         log "Note: no Foldseek candidate hit TSVs found under ${FOLDSEEK_CANDIDATES_DIR} (run scripts/unity/run_foldseek_candidates.sh) -- structural channel skipped, stays dormant"
     fi
 
-    # Embedding channel (ESM-C candidate vs non-chemoreceptor family centroids; Glue G2).
-    # Gated on BOTH the candidate-side and reference-side embeddings existing.
-    # EMB_SCORER=cosine (default) -> ESM-C 300M cosine exclusion/recall channel;
-    # =maha -> ESM-C 600M tied-covariance Mahalanobis multi-prototype channel
-    # (the bake-off winner), emitting emb_novelty as a positive ranking axis.
-    if [ "${EMB_SCORER:-cosine}" = "maha" ]; then
-        _emb_tag="esmc600m"; _emb_scorer_args="--scorer maha"
-    else
-        _emb_tag="esmc300m"; _emb_scorer_args=""
-    fi
-    ESMC_CANDIDATE_NPZ="${ESMC_CANDIDATE_NPZ:-${RESULTS_DIR}/ranking/embeddings/candidates_${_emb_tag}.npz}"
-    ESMC_REFERENCE_NPZ="${ESMC_REFERENCE_NPZ:-${RESULTS_DIR}/ranking/embeddings/reference_${_emb_tag}.npz}"
-    if [ -f "${ESMC_CANDIDATE_NPZ}" ] && [ -f "${ESMC_REFERENCE_NPZ}" ]; then
-        log "RANK_METHOD=rankagg: building ESM-C embedding evidence channel (scorer=${EMB_SCORER:-cosine})..."
-        python3 "${SCRIPTS_DIR}/build_embedding_channel.py" \
-            --candidate-npz "${ESMC_CANDIDATE_NPZ}" \
-            --ref-npz "${ESMC_REFERENCE_NPZ}" \
-            --ref-labels "${REFERENCE_DIR}/anchors/anchor_set.tsv" \
-            ${_emb_scorer_args} \
-            --out "${CHANNELS_DIR}/embedding_channel.tsv" \
-            2>> "${LOGS_DIR}/build_embedding_channel.err" \
-            || log --level=WARN "Embedding channel producer failed (channel stays dormant)"
-    else
-        log "Note: ESM-C candidate/reference embeddings not found (${ESMC_CANDIDATE_NPZ}, ${ESMC_REFERENCE_NPZ}; run scripts/unity/run_esmc_embeddings.sh + run_esmc_reference_embeddings.sh) -- embedding channel skipped, stays dormant"
-    fi
+    # (The embedding channel producer now runs unconditionally above, so its
+    # emb_novelty can surface as an always-present column on the weighted path
+    # too — cw3.6. It still writes ${CHANNELS_DIR}/embedding_channel.tsv, which
+    # this block's rank_candidates.py rankagg voter reads as before.)
 
     # OR-microswitch channel (structural BW number-transfer; Glue G5). Gated
     # on the per-candidate alignment-report directory existing and non-empty.
@@ -253,6 +296,22 @@ elif [ -f "$HCR_AUG_INPUT" ]; then
     log --level=WARN "Skipping classification columns: $CLASS_TSV not found (run 06c first)"
 fi
 
+# cw3.6: always-present emb_novelty column. Left-joins the embedding channel's
+# emb_novelty (+ emb_nonchemo_family, has_emb_data) into the ranked CSV as a
+# sortable descriptive column in BOTH views, independent of RANK_METHOD (the
+# channel otherwise only feeds the rankagg voter). Dormant channel -> the column
+# is present but empty. Must run BEFORE emit_ranked_views (its discovery score
+# reads emb_novelty). The channel is authoritative (overwrites any rankagg-merged
+# copy), so running on either RANK_METHOD path yields exactly one emb_novelty.
+if [ -f "$HCR_AUG_INPUT" ]; then
+    python3 "${SCRIPTS_DIR}/add_embedding_columns.py" \
+        --ranked-csv "$HCR_AUG_INPUT" \
+        --channel-tsv "${CHANNELS_DIR}/embedding_channel.tsv" \
+        --out "$HCR_AUG_INPUT" \
+        2>> "${LOGS_DIR}/embedding_columns.err" \
+        || log --level=WARN "Embedding column augmentation failed (kept original CSV)"
+fi
+
 # Bead 1nr: two ranked views. Re-project the composite-sorted, fully-augmented
 # ranked CSV into a CONFIDENCE shortlist (safe-bet chemoreceptor candidates with
 # complete evidence) and a DISCOVERY view (high-novelty divergent-LSE candidates
@@ -270,11 +329,12 @@ if [ -f "$HCR_AUG_INPUT" ]; then
 fi
 
 # --- Weighted-vs-rank-aggregation comparison (always emitted; non-fatal) ---
-# Descriptive audit only: reports how far the label-free rank-aggregation order
-# would differ from the production weighted order (Spearman, top-k overlap,
-# biggest movers) plus an honest, permutation-null positive-control readout.
-# The production shortlist is NOT changed here. Uses the signal-independence
-# groups.json when the rankagg audit above produced one.
+# Descriptive audit only: reports how far the hand-weighted-sum order and the
+# label-free rank-aggregation order differ (Spearman, top-k overlap, biggest
+# movers) plus an honest, permutation-null positive-control readout. Both orders
+# are recomputed from the ranked CSV's signal columns, so this stays a valid
+# audit whichever RANK_METHOD is the production default. It changes nothing.
+# Uses the signal-independence groups.json when the rankagg audit produced one.
 if [ -f "${RANKED_CSV}" ]; then
     COMPARE_ARGS=(--ranked-csv "${RANKED_CSV}" \
         --out "${RESULTS_DIR}/ranking/ranking_method_comparison.md")

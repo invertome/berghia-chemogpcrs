@@ -521,20 +521,34 @@ export RUN_MODE="${RUN_MODE:-slurm}"
 # Higher weights give more importance to that criterion.
 #
 # RANK_METHOD selects how the per-signal scores are combined into the final
-# order. 'weighted' (default) = the hand-weighted sum below (the production
-# shortlist). 'rankagg' ADDITIONALLY runs a label-free Robust Rank Aggregation
-# over the same 12 per-signal ranklists and emits the CSV in that order plus a
-# weighted-vs-rankagg comparison report (results/ranking/ranking_method_comparison.md).
-# This is a non-disruptive compare mode; switching the production shortlist is a
-# separate, gated decision. See scripts/compare_ranking_methods.py.
-export RANK_METHOD="${RANK_METHOD:-weighted}"
-# EMB_SCORER selects the ESM-C embedding-channel scorer (stage 07, rankagg path).
-# 'cosine' (default) = the original cosine exclusion/recall channel on the ESM-C
-# 300M embeddings (prior behavior, unchanged). 'maha' = the Phase-0 tied-covariance
-# Mahalanobis + multi-prototype scorer on the ESM-C 600M embeddings (the bake-off
-# winner, family-acc 0.752), emitting emb_novelty as a POSITIVE ranking axis
-# (bead cw3). Opt-in; flipping the production default is a separate gated decision.
-export EMB_SCORER="${EMB_SCORER:-cosine}"
+# production order (persisted as the final_rank column). 'rankagg' (default) =
+# a label-free Robust Rank Aggregation over the 12 per-signal ranklists (fusing
+# confounded signals per the stage-07 independence audit), in which emb_novelty
+# and the other evidence channels participate as voters. It replaces the
+# subjectivity of hand-tuned weights with a rank-fusion of the raw signals.
+# 'weighted' = the legacy hand-weighted sum below (the weights still compute the
+# reported rank_score column and break RRA ties, but no longer set the order).
+# Either way a weighted-vs-rankagg comparison report
+# (results/ranking/ranking_method_comparison.md) is emitted so the delta between
+# the two orders stays auditable; the default is reversible in one line here.
+# See scripts/compare_ranking_methods.py.
+export RANK_METHOD="${RANK_METHOD:-rankagg}"
+# EMB_SCORER selects the embedding-channel scorer (stage 07). The channel is now
+# produced regardless of RANK_METHOD (its emb_novelty is surfaced as an always-
+# present column by add_embedding_columns.py, and re-used as the rankagg voter).
+# 'consensus' (default, cw3.6) = length-deconfounded proteinclip3b + protrek
+# Robust Rank Aggregation (the locked model decision: proteinclip3b LOO-famAcc
+# 0.842, protrek 0.794 + most-independent partner). 'maha'/'cosine' = the legacy
+# single-model ESM-C scorers (dominated: esmc600m famAcc 0.63), kept for
+# comparison. All scorers self-gate on their npz inputs (dormant if absent).
+export EMB_SCORER="${EMB_SCORER:-consensus}"
+# cw3.6 consensus-channel inputs. The npz + identity TSV are produced on Unity
+# (GPU); each path is overridable and the producer self-gates on their presence.
+export EMBEDDINGS_DIR="${EMBEDDINGS_DIR:-${RESULTS_DIR}/ranking/embeddings}"
+export EMB_CONSENSUS_MODELS="${EMB_CONSENSUS_MODELS:-proteinclip3b protrek}"  # tags: expects candidates_<tag>_classA.npz + reference_<tag>_PROD.npz under EMBEDDINGS_DIR
+export EMB_CANDIDATE_FASTA="${EMB_CANDIDATE_FASTA:-${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia_classA.fa}"  # class-A candidates (seq_len for deconfounding)
+export EMB_REF_LABELS="${EMB_REF_LABELS:-${REFERENCE_DIR}/anchors/anchor_set.tsv}"  # family/class-labeled reference anchors
+export EMB_CANDIDATE_IDENTITY_TSV="${EMB_CANDIDATE_IDENTITY_TSV:-${EMBEDDINGS_DIR}/candidate_ref_identity_PROD.tsv}"  # candidate->nearest-ref % identity (confound; optional)
 export PHYLO_WEIGHT=2           # Weight for phylogenetic distance to references
 # Bead -ea9: PURIFYING_WEIGHT defaults to 0 because chemoreceptor identification
 # rewards diversifying selection on extracellular loops, not whole-gene
@@ -579,12 +593,13 @@ export LSE_DEPTH_WEIGHT=1       # Weight for lineage-specific expansion depth
 #     candidates with complete evidence, sorted by rank_score).
 #   * DISCOVERY view  — high-novelty divergent-LSE candidates a single
 #     completeness-rewarding composite would bury, sorted by a divergence-
-#     rewarding discovery score = weight-normalized mean of the [0,1] tandem
-#     and positive-selection *_norm signals.
+#     rewarding discovery score = weight-normalized mean of the [0,1] tandem,
+#     positive-selection, and consensus embedding-novelty signals (cw3.6).
 export CONFIDENCE_MIN_COMPLETENESS="${CONFIDENCE_MIN_COMPLETENESS:-0.7}"  # confidence-view evidence_completeness floor
 export DISCOVERY_TANDEM_HIGH="${DISCOVERY_TANDEM_HIGH:-0.5}"              # tandem_cluster_score_norm "high" cutoff for discovery membership (~cluster size >=4)
 export DISCOVERY_TANDEM_WEIGHT="${DISCOVERY_TANDEM_WEIGHT:-2.0}"          # discovery-score weight on the tandem-cluster signal
 export DISCOVERY_POSITIVE_WEIGHT="${DISCOVERY_POSITIVE_WEIGHT:-1.0}"      # discovery-score weight on the positive-selection signal
+export DISCOVERY_NOVELTY_WEIGHT="${DISCOVERY_NOVELTY_WEIGHT:-1.0}"        # discovery-score weight on the consensus embedding-novelty signal (cw3.6; DISCOVERY view + column only, never the confidence composite)
 
 # --- Reference Weighting (for phylogenetic distance) ---
 # These weights control how references affect candidate ranking in rank_candidates.py.
