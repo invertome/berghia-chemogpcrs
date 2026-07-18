@@ -1,0 +1,46 @@
+#!/bin/bash
+#SBATCH --job-name=a1_tree_final
+#SBATCH --account=pi_pkatz_umass_edu
+#SBATCH --partition=cpu
+#SBATCH --qos=long
+#SBATCH --time=7-00:00:00
+#SBATCH --cpus-per-task=32
+#SBATCH --mem=128G
+#SBATCH --output=%x_%j.out
+#SBATCH --error=%x_%j.err
+#
+# A1 dedicated class-A tree — FINAL IQ-TREE 3 (run after a1_tree_pilot.sh picks
+# the filter condition). Builds the tree A1's tree_distance_to_refs.py consumes.
+#
+# ALN selects the trimmed alignment chosen by the pilot (default: canonical +
+# smart-gap ClipKit, the minimal-filtering condition — preserves the ECL/ICL
+# divergence A1's novelty signal depends on). Override ALN to use a
+# PREQUAL/TAPER condition if the pilot verdict favours it.
+#
+# Model selection is restricted to nuclear AA matrices (-msub nuclear), UFBoot +
+# SH-aLRT + TBE, deterministic seed — matching the pipeline's per-class trees.
+set -eo pipefail
+
+REPO="${REPO:-/scratch3/workspace/jperezmoreno_umass_edu-jorge/chemogpcrs_2026-05}"
+OUTDIR="${OUTDIR:-${REPO}/results/phylogenies/protein/class_A_a1}"
+ALN="${ALN:-${OUTDIR}/canonical_trim.fa}"
+PREFIX="${PREFIX:-${OUTDIR}/class_A_a1}"
+THREADS="${THREADS:-32}"
+SEED="${IQTREE_SEED:-20260718}"
+
+source "$HOME/.miniconda3/etc/profile.d/conda.sh"
+conda activate berghia-gpcr
+cd "$REPO"
+source config.sh
+source functions.sh
+
+[ -s "$ALN" ] || { echo "[a1_final] ERROR: alignment $ALN missing (run a1_tree_pilot.sh first)"; exit 1; }
+echo "[a1_final] IQ-TREE 3 on $ALN ($(grep -c '^>' "$ALN") seqs)"
+
+iqtree3 -s "$ALN" --prefix "$PREFIX" \
+  -m MFP -msub nuclear -mset "${IQTREE_MODEL_SET:-LG,WAG,JTT,Q.pfam}" \
+  -B 1000 -alrt 1000 --tbe \
+  -seed "$SEED" -T "$THREADS" --redo
+
+echo "[a1_final] DONE -> ${PREFIX}.treefile"
+echo "[a1_final] point A1 at it: export EMB_CLASSA_TREE=${PREFIX}.treefile ; RUN_EMB_RESIDUAL_NOVELTY=1"
