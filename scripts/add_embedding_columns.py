@@ -39,7 +39,10 @@ import pandas as pd
 
 # Channel contract columns we surface (emb_leakage_flag is a blanket True flag,
 # not informative as a per-row column, so it is deliberately not carried over).
-EMB_COLUMNS = ["emb_novelty", "emb_nonchemo_family", "has_emb_data"]
+# emb_novelty_residual (A1, v4bs.2) is the phylogeny-residualized novelty: a
+# dormant descriptive column, surfaced when the channel emits it (else absent).
+EMB_COLUMNS = ["emb_novelty", "emb_novelty_residual", "emb_nonchemo_family",
+               "has_emb_data"]
 CHANNEL_ID = "id"
 
 

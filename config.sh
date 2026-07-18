@@ -549,6 +549,19 @@ export EMB_CONSENSUS_MODELS="${EMB_CONSENSUS_MODELS:-proteinclip3b protrek}"  # 
 export EMB_CANDIDATE_FASTA="${EMB_CANDIDATE_FASTA:-${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia_classA.fa}"  # class-A candidates (seq_len for deconfounding)
 export EMB_REF_LABELS="${EMB_REF_LABELS:-${REFERENCE_DIR}/anchors/anchor_set.tsv}"  # family/class-labeled reference anchors
 export EMB_CANDIDATE_IDENTITY_TSV="${EMB_CANDIDATE_IDENTITY_TSV:-${EMBEDDINGS_DIR}/candidate_ref_identity_PROD.tsv}"  # candidate->nearest-ref % identity (confound; optional)
+
+# A1 (v4bs.2) — phylogeny-residualized novelty (DORMANT, default OFF).
+# When =1, stage 07 computes tree-distance-to-nearest-reference from the
+# stage-04 class-A tree (composite ANCHOR_ ref ids via load_ref_labels, NOT the
+# bare accession) and passes it to fusion_consensus.py --residual-confound, which
+# ALSO emits an emb_novelty_residual column (novelty beyond phylogenetic
+# expectation). The production emb_novelty and the shortlist are UNCHANGED;
+# the residual is a descriptive column, not a scored voter. Default OFF: enabling
+# requires confirming the class-A tree leaf ids match the embedding candidate/ref
+# ids on a real run, and promoting the residual to a voter is a separate gated
+# decision. See docs/plans/2026-07-18-plm-integration-roadmap.md (Track A/A1).
+export RUN_EMB_RESIDUAL_NOVELTY="${RUN_EMB_RESIDUAL_NOVELTY:-0}"
+export EMB_CLASSA_TREE="${EMB_CLASSA_TREE:-${RESULTS_DIR}/phylogenies/protein/class_A/class_A.treefile}"
 export PHYLO_WEIGHT=2           # Weight for phylogenetic distance to references
 # Bead -ea9: PURIFYING_WEIGHT defaults to 0 because chemoreceptor identification
 # rewards diversifying selection on extracellular loops, not whole-gene

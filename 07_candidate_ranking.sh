@@ -140,6 +140,27 @@ if [ "${EMB_SCORER:-consensus}" = "consensus" ]; then
             log "Note: consensus model '${_tag}' npz missing (${_cand} / ${_ref}) -- excluded"
         fi
     done
+    # A1 (v4bs.2, DORMANT/default-OFF): compute tree-distance-to-nearest-reference
+    # from the stage-04 class-A tree and pass it as a --residual-confound so the
+    # channel ALSO emits emb_novelty_residual (novelty beyond phylogeny). Ref leaf
+    # ids come from load_ref_labels (the composite ANCHOR_ ids that key the tree/
+    # npz), NOT a bare accession cut. Self-gated on the tree file; on id-mismatch
+    # the residualizer drops non-matching ids and the residual stays empty (inert).
+    _emb_residual_args=()
+    if [ "${RUN_EMB_RESIDUAL_NOVELTY:-0}" = "1" ] && [ -f "${EMB_CLASSA_TREE}" ]; then
+        _tree_dist_tsv="${CHANNELS_DIR}/tree_distance.tsv"
+        _ref_ids_tmp="${CHANNELS_DIR}/.classA_ref_ids.txt"
+        python3 -c "import sys; sys.path.insert(0, '${SCRIPTS_DIR}'); from build_embedding_channel import load_ref_labels; print('\n'.join(load_ref_labels('${EMB_REF_LABELS}')))" \
+            > "${_ref_ids_tmp}" 2>> "${LOGS_DIR}/embedding_channel.err" || true
+        if [ -s "${_ref_ids_tmp}" ] && python3 "${SCRIPTS_DIR}/tree_distance_to_refs.py" \
+                --tree "${EMB_CLASSA_TREE}" --ref-ids "${_ref_ids_tmp}" \
+                --out "${_tree_dist_tsv}" 2>> "${LOGS_DIR}/embedding_channel.err"; then
+            _emb_residual_args=(--confound-tsv "tree_distance:${_tree_dist_tsv}" --residual-confound "tree_distance")
+            log "A1: emb_novelty_residual wired from ${EMB_CLASSA_TREE} (DORMANT column, not a voter)"
+        else
+            log --level=WARN "A1 tree-distance producer skipped/failed; emb_novelty_residual stays absent"
+        fi
+    fi
     if [ "${#_emb_specs[@]}" -ge 2 ] && [ -f "${EMB_CANDIDATE_FASTA}" ]; then
         log "Building consensus embedding channel (RRA, deconfound seq_len; models: ${EMB_CONSENSUS_MODELS:-proteinclip3b protrek})..."
         python3 "${SCRIPTS_DIR}/fusion_consensus.py" \
@@ -147,6 +168,7 @@ if [ "${EMB_SCORER:-consensus}" = "consensus" ]; then
             --ref-labels "${EMB_REF_LABELS}" \
             --candidate-fasta "${EMB_CANDIDATE_FASTA}" \
             --combiner rra --deconfound seq_len \
+            "${_emb_residual_args[@]}" \
             --out "${CHANNELS_DIR}/embedding_channel.tsv" \
             2>> "${LOGS_DIR}/embedding_channel.err" \
             || log --level=WARN "Consensus embedding channel producer failed (channel stays dormant)"

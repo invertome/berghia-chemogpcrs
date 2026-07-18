@@ -218,3 +218,52 @@ def test_deconfound_none_matches_raw_channel():
     default = build_consensus_channel(nov, fam)
     for c in "abc":
         assert explicit_none[c]["emb_novelty"] == default[c]["emb_novelty"]
+
+
+# ---------------------------------------------------------------------------
+# A1 (v4bs.2) — phylogeny-residualized novelty as a SECOND (dormant) channel
+# ---------------------------------------------------------------------------
+def test_residual_deconfound_emits_excess_beyond_phylogeny_channel():
+    # A pool where novelty tracks tree-distance exactly (t0..t9), plus 'beyond'
+    # whose novelty far exceeds what its (small) tree-distance predicts. RAW
+    # emb_novelty ranks the most phylo-distant t9 top; the residual channel
+    # (novelty residualized on tree_distance) removes the phylogeny-explained
+    # part, so 'beyond' (novel beyond phylogenetic expectation) rises above t9.
+    tdist = {f"t{i}": float((i + 1) * 10) for i in range(10)}    # 10..100
+    tdist["beyond"] = 25.0
+    base = dict(tdist)
+    base["beyond"] = 95.0                                       # novel beyond phylo
+    nov = {"m1": dict(base), "m2": dict(base)}
+    fam = {m: {c: "amine" for c in base} for m in nov}
+
+    ch = build_consensus_channel(
+        nov, fam, residual_deconfound={"tree_distance": tdist}
+    )
+    # both the raw AND the residual novelty are emitted per candidate
+    assert "emb_novelty" in ch["beyond"] and "emb_novelty_residual" in ch["beyond"]
+    # raw: the most phylo-distant pure-phylo candidate outranks 'beyond'
+    assert ch["t9"]["emb_novelty"] > ch["beyond"]["emb_novelty"]
+    # residual: phylogeny removed -> the beyond-phylo signal rises above t9
+    assert ch["beyond"]["emb_novelty_residual"] > ch["t9"]["emb_novelty_residual"]
+
+
+def test_no_residual_deconfound_keeps_original_four_key_contract():
+    # Backward-compatible: without residual_deconfound, no extra key is added.
+    nov = {"m1": {"a": 9, "b": 1}, "m2": {"a": 8, "b": 2}}
+    fam = {"m1": {"a": "pep", "b": "amine"}, "m2": {"a": "pep", "b": "amine"}}
+    ch = build_consensus_channel(nov, fam)
+    assert "emb_novelty_residual" not in ch["a"]
+
+
+def test_residual_is_none_for_candidates_missing_the_confound():
+    # A candidate with no tree_distance gets a None residual but keeps its
+    # primary emb_novelty (dormant partial coverage, like the seq_len path).
+    tdist = {"a": 10.0, "b": 20.0}                              # 'nocover' absent
+    nov = {"m1": {"a": 9, "b": 5, "nocover": 1},
+           "m2": {"a": 8, "b": 4, "nocover": 2}}
+    fam = {m: {c: "amine" for c in ("a", "b", "nocover")} for m in nov}
+    ch = build_consensus_channel(
+        nov, fam, residual_deconfound={"tree_distance": tdist}
+    )
+    assert ch["nocover"]["emb_novelty_residual"] is None
+    assert isinstance(ch["nocover"]["emb_novelty"], float)

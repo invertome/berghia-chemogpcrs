@@ -313,6 +313,7 @@ def build_consensus_channel(
     per_model_family: Mapping[str, Mapping[str, str]],
     combiner: str = "rra",
     deconfound: Optional[Mapping[str, Mapping[str, float]]] = None,
+    residual_deconfound: Optional[Mapping[str, Mapping[str, float]]] = None,
 ) -> Dict[str, Dict[str, object]]:
     """Emit the `mahalanobis_channel` contract from a consensus of per-model
     scores — a drop-in replacement for a single-model embedding channel.
@@ -331,26 +332,41 @@ def build_consensus_channel(
     length artifact while KEEPING identity's added value. Candidates missing any
     deconfound value are dropped by the residualizer, so deconfound only on a
     fully-covered confound (seq_len covers every candidate).
+
+    ``residual_deconfound`` (A1, v4bs.2): when given, ALSO emit a SECOND novelty
+    ``emb_novelty_residual`` — the consensus of novelty additionally residualized
+    on these confounds (e.g. ``tree_distance``), i.e. novelty *beyond*
+    phylogenetic (and/or compositional) expectation. This is a DORMANT extra
+    column/voter: ``emb_novelty`` (the production channel) is unchanged, so the
+    production shortlist does not move; promoting the residual to a scored voter
+    is a separate, gated decision. Candidates missing a residual confound value
+    are dropped by the residualizer, so their ``emb_novelty_residual`` is None
+    (partial coverage is expected — tree_distance only covers tree leaves).
     """
     fam = plurality_family(per_model_family)
-    novelty = (
-        confound_residuals(per_model_novelty, deconfound)
-        if deconfound else per_model_novelty
-    )
-    if combiner == "rra":
-        p = robust_rank_aggregation(novelty)
-        score = {c: float(-np.log10(max(p[c], 1e-300))) for c in p}
-    else:
-        score = rank_average_consensus(novelty)
-    return {
-        c: {
+
+    def _combine(confs: Optional[Mapping[str, Mapping[str, float]]]) -> Dict[str, float]:
+        novelty = confound_residuals(per_model_novelty, confs) if confs else per_model_novelty
+        if combiner == "rra":
+            p = robust_rank_aggregation(novelty)
+            return {c: float(-np.log10(max(p[c], 1e-300))) for c in p}
+        return rank_average_consensus(novelty)
+
+    score = _combine(deconfound)
+    residual_score = _combine(residual_deconfound) if residual_deconfound else None
+
+    out: Dict[str, Dict[str, object]] = {}
+    for c in score:
+        entry: Dict[str, object] = {
             "emb_novelty": score[c],
             "emb_nonchemo_family": fam.get(c),
             "has_emb_data": True,
             "emb_leakage_flag": True,
         }
-        for c in score
-    }
+        if residual_score is not None:
+            entry["emb_novelty_residual"] = residual_score.get(c)  # None if dropped
+        out[c] = entry
+    return out
 
 
 # --- CLI glue --------------------------------------------------------------
@@ -360,6 +376,7 @@ CONSENSUS_TSV_COLUMNS: List[str] = [
     "id",
     "emb_nonchemo_family",
     "emb_novelty",
+    "emb_novelty_residual",   # A1 (v4bs.2): dormant phylo/composition-residual novelty
     "has_emb_data",
     "emb_leakage_flag",
 ]
@@ -448,6 +465,22 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
              "seq_len, identity_to_nearest. Empty = combine raw novelty.",
     )
     parser.add_argument(
+        "--confound-tsv", action="append", default=[], metavar="NAME:PATH",
+        help="extra confound source as NAME:PATH (a TSV whose first column is the "
+             "candidate id and second column the value); repeatable. Registers "
+             "NAME for use by --deconfound / --residual-confound. Producers: "
+             "tree_distance_to_refs.py (tree_distance), composition_distance.py "
+             "(composition).",
+    )
+    parser.add_argument(
+        "--residual-confound", default="",
+        help="comma-separated confound names to residualize a SECOND novelty on, "
+             "emitted as the DORMANT emb_novelty_residual column (A1/v4bs.2: "
+             "'tree_distance' = novelty beyond phylogenetic expectation; add "
+             "'composition' for A2). The production emb_novelty is unchanged; the "
+             "residual is not a scored voter until separately gated. Empty = off.",
+    )
+    parser.add_argument(
         "--diag-dir", default="results/ranking/diagnostics",
         help="where to cache per-model novelty TSVs",
     )
@@ -521,6 +554,21 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         "identity_to_nearest": identity_any,
         "seq_len": {i: float(v) for i, v in seq_len.items()},
     }
+    # Register extra confound sources from --confound-tsv NAME:PATH (A1/A2:
+    # tree_distance, composition). Each TSV's first column is the candidate id,
+    # second the value. Registered here so they are usable by both the coverage
+    # gate and --deconfound / --residual-confound.
+    for spec in args.confound_tsv:
+        if ":" not in spec:
+            parser.error(f"--confound-tsv {spec!r} must be NAME:PATH")
+        name, path = spec.split(":", 1)
+        cdf = pd.read_csv(path, sep="\t")
+        idcol, valcol = cdf.columns[0], cdf.columns[1]
+        raw_confounds[name] = {str(k): float(v)
+                               for k, v in zip(cdf[idcol], cdf[valcol])}
+        print(f"[fusion_consensus] registered confound {name!r} "
+              f"({len(raw_confounds[name])} candidates) from {path}")
+
     confounds: Dict[str, Dict[str, float]] = {}
     for name, cmap in raw_confounds.items():
         cov = len(cand_ids & set(cmap)) / len(cand_ids) if cand_ids else 0.0
@@ -557,9 +605,24 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         print(f"[fusion_consensus] deconfounding novelty on {list(deconfound_map)} "
               f"before combining")
 
+    # A1/A2 (v4bs.2/.3): a SECOND, dormant novelty residualized on the requested
+    # confounds (e.g. tree_distance) -> emb_novelty_residual. Production emb_novelty
+    # is unchanged, so the shortlist does not move; promotion to a scored voter is
+    # a separate, gated decision.
+    residual_names = [s.strip() for s in args.residual_confound.split(",") if s.strip()]
+    residual_map = {n: raw_confounds[n] for n in residual_names if n in raw_confounds}
+    unknown_res = [n for n in residual_names if n not in raw_confounds]
+    if unknown_res:
+        print(f"[fusion_consensus] WARNING: --residual-confound name(s) {unknown_res} "
+              f"not in confounds {list(raw_confounds)} — ignored")
+    if residual_map:
+        print(f"[fusion_consensus] emitting emb_novelty_residual "
+              f"(novelty residualized on {list(residual_map)})")
+
     channel = build_consensus_channel(
         per_model_novelty, per_model_family, combiner=args.combiner,
         deconfound=deconfound_map or None,
+        residual_deconfound=residual_map or None,
     )
     rows = [{"id": c, **channel[c]} for c in sorted(channel)]
     pd.DataFrame(rows, columns=CONSENSUS_TSV_COLUMNS).to_csv(
@@ -588,6 +651,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         "n_candidates": len(channel),
         "combiner": args.combiner,
         "deconfound": list(deconfound_map),
+        "residual_confound": list(residual_map),
         "per_model_confound_spearman": per_model_confound,
         "consensus_channel_confound_spearman": channel_confound,
         "select_consensus_audit": {

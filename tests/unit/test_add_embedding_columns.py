@@ -50,6 +50,28 @@ def test_joins_emb_novelty_from_channel(tmp_path: Path):
     assert dict(zip(df["id"], df["emb_nonchemo_family"])) == {"c1": "amine", "c2": "opsin"}
 
 
+def test_joins_emb_novelty_residual_when_present(tmp_path: Path):
+    # A1 (v4bs.2): the phylogeny-residualized novelty is a dormant descriptive
+    # column — when the channel carries emb_novelty_residual it must be surfaced
+    # in the ranked CSV alongside emb_novelty.
+    ranked = _ranked(tmp_path, [{"id": "c1", "rank_score": "0.9"},
+                                {"id": "c2", "rank_score": "0.5"}])
+    channel = _channel(tmp_path, [
+        {"id": "c1", "emb_nonchemo_family": "amine", "emb_novelty": "7.5",
+         "emb_novelty_residual": "6.1", "has_emb_data": "True",
+         "emb_leakage_flag": "True"},
+        {"id": "c2", "emb_nonchemo_family": "opsin", "emb_novelty": "1.2",
+         "emb_novelty_residual": "", "has_emb_data": "True",
+         "emb_leakage_flag": "True"},
+    ])
+    out = tmp_path / "out.csv"
+    aec.add_embedding_columns(ranked_csv_path=ranked, channel_tsv_path=channel,
+                              out_path=str(out))
+    df = pd.read_csv(out, dtype=str, keep_default_na=False)
+    assert "emb_novelty_residual" in df.columns
+    assert dict(zip(df["id"], df["emb_novelty_residual"])) == {"c1": "6.1", "c2": ""}
+
+
 def test_candidate_missing_from_channel_gets_blank(tmp_path: Path):
     ranked = _ranked(tmp_path, [{"id": "c1", "rank_score": "0.9"},
                                 {"id": "c2", "rank_score": "0.5"}])
