@@ -66,7 +66,37 @@ envsubst < "$STAGE_SCRIPT" | sed '/^#SBATCH \\?\$(/d' > "$PREPROCESSED"
 echo "[submit_stage] preprocessed -> $PREPROCESSED" >&2
 echo "[submit_stage] sbatch flags: $*" >&2
 
+# --- Bead fxx: size --array from the manifest, not the hardcoded range --------
+# Stages 04/05 carry `#SBATCH --array=0-999%50`, which cannot cover a full-557
+# manifest (orthogroups at index >=1000 fall outside the array). sbatch CLI
+# flags take precedence over #SBATCH directives, so compute the real range from
+# OG_COUNT and inject it. Skipped when the caller passes an explicit --array.
+ARRAY_FLAG=()
+if grep -qE '^#SBATCH[[:space:]]+--array=' "$STAGE_SCRIPT" \
+   && ! printf '%s\n' "$@" | grep -q -- '--array='; then
+    _manifest="${RESULTS_DIR}/orthogroup_manifest.tsv"
+    _og_count=$(get_orthogroup_count "$_manifest")
+    # Preserve the stage's intended concurrency limit (%K) unless overridden.
+    _throttle="${ARRAY_THROTTLE:-$(grep -oP '^#SBATCH\s+--array=\S*%\K\d+' "$STAGE_SCRIPT" | head -1)}"
+    _throttle="${_throttle:-50}"
+    _detected_max=$(scontrol show config 2>/dev/null | grep -oP 'MaxArraySize\s*=\s*\K\d+' | head -1)
+    _max_array="${MAX_ARRAY_SIZE:-${_detected_max:-10001}}"
+
+    if [ "${_og_count:-0}" -gt 0 ] 2>/dev/null; then
+        if _spec=$(python3 "${SCRIPTS_DIR}/array_plan.py" --n-tasks "$_og_count" \
+                       --throttle "$_throttle" --max-array-size "$_max_array"); then
+            ARRAY_FLAG=(--array="$_spec")
+            echo "[submit_stage] sized array from manifest: --array=${_spec} (OG_COUNT=${_og_count}, MaxArraySize=${_max_array})" >&2
+        else
+            echo "[submit_stage] ERROR: manifest (${_og_count} orthogroups) exceeds MaxArraySize=${_max_array}; refusing to submit a truncated array." >&2
+            exit 3
+        fi
+    else
+        echo "[submit_stage] WARN: orthogroup count unknown/zero (${_manifest}); leaving the script's --array directive in place" >&2
+    fi
+fi
+
 # Submit and surface the job id on stdout for capture by callers.
-sbatch_out=$(sbatch "$@" "$PREPROCESSED")
+sbatch_out=$(sbatch "${ARRAY_FLAG[@]}" "$@" "$PREPROCESSED")
 echo "$sbatch_out"
 echo "$sbatch_out" | grep -oP 'Submitted batch job \K\d+'
