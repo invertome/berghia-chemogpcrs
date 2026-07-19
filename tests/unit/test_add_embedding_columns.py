@@ -72,6 +72,54 @@ def test_joins_emb_novelty_residual_when_present(tmp_path: Path):
     assert dict(zip(df["id"], df["emb_novelty_residual"])) == {"c1": "6.1", "c2": ""}
 
 
+def _extra(tmp_path: Path, name: str, rows) -> str:
+    p = tmp_path / name
+    pd.DataFrame(rows).to_csv(p, sep="\t", index=False)
+    return str(p)
+
+
+def test_extra_tsv_joins_its_columns_as_is(tmp_path: Path):
+    # A3 (model_role_split) columns are already self-describing -> join unprefixed.
+    ranked = _ranked(tmp_path, [{"id": "c1", "rank_score": "0.9"},
+                                {"id": "c2", "rank_score": "0.5"}])
+    extra = _extra(tmp_path, "role.tsv", [
+        {"id": "c1", "emb_novelty_phylo": "0.2", "emb_role_gap": "0.7"},
+        {"id": "c2", "emb_novelty_phylo": "0.8", "emb_role_gap": "-0.3"},
+    ])
+    out = tmp_path / "out.csv"
+    aec.add_embedding_columns(ranked_csv_path=ranked, channel_tsv_path="",
+                              out_path=str(out), extra_tsvs=[extra])
+    df = pd.read_csv(out, dtype=str, keep_default_na=False)
+    assert dict(zip(df["id"], df["emb_role_gap"])) == {"c1": "0.7", "c2": "-0.3"}
+    assert dict(zip(df["id"], df["emb_novelty_phylo"])) == {"c1": "0.2", "c2": "0.8"}
+
+
+def test_extra_tsv_prefix_namespaces_generic_column_names(tmp_path: Path):
+    # A4 (embedding_nulls) emits generic names (p_value, collapsed) that would be
+    # ambiguous in a ranked CSV -> PREFIX:PATH namespaces them.
+    ranked = _ranked(tmp_path, [{"id": "c1", "rank_score": "0.9"}])
+    extra = _extra(tmp_path, "nulls.tsv", [
+        {"id": "c1", "p_value": "0.01", "collapsed": "False"},
+    ])
+    out = tmp_path / "out.csv"
+    aec.add_embedding_columns(ranked_csv_path=ranked, channel_tsv_path="",
+                              out_path=str(out), extra_tsvs=[f"emb_null:{extra}"])
+    df = pd.read_csv(out, dtype=str, keep_default_na=False)
+    assert df["emb_null_p_value"].iloc[0] == "0.01"
+    assert df["emb_null_collapsed"].iloc[0] == "False"
+    assert "p_value" not in df.columns          # un-namespaced name not leaked
+
+
+def test_missing_extra_tsv_is_dormant_not_an_error(tmp_path: Path):
+    ranked = _ranked(tmp_path, [{"id": "c1", "rank_score": "0.9"}])
+    out = tmp_path / "out.csv"
+    aec.add_embedding_columns(ranked_csv_path=ranked, channel_tsv_path="",
+                              out_path=str(out),
+                              extra_tsvs=[str(tmp_path / "nope.tsv")])
+    df = pd.read_csv(out, dtype=str, keep_default_na=False)
+    assert list(df["id"]) == ["c1"]             # rows preserved, no crash
+
+
 def test_candidate_missing_from_channel_gets_blank(tmp_path: Path):
     ranked = _ranked(tmp_path, [{"id": "c1", "rank_score": "0.9"},
                                 {"id": "c2", "rank_score": "0.5"}])

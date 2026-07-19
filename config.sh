@@ -562,6 +562,27 @@ export EMB_CANDIDATE_IDENTITY_TSV="${EMB_CANDIDATE_IDENTITY_TSV:-${EMBEDDINGS_DI
 # decision. See docs/plans/2026-07-18-plm-integration-roadmap.md (Track A/A1).
 export RUN_EMB_RESIDUAL_NOVELTY="${RUN_EMB_RESIDUAL_NOVELTY:-0}"
 export EMB_CLASSA_TREE="${EMB_CLASSA_TREE:-${RESULTS_DIR}/phylogenies/protein/class_A/class_A.treefile}"
+
+# --- A3/A4 embedding diagnostics (DORMANT columns, default OFF) ---
+# Where fusion_consensus caches per-model novelty (novelty_<tag>_PROD.tsv); both
+# A3 and A4 read from here. Neither emits a ranking voter (nothing is added to
+# SIGNAL_SPEC) — they add descriptive columns only, so the shortlist is unchanged.
+export EMB_DIAG_DIR="${EMB_DIAG_DIR:-${RESULTS_DIR}/ranking/diagnostics}"
+
+# A3 (v4bs.4) — model-role split. emb_role_gap = function-role novelty percentile
+# minus phylo-role novelty percentile (positive = functionally novel BEYOND
+# phylogenetic expectation). Requires BOTH models' cached novelty TSVs, so the
+# phylo-role model must be included in the diagnostics run.
+export RUN_EMB_ROLE_SPLIT="${RUN_EMB_ROLE_SPLIT:-0}"
+export EMB_ROLE_PHYLO_MODEL="${EMB_ROLE_PHYLO_MODEL:-esm2_3b}"        # phylogeny-tracking
+export EMB_ROLE_FUNCTION_MODEL="${EMB_ROLE_FUNCTION_MODEL:-protrek}"  # function/text-aligned
+
+# A4 (v4bs.5) — residue-shuffle embedding null -> per-candidate novelty p-value.
+# Needs the shuffled-sequence RE-EMBEDDINGS (GPU side): one per-replicate
+# per-candidate novelty TSV named novelty_shuffle_*.tsv under EMB_NULL_DIR.
+export RUN_EMB_NULLS="${RUN_EMB_NULLS:-0}"
+export EMB_NULL_MODEL="${EMB_NULL_MODEL:-protrek}"   # model the shuffles were embedded with
+export EMB_NULL_DIR="${EMB_NULL_DIR:-${RESULTS_DIR}/ranking/diagnostics/nulls}"
 export PHYLO_WEIGHT=2           # Weight for phylogenetic distance to references
 # Bead -ea9: PURIFYING_WEIGHT defaults to 0 because chemoreceptor identification
 # rewards diversifying selection on extracellular loops, not whole-gene

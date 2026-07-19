@@ -169,6 +169,7 @@ if [ "${EMB_SCORER:-consensus}" = "consensus" ]; then
             --candidate-fasta "${EMB_CANDIDATE_FASTA}" \
             --combiner rra --deconfound seq_len \
             "${_emb_residual_args[@]}" \
+            --diag-dir "${EMB_DIAG_DIR}" \
             --out "${CHANNELS_DIR}/embedding_channel.tsv" \
             2>> "${LOGS_DIR}/embedding_channel.err" \
             || log --level=WARN "Consensus embedding channel producer failed (channel stays dormant)"
@@ -197,6 +198,54 @@ else
             || log --level=WARN "Embedding channel producer failed (channel stays dormant)"
     else
         log "Note: ESM-C embeddings not found (${ESMC_CANDIDATE_NPZ}, ${ESMC_REFERENCE_NPZ}) -- embedding channel skipped, stays dormant"
+    fi
+fi
+
+# --- A3/A4 embedding diagnostics (DORMANT, default OFF) -----------------------
+# Both consume the per-model novelty TSVs fusion_consensus caches
+# (${EMB_DIAG_DIR}/novelty_<tag>_PROD.tsv) and emit DESCRIPTIVE columns only —
+# neither is in SIGNAL_SPEC, so neither can become a ranking voter until promoted
+# by a separate gated decision. Each is self-gated on its inputs, so a missing
+# producer simply leaves its columns absent (never an error).
+EMB_EXTRA_ARGS=()
+
+# A3 (v4bs.4): ESM-2 (phylogeny-tracking) vs ProTrek (function/text-aligned)
+# novelty gap — functional novelty beyond phylogenetic expectation.
+if [ "${RUN_EMB_ROLE_SPLIT:-0}" = "1" ]; then
+    _phylo_tsv="${EMB_DIAG_DIR}/novelty_${EMB_ROLE_PHYLO_MODEL}_PROD.tsv"
+    _func_tsv="${EMB_DIAG_DIR}/novelty_${EMB_ROLE_FUNCTION_MODEL}_PROD.tsv"
+    _role_out="${CHANNELS_DIR}/model_role_split.tsv"
+    if [ -f "${_phylo_tsv}" ] && [ -f "${_func_tsv}" ]; then
+        if python3 "${SCRIPTS_DIR}/model_role_split.py" \
+                --phylo-tsv "${_phylo_tsv}" --function-tsv "${_func_tsv}" \
+                --out "${_role_out}" 2>> "${LOGS_DIR}/embedding_channel.err"; then
+            EMB_EXTRA_ARGS+=(--extra-tsv "${_role_out}")
+            log "A3: model-role split -> ${_role_out} (dormant emb_role_gap column)"
+        else
+            log --level=WARN "A3 model-role split failed; its columns stay absent"
+        fi
+    else
+        log "Note: A3 skipped (need ${_phylo_tsv} + ${_func_tsv}) -- stays dormant"
+    fi
+fi
+
+# A4 (v4bs.5): residue-shuffle null -> per-candidate novelty p-value. Needs the
+# shuffled-sequence RE-EMBEDDINGS (GPU side) as per-replicate novelty TSVs.
+if [ "${RUN_EMB_NULLS:-0}" = "1" ]; then
+    _obs_tsv="${EMB_DIAG_DIR}/novelty_${EMB_NULL_MODEL}_PROD.tsv"
+    _null_out="${CHANNELS_DIR}/embedding_nulls.tsv"
+    _null_tsvs=( "${EMB_NULL_DIR}"/novelty_shuffle_*.tsv )
+    if [ -f "${_obs_tsv}" ] && [ -e "${_null_tsvs[0]}" ]; then
+        if python3 "${SCRIPTS_DIR}/embedding_nulls.py" \
+                --observed-tsv "${_obs_tsv}" --null-tsv "${_null_tsvs[@]}" \
+                --out "${_null_out}" 2>> "${LOGS_DIR}/embedding_channel.err"; then
+            EMB_EXTRA_ARGS+=(--extra-tsv "emb_null:${_null_out}")
+            log "A4: residue-shuffle null (${#_null_tsvs[@]} replicates) -> ${_null_out} (dormant)"
+        else
+            log --level=WARN "A4 embedding nulls failed; its columns stay absent"
+        fi
+    else
+        log "Note: A4 skipped (need ${_obs_tsv} + ${EMB_NULL_DIR}/novelty_shuffle_*.tsv) -- stays dormant"
     fi
 fi
 
@@ -329,6 +378,7 @@ if [ -f "$HCR_AUG_INPUT" ]; then
     python3 "${SCRIPTS_DIR}/add_embedding_columns.py" \
         --ranked-csv "$HCR_AUG_INPUT" \
         --channel-tsv "${CHANNELS_DIR}/embedding_channel.tsv" \
+        "${EMB_EXTRA_ARGS[@]}" \
         --out "$HCR_AUG_INPUT" \
         2>> "${LOGS_DIR}/embedding_columns.err" \
         || log --level=WARN "Embedding column augmentation failed (kept original CSV)"

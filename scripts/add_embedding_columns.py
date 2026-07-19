@@ -46,17 +46,38 @@ EMB_COLUMNS = ["emb_novelty", "emb_novelty_residual", "emb_nonchemo_family",
 CHANNEL_ID = "id"
 
 
+def _split_extra_spec(spec: str):
+    """``[PREFIX:]PATH`` -> ``(prefix, path)``.
+
+    A leading token is only treated as a prefix when it contains no ``/``, so
+    absolute paths (and paths with colons) are never mis-split.
+    """
+    head = spec.split(":", 1)[0]
+    if ":" in spec and head and "/" not in head:
+        prefix, path = spec.split(":", 1)
+        return prefix, path
+    return "", spec
+
+
 def add_embedding_columns(
     *,
     ranked_csv_path: str,
     channel_tsv_path: str,
     out_path: str,
     id_column: str = "id",
+    extra_tsvs=None,
 ) -> int:
     """Join the embedding channel's emb_* columns into the ranked CSV in place.
 
     Returns the number of rows written. Guarantees an ``emb_novelty`` column
     exists in the output regardless of whether the channel TSV is present.
+
+    ``extra_tsvs`` (A3/A4): additional id-keyed diagnostic TSVs to left-join, each
+    given as ``[PREFIX:]PATH``. Producers whose column names are already
+    self-describing (model_role_split -> emb_role_gap) need no prefix; those with
+    generic names (embedding_nulls -> p_value, collapsed) pass a PREFIX so they are
+    namespaced in the ranked CSV. A missing TSV is skipped (the producer is
+    dormant), never an error — the same contract as the channel itself.
     """
     df = pd.read_csv(ranked_csv_path, dtype=str, keep_default_na=False)
 
@@ -78,6 +99,30 @@ def add_embedding_columns(
             print(f"WARN: embedding channel {channel_tsv_path!r} has no "
                   f"{CHANNEL_ID!r} column; emb columns not joined", file=sys.stderr)
 
+    # A3/A4 diagnostic producers: left-join each extra TSV's columns.
+    for spec in (extra_tsvs or []):
+        prefix, path = _split_extra_spec(spec)
+        if not path or not os.path.exists(path):
+            continue                      # producer dormant -> nothing to join
+        ex = pd.read_csv(path, sep="\t", dtype=str, keep_default_na=False)
+        if id_column not in ex.columns and CHANNEL_ID in ex.columns:
+            ex = ex.rename(columns={CHANNEL_ID: id_column})
+        if id_column not in ex.columns:
+            print(f"WARN: extra TSV {path!r} has no {id_column!r} column; skipped",
+                  file=sys.stderr)
+            continue
+        value_cols = [c for c in ex.columns if c != id_column]
+        rename = {
+            c: (f"{prefix}_{c}" if prefix and not c.startswith(f"{prefix}_") else c)
+            for c in value_cols
+        }
+        ex = ex[[id_column] + value_cols].rename(columns=rename)
+        # The producer is authoritative for its own columns (no duplicates).
+        df = df.drop(columns=[c for c in rename.values() if c in df.columns])
+        df = df.merge(ex, on=id_column, how="left")
+        for c in rename.values():
+            df[c] = df[c].fillna("")
+
     # Guarantee the always-present sortable column even when the channel is
     # dormant (no npz) or malformed.
     if "emb_novelty" not in df.columns:
@@ -98,6 +143,10 @@ def main() -> int:
     ap.add_argument("--out", required=True, help="Output CSV path")
     ap.add_argument("--id-column", default="id",
                     help="Candidate id column in the ranked CSV (default 'id')")
+    ap.add_argument("--extra-tsv", action="append", default=[], metavar="[PREFIX:]PATH",
+                    help="Additional id-keyed diagnostic TSV to left-join "
+                         "(repeatable). PREFIX namespaces generic column names, "
+                         "e.g. 'emb_null:...'. Missing file = dormant, not an error.")
     args = ap.parse_args()
 
     n_rows = add_embedding_columns(
@@ -105,6 +154,7 @@ def main() -> int:
         channel_tsv_path=args.channel_tsv,
         out_path=args.out,
         id_column=args.id_column,
+        extra_tsvs=args.extra_tsv,
     )
     print(f"Wrote {args.out} (annotated {n_rows} rows)", file=sys.stderr)
     return 0
