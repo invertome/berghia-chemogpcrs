@@ -99,13 +99,89 @@ WEIGHTS = {
 # ---- Reliability now shrinks the norm columns UPSTREAM (not in the scorer) --
 
 def test_full_reliability_matches_baseline(calc) -> None:
-    """At dnds_rw = 1.0 the score must equal the plain baseline (identity)."""
+    """At dnds_rw = 1.0 the score equals the completeness-based baseline.
+
+    Bead 0rg unification: the sensitivity scorer now mirrors the production
+    completeness-based formula. In ``_row`` there is no ``has_phylo_data``, so
+    phylo/lse_depth are o98-gated OUT and only purifying+positive are present.
+    total_weight = ALL weights (missing axes penalize completeness); avail =
+    purifying+positive; completeness = max(0.4, avail/total).
+    """
     df = pd.DataFrame([_row(positive=0.8, dnds_rw=1.0)])
     out = calc(df, WEIGHTS).iloc[0]
-    # Active axes: phylo (0)*2 + purifying (0)*1 + positive (0.8)*1 + lse (0)*1
-    # total_weight = 2 + 1 + 1 + 1 = 5; max_possible_weight = sum(WEIGHTS).
-    expected = (0.0 + 0.0 + 0.8 + 0.0) / 5.0 * sum(WEIGHTS.values())
+    avail = WEIGHTS['purifying'] + WEIGHTS['positive']      # 2
+    total = sum(WEIGHTS.values())                            # 19
+    completeness = max(0.4, avail / total)                   # 0.4 (floored)
+    expected = (0.8 / avail) * completeness                  # (0.8/2)*0.4 = 0.16
     assert out == pytest.approx(expected)
+
+
+# ---- Bead 0rg: sensitivity scorer unified with the production formula --------
+
+def test_phylo_lse_gated_out_without_phylo_data(calc) -> None:
+    """o98 gate: phylo/lse_depth are class-A-tree signals, so a candidate NOT in
+    that tree (has_phylo_data absent/False) must have them EXCLUDED — supplying
+    phylo/lse values must not change its score. Previously the sensitivity scorer
+    counted them at full weight (present-zero), unlike the production scorer."""
+    s_base = calc(pd.DataFrame([_row(positive=0.8)]), WEIGHTS).iloc[0]
+    s_vals = calc(pd.DataFrame([_row(positive=0.8, phylo=0.9, lse=0.9)]), WEIGHTS).iloc[0]
+    assert s_base == pytest.approx(s_vals)
+
+
+def test_phylo_counted_when_has_phylo_data(calc) -> None:
+    """With has_phylo_data True the phylo/lse axes DO contribute, so the gate is
+    a real switch (not a no-op)."""
+    row = _row(positive=0.8, phylo=0.9, lse=0.9)
+    row['has_phylo_data'] = True
+    s_gated_in = calc(pd.DataFrame([row]), WEIGHTS).iloc[0]
+    s_gated_out = calc(pd.DataFrame([_row(positive=0.8, phylo=0.9, lse=0.9)]), WEIGHTS).iloc[0]
+    assert s_gated_in != pytest.approx(s_gated_out)
+
+
+def test_completeness_penalizes_sparse_candidate(calc) -> None:
+    """Completeness multiplier (bead -ce4, now in the sensitivity path too): with
+    the SAME per-axis score, a candidate with much MORE present evidence scores
+    strictly higher — a sparse candidate is NOT inflated to parity."""
+    sparse = _row(positive=0.8, purifying=0.8)               # 2 axes present
+    full = _row(positive=0.8, purifying=0.8, phylo=0.8, lse=0.8)
+    full['has_phylo_data'] = True
+    for flag, col in [('has_synteny_data', 'synteny_score_norm'),
+                      ('has_expression_data', 'expression_score_norm'),
+                      ('has_chemosensory_expr_data', 'chemosensory_expr_score_norm'),
+                      ('has_gprotein_data', 'gprotein_coexpr_score_norm'),
+                      ('has_ecl_data', 'ecl_divergence_score_norm'),
+                      ('has_expansion_data', 'expansion_score_norm'),
+                      ('has_og_confidence_data', 'og_confidence_score_norm')]:
+        full[flag] = True
+        full[col] = 0.8
+    s_sparse = calc(pd.DataFrame([sparse]), WEIGHTS).iloc[0]
+    s_full = calc(pd.DataFrame([full]), WEIGHTS).iloc[0]
+    assert s_full > s_sparse
+
+
+def test_sensitivity_matches_production_lib_formula(calc) -> None:
+    """Divergence guard: the (inlined) sensitivity formula must produce exactly
+    what the production lib scorer produces for the same scores/weights — so the
+    two cannot silently drift apart again (the original 0rg defect)."""
+    import _rank_candidates_lib as lib
+
+    row = _row(positive=0.7, purifying=0.6, phylo=0.5, lse=0.4)
+    row['has_phylo_data'] = True
+    row['has_synteny_data'] = True
+    row['synteny_score_norm'] = 0.9
+    s_sens = calc(pd.DataFrame([row]), WEIGHTS).iloc[0]
+
+    scores = {'phylo': 0.5, 'lse_depth': 0.4, 'purifying': 0.6, 'positive': 0.7,
+              'synteny': 0.9, 'expression': None, 'chemosensory_expr': None,
+              'gprotein_coexpr': None, 'ecl_divergence': None, 'expansion': None,
+              'og_confidence': None, 'tandem_cluster': None}
+    weights = {'phylo': 2.0, 'lse_depth': 1.0, 'purifying': 1.0, 'positive': 1.0,
+               'synteny': 3.0, 'expression': 1.0, 'chemosensory_expr': 3.0,
+               'gprotein_coexpr': 2.0, 'ecl_divergence': 2.0, 'expansion': 1.0,
+               'og_confidence': 1.0, 'tandem_cluster': 0.0}
+    s_lib = lib.calculate_fair_rank_score(scores, weights,
+                                          completeness_floor=0.4, dnds_reliability=1.0)
+    assert s_sens == pytest.approx(s_lib)
 
 
 def test_calculate_rank_score_is_reliability_agnostic(calc) -> None:

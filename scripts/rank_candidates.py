@@ -1451,64 +1451,51 @@ def calculate_rank_score(df, weights):
     Returns:
         Series of rank scores
     """
-    max_possible_weight = sum(weights.values())
+    # Bead 0rg: this sensitivity scorer now mirrors the PRODUCTION completeness-
+    # based formula (_rank_candidates_lib.calculate_fair_rank_score) exactly —
+    # (weighted_sum / avail_weight) * max(floor, avail_weight / total_weight) —
+    # with the o98 phylo gate, so the Monte-Carlo weight-sensitivity analysis
+    # reflects the real scoring instead of the old (score/total_weight)*max
+    # normalization (which inflated sparse-data candidates and counted phylo/lse
+    # at full weight even when absent). Kept self-contained (no lib import) so the
+    # unit-test harness can exec it in a {pd, np} namespace; a parity test guards
+    # against the two formulas drifting apart again.
+    completeness_floor = 0.4
+    total_weight = float(sum(max(float(w), 0.0) for w in weights.values()))
+
+    # (weight_key, score_col, has_flag) per axis. has_flag None => always present
+    # (dN/dS reliability is shrunk upstream). phylo/lse gate on has_phylo_data (o98).
+    _axes = [
+        ('phylo', 'phylo_score_norm', 'has_phylo_data'),
+        ('lse_depth', 'lse_depth_score_norm', 'has_phylo_data'),
+        ('purifying', 'purifying_score_norm', None),
+        ('positive', 'positive_score_norm', None),
+        ('synteny', 'synteny_score_norm', 'has_synteny_data'),
+        ('expr', 'expression_score_norm', 'has_expression_data'),
+        ('chemosensory_expr', 'chemosensory_expr_score_norm', 'has_chemosensory_expr_data'),
+        ('gprotein_coexpr', 'gprotein_coexpr_score_norm', 'has_gprotein_data'),
+        ('ecl_divergence', 'ecl_divergence_score_norm', 'has_ecl_data'),
+        ('expansion', 'expansion_score_norm', 'has_expansion_data'),
+        ('og_confidence', 'og_confidence_score_norm', 'has_og_confidence_data'),
+        ('tandem_cluster', 'tandem_cluster_score_norm', 'has_tandem_cluster_data'),
+    ]
 
     def calc_row(row):
-        # Base scores always available. dN/dS reliability is now shrunk into
-        # positive_score_norm/purifying_score_norm upstream (dnds_reliability +
-        # the pre-write shrink block), so it must NOT be re-applied here or it
-        # would double-count the reliability weight.
-        score = (
-            row['phylo_score_norm'] * weights.get('phylo', 0) +
-            row['purifying_score_norm'] * weights.get('purifying', 0) +
-            row['positive_score_norm'] * weights.get('positive', 0) +
-            row['lse_depth_score_norm'] * weights.get('lse_depth', 0)
-        )
-        total_weight = (
-            weights.get('phylo', 0) +
-            weights.get('purifying', 0) +
-            weights.get('positive', 0) +
-            weights.get('lse_depth', 0)
-        )
-
-        # Conditionally add synteny and expression
-        if row.get('has_synteny_data', False):
-            score += row['synteny_score_norm'] * weights.get('synteny', 0)
-            total_weight += weights.get('synteny', 0)
-        if row.get('has_expression_data', False):
-            score += row['expression_score_norm'] * weights.get('expr', 0)
-            total_weight += weights.get('expr', 0)
-
-        # NEW: Conditionally add Phase 1-5 scores
-        if row.get('has_chemosensory_expr_data', False):
-            score += row.get('chemosensory_expr_score_norm', 0) * weights.get('chemosensory_expr', 0)
-            total_weight += weights.get('chemosensory_expr', 0)
-        if row.get('has_gprotein_data', False):
-            score += row.get('gprotein_coexpr_score_norm', 0) * weights.get('gprotein_coexpr', 0)
-            total_weight += weights.get('gprotein_coexpr', 0)
-        if row.get('has_ecl_data', False):
-            score += row.get('ecl_divergence_score_norm', 0) * weights.get('ecl_divergence', 0)
-            total_weight += weights.get('ecl_divergence', 0)
-        if row.get('has_expansion_data', False):
-            score += row.get('expansion_score_norm', 0) * weights.get('expansion', 0)
-            total_weight += weights.get('expansion', 0)
-        if row.get('has_og_confidence_data', False):
-            score += row.get('og_confidence_score_norm', 0) * weights.get('og_confidence', 0)
-            total_weight += weights.get('og_confidence', 0)
-        # Bead 0rg (MEDIUM-4): include the tandem-cluster axis — the field's
-        # signature chemoreceptor signal (TANDEM_CLUSTER_WEIGHT=2.5) — so the
-        # sensitivity analysis actually exercises it instead of reporting a
-        # near-zero weight_importance for the highest-weight axis. (Full
-        # unification with the completeness-based production formula, incl. the
-        # o98 phylo gate, remains a separate refactor — see bead 0rg.)
-        if row.get('has_tandem_cluster_data', False):
-            score += row.get('tandem_cluster_score_norm', 0) * weights.get('tandem_cluster', 0)
-            total_weight += weights.get('tandem_cluster', 0)
-
-        # Normalize to max possible
-        if total_weight > 0:
-            return (score / total_weight) * max_possible_weight
-        return 0.0
+        avail_weight = 0.0
+        weighted_sum = 0.0
+        for wkey, col, flag in _axes:
+            if flag is not None and not row.get(flag, False):
+                continue
+            v = row.get(col, 0)
+            if v is None or (isinstance(v, float) and v != v):   # skip None / NaN
+                continue
+            w = max(float(weights.get(wkey, 0)), 0.0)
+            avail_weight += w
+            weighted_sum += w * float(v)
+        if avail_weight <= 0.0 or total_weight <= 0.0:
+            return 0.0
+        completeness = max(completeness_floor, avail_weight / total_weight)
+        return (weighted_sum / avail_weight) * completeness
 
     return df.apply(calc_row, axis=1)
 
