@@ -573,6 +573,17 @@ export RUN_EMB_RESIDUAL_NOVELTY="${RUN_EMB_RESIDUAL_NOVELTY:-0}"
 # unlike the stage-04 tree, which is budgeted and built against the older
 # 206-anchor set. Produced by scripts/unity/a1_tree_final.sh.
 export EMB_CLASSA_TREE="${EMB_CLASSA_TREE:-${RESULTS_DIR}/phylogenies/protein/class_A_a1/class_A_a1.treefile}"
+# Characterized class-A anchor FASTA — the centroid for the A2 composition
+# confound (and the A1 backbone input). NOTE: references/anchors/derived/ is
+# gitignored, so this must be regenerated (scripts/extract_prod_anchors.py) or
+# re-copied after a fresh clone / hard reset. If absent, composition_distance
+# falls back to self-centering on the candidates.
+export EMB_ANCHOR_CLASSA_FASTA="${EMB_ANCHOR_CLASSA_FASTA:-${REFERENCE_DIR}/anchors/derived/anchor_set_PROD_classA.fasta}"
+# The residual confound set is {tree_distance, composition}: novelty beyond BOTH
+# phylogenetic and amino-acid-composition expectation. Composition was added on
+# measured evidence (Spearman +0.365 vs protrek novelty, p=2.4e-26), not by
+# assumption. Each term is produced independently in stage 07, so a missing
+# producer degrades the residual rather than losing it.
 
 # --- A3/A4 embedding diagnostics (DORMANT columns, default OFF) ---
 # Where fusion_consensus caches per-model novelty (novelty_<tag>_PROD.tsv); both

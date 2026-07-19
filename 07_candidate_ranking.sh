@@ -146,19 +146,55 @@ if [ "${EMB_SCORER:-consensus}" = "consensus" ]; then
     # ids come from load_ref_labels (the composite ANCHOR_ ids that key the tree/
     # npz), NOT a bare accession cut. Self-gated on the tree file; on id-mismatch
     # the residualizer drops non-matching ids and the residual stays empty (inert).
+    # Each confound is produced and gated INDEPENDENTLY; --residual-confound then
+    # lists whichever succeeded, so one missing producer degrades the residual
+    # rather than losing it entirely.
     _emb_residual_args=()
-    if [ "${RUN_EMB_RESIDUAL_NOVELTY:-0}" = "1" ] && [ -f "${EMB_CLASSA_TREE}" ]; then
-        _tree_dist_tsv="${CHANNELS_DIR}/tree_distance.tsv"
-        _ref_ids_tmp="${CHANNELS_DIR}/.classA_ref_ids.txt"
-        python3 -c "import sys; sys.path.insert(0, '${SCRIPTS_DIR}'); from build_embedding_channel import load_ref_labels; print('\n'.join(load_ref_labels('${EMB_REF_LABELS}')))" \
-            > "${_ref_ids_tmp}" 2>> "${LOGS_DIR}/embedding_channel.err" || true
-        if [ -s "${_ref_ids_tmp}" ] && python3 "${SCRIPTS_DIR}/tree_distance_to_refs.py" \
-                --tree "${EMB_CLASSA_TREE}" --ref-ids "${_ref_ids_tmp}" \
-                --out "${_tree_dist_tsv}" 2>> "${LOGS_DIR}/embedding_channel.err"; then
-            _emb_residual_args=(--confound-tsv "tree_distance:${_tree_dist_tsv}" --residual-confound "tree_distance")
-            log "A1: emb_novelty_residual wired from ${EMB_CLASSA_TREE} (DORMANT column, not a voter)"
+    _residual_names=()
+    if [ "${RUN_EMB_RESIDUAL_NOVELTY:-0}" = "1" ]; then
+        # --- tree_distance (A1): novelty beyond PHYLOGENETIC expectation ---
+        if [ -f "${EMB_CLASSA_TREE}" ]; then
+            _tree_dist_tsv="${CHANNELS_DIR}/tree_distance.tsv"
+            _ref_ids_tmp="${CHANNELS_DIR}/.classA_ref_ids.txt"
+            python3 -c "import sys; sys.path.insert(0, '${SCRIPTS_DIR}'); from build_embedding_channel import load_ref_labels; print('\n'.join(load_ref_labels('${EMB_REF_LABELS}')))" \
+                > "${_ref_ids_tmp}" 2>> "${LOGS_DIR}/embedding_channel.err" || true
+            if [ -s "${_ref_ids_tmp}" ] && python3 "${SCRIPTS_DIR}/tree_distance_to_refs.py" \
+                    --tree "${EMB_CLASSA_TREE}" --ref-ids "${_ref_ids_tmp}" \
+                    --out "${_tree_dist_tsv}" 2>> "${LOGS_DIR}/embedding_channel.err"; then
+                _emb_residual_args+=(--confound-tsv "tree_distance:${_tree_dist_tsv}")
+                _residual_names+=("tree_distance")
+                log "A1: tree_distance confound ready (${EMB_CLASSA_TREE})"
+            else
+                log --level=WARN "A1 tree-distance producer skipped/failed; residual loses the phylogeny term"
+            fi
         else
-            log --level=WARN "A1 tree-distance producer skipped/failed; emb_novelty_residual stays absent"
+            log "Note: A1 tree ${EMB_CLASSA_TREE} absent; residual loses the phylogeny term"
+        fi
+
+        # --- composition (A2): novelty beyond AA-COMPOSITION expectation ---
+        # Measured on real data: composition_distance correlates with novelty at
+        # Spearman +0.365 (protrek, p=2.4e-26) — i.e. compositionally atypical
+        # candidates score MORE novel, the artifact this strips. Reference centroid
+        # is the characterized class-A anchor set when available, else self-centered.
+        _comp_tsv="${CHANNELS_DIR}/composition_distance.tsv"
+        _comp_ref_arg=()
+        [ -f "${EMB_ANCHOR_CLASSA_FASTA}" ] && _comp_ref_arg=(--reference-fasta "${EMB_ANCHOR_CLASSA_FASTA}")
+        if [ -f "${EMB_CANDIDATE_FASTA}" ] && python3 "${SCRIPTS_DIR}/composition_distance.py" \
+                --candidate-fasta "${EMB_CANDIDATE_FASTA}" "${_comp_ref_arg[@]}" \
+                --out "${_comp_tsv}" 2>> "${LOGS_DIR}/embedding_channel.err"; then
+            _emb_residual_args+=(--confound-tsv "composition:${_comp_tsv}")
+            _residual_names+=("composition")
+            log "A2: composition confound ready"
+        else
+            log --level=WARN "A2 composition producer skipped/failed; residual loses the composition term"
+        fi
+
+        if [ "${#_residual_names[@]}" -gt 0 ]; then
+            _emb_residual_args+=(--residual-confound "$(IFS=,; echo "${_residual_names[*]}")")
+            log "A1/A2: emb_novelty_residual wired on {${_residual_names[*]}} (DORMANT column, not a voter)"
+        else
+            _emb_residual_args=()
+            log --level=WARN "No residual confound available; emb_novelty_residual stays absent"
         fi
     fi
     if [ "${#_emb_specs[@]}" -ge 2 ] && [ -f "${EMB_CANDIDATE_FASTA}" ]; then
