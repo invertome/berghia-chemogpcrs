@@ -50,7 +50,14 @@ INPUT="${OUTDIR}/a1_input.fa"
 
 echo "[a1_pilot] candidates=$(grep -c '^>' "$CAND_FASTA")  anchors=$(grep -c '^>' "$ANCHOR_FASTA")"
 cat "$CAND_FASTA" "$ANCHOR_FASTA" > "$INPUT"
-assert_no_duplicate_fasta_ids "$INPUT" "A1 combined input" || exit 1
+# Self-contained duplicate-id guard (the checkout's functions.sh may predate
+# assert_no_duplicate_fasta_ids): candidate ids and ANCHOR_ ids are disjoint by
+# construction, so any collision is a real error.
+_dupes=$(grep '^>' "$INPUT" | sed 's/^>//; s/[[:space:]].*//' | sort | uniq -d)
+if [ -n "$_dupes" ]; then
+    echo "[a1_pilot] ERROR: duplicate sequence ids in combined input:"; echo "$_dupes" | head
+    exit 1
+fi
 echo "[a1_pilot] combined input = $(grep -c '^>' "$INPUT") seqs -> $INPUT"
 
 MAFFT_EINSI_DASH=(mafft --dash --originalseqonly --genafpair --maxiterate 1000)
