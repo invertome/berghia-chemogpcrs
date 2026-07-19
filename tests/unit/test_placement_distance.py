@@ -83,6 +83,30 @@ def test_ref_ids_restricts_which_leaves_count_as_references():
     assert out["q5"] == pytest.approx(4.25)
 
 
+def test_query_name_is_normalized_to_the_bare_id():
+    """EPA-ng writes the FULL FASTA header (description included) into the jplace
+    ``n`` field, e.g. 'BersteEVm002467t1 type=protein; aalen=1008,78%;...'. Every
+    other join key in the pipeline is the FIRST whitespace token (Newick cannot
+    hold spaces, npz keys are bare ids, the ranked CSV joins on the bare id), so
+    emitting the raw header would silently join to NOTHING downstream. Caught by a
+    real end-to-end EPA-ng run whose de-novo/placement id sets had zero overlap.
+    """
+    header = ("BersteEVm002467t1 type=protein; aalen=1008,78%,complete; "
+              "clen=3863; organism=Berghia_stephanieae;")
+    out = nearest_ref_distance_from_jplace(
+        _jplace([{"n": [header], "p": [[0, -100.0, 1.0, 0.25, 0.5]]}]))
+    assert "BersteEVm002467t1" in out
+    assert out["BersteEVm002467t1"] == pytest.approx(0.75)
+    assert not any(" " in k for k in out), "ids must never carry the description"
+
+
+def test_multiplicity_name_form_is_normalized_too():
+    out = nearest_ref_distance_from_jplace(
+        _jplace([{"nm": [["BersteEVm003311t1 type=protein; clen=3293;", 1]],
+                  "p": [[0, -100.0, 1.0, 0.25, 0.5]]}]))
+    assert "BersteEVm003311t1" in out
+
+
 def test_multiplicity_name_form_is_supported():
     # jplace allows "nm": [[name, multiplicity], ...] instead of "n"
     out = nearest_ref_distance_from_jplace(

@@ -93,11 +93,21 @@ def _below_above(tree, ref_ids: Optional[Iterable[str]] = None):
 
 
 def _query_names(placement: dict):
-    """jplace allows ``n: [names]`` or ``nm: [[name, multiplicity], ...]``."""
+    """jplace allows ``n: [names]`` or ``nm: [[name, multiplicity], ...]``.
+
+    Names are normalized to the FIRST WHITESPACE TOKEN. EPA-ng carries the whole
+    FASTA header (description included) here, whereas every other join key in the
+    pipeline is the bare id — Newick cannot hold spaces, npz keys are bare, and
+    the ranked CSV joins on the bare id. Emitting the raw header would produce a
+    column that silently joins to nothing (observed: a real EPA-ng run whose
+    de-novo and placement id sets had ZERO overlap despite both having 60 rows).
+    """
     if "n" in placement:
         n = placement["n"]
-        return list(n) if isinstance(n, (list, tuple)) else [n]
-    return [entry[0] for entry in placement.get("nm", [])]
+        names = list(n) if isinstance(n, (list, tuple)) else [n]
+    else:
+        names = [entry[0] for entry in placement.get("nm", [])]
+    return [str(x).split()[0] for x in names if str(x).strip()]
 
 
 def nearest_ref_distance_from_jplace(
