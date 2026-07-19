@@ -560,8 +560,19 @@ export EMB_CANDIDATE_IDENTITY_TSV="${EMB_CANDIDATE_IDENTITY_TSV:-${EMBEDDINGS_DI
 # requires confirming the class-A tree leaf ids match the embedding candidate/ref
 # ids on a real run, and promoting the residual to a voter is a separate gated
 # decision. See docs/plans/2026-07-18-plm-integration-roadmap.md (Track A/A1).
+#
+# ID PLUMBING NOW VERIFIED (measured, not assumed): the embedding candidate npz
+# keys match the A1 tree's candidate leaves 790/790 with zero orphans, and all
+# 953 class-A anchors are present in the reference npz. So the residual will
+# genuinely populate rather than silently come back empty. What remains gated is
+# the SCIENCE, not the plumbing: the residual must be shown to reduce the
+# novelty-vs-phylogeny correlation on the finished tree before being enabled.
 export RUN_EMB_RESIDUAL_NOVELTY="${RUN_EMB_RESIDUAL_NOVELTY:-0}"
-export EMB_CLASSA_TREE="${EMB_CLASSA_TREE:-${RESULTS_DIR}/phylogenies/protein/class_A/class_A.treefile}"
+# The DEDICATED A1 tree (790 class-A candidates + 953 class-A PROD anchors) is
+# the id-verified reference frame and matches the PLM novelty frame exactly —
+# unlike the stage-04 tree, which is budgeted and built against the older
+# 206-anchor set. Produced by scripts/unity/a1_tree_final.sh.
+export EMB_CLASSA_TREE="${EMB_CLASSA_TREE:-${RESULTS_DIR}/phylogenies/protein/class_A_a1/class_A_a1.treefile}"
 
 # --- A3/A4 embedding diagnostics (DORMANT columns, default OFF) ---
 # Where fusion_consensus caches per-model novelty (novelty_<tag>_PROD.tsv); both

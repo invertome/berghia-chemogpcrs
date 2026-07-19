@@ -103,6 +103,26 @@ def test_empty_placement_list_is_skipped_not_an_error():
     assert out == {}
 
 
+def test_real_epa_ng_placement_pins_the_distal_length_convention():
+    """Regression test built from ACTUAL EPA-ng output, not a hand-made fixture.
+
+    A query that is an exact copy of leaf ``A`` was placed on A's terminal edge
+    (length 1.0); EPA-ng reported distal_length=5e-5 and pendant_length=1e-4.
+    Because the query is identical to A it must sit AT the tip, so distal_length
+    is measured from the distal/child node. The distance is therefore
+    pendant + distal = 1.5e-4. If the convention were read from the parent end
+    instead, this would come out ~1.0001 — so this test is what keeps the
+    orientation from silently flipping.
+    """
+    tree = ("((A:1.0000000000{0},B:0.0500000000{1}):0.1000000000{2},"
+            "(C:0.0500000000{3},D:0.0500000000{4}):0.1000000000{5});")
+    out = nearest_ref_distance_from_jplace(
+        _jplace([{"n": ["q_copy_of_A"], "p": [[0, -100.0, 1.0, 0.00005, 0.0001]]}],
+                tree=tree))
+    assert out["q_copy_of_A"] == pytest.approx(0.00015, abs=1e-9)
+    assert out["q_copy_of_A"] < 0.5, "distal_length must not be read from the parent end"
+
+
 def test_distances_are_finite_and_non_negative():
     out = nearest_ref_distance_from_jplace(
         _jplace([{"n": ["q9"], "p": [[3, -100.0, 1.0, 1.0, 0.2]]}]))

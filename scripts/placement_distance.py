@@ -17,9 +17,17 @@ Output schema is deliberately identical to tree_distance_to_refs.py
 
 Geometry. A placement sits on the backbone edge ``edge_num`` at
 ``distal_length`` d from that edge's DISTAL (away-from-root) node v, with a
-``pendant_length`` p branch to the query. With ``below[v]`` = nearest reference
-leaf below v and ``above[v]`` = nearest reference leaf reached by going up and
-around from v, the distance is::
+``pendant_length`` p branch to the query.
+
+That orientation is not assumed — it is VERIFIED against real EPA-ng output: a
+query identical to leaf ``A`` on a length-1.0 terminal branch is placed on A's
+edge with ``distal_length`` = 5e-5 (i.e. ~0, at the tip), not ~1.0. So the offset
+is measured from the distal/child node, as used below. Getting this backwards
+would inflate every distance by roughly the edge length (~6600x in that test),
+so the convention is pinned by a regression test built from that real placement.
+
+With ``below[v]`` = nearest reference leaf below v and ``above[v]`` = nearest
+reference leaf reached by going up and around from v, the distance is::
 
     p + min( d + below[v],  above[v] - d )
 
