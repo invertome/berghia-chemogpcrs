@@ -177,11 +177,19 @@ def aggregate(per_signal_ranklists, method="rra", groups=None):
 #     "higher stored value = better" holds for every signal, exclusion or
 #     not. See merge_evidence_channels() for how the Task-4/5/6 channel
 #     outputs get joined onto the ranking df in the first place.
+# The four formerly-ungated base signals now name their availability flag, so
+# bead o98's phylo-absence rule (a candidate outside the class-A tree has no
+# meaningful phylo/lse_depth signal, and is judged on its other axes rather
+# than scored a present 0.0) applies on BOTH ranking paths instead of only the
+# weighted one, and dN/dS gates on whether aBSREL actually reported. Their
+# flags are OPTIONAL: unlike the evidence channels, a df with no flag column
+# (a legacy ranked CSV) keeps them voting rather than dropping them -- see
+# _OPTIONAL_FLAG_SIGNALS in build_ranklists_from_df.
 SIGNAL_SPEC = [
-    ("phylo", None),
-    ("purifying", None),
-    ("positive", None),
-    ("lse_depth", None),
+    ("phylo", "has_phylo_data"),
+    ("purifying", "has_dnds_data"),
+    ("positive", "has_dnds_data"),
+    ("lse_depth", "has_phylo_data"),
     ("synteny", "has_synteny_data"),
     ("expression", "has_expression_data"),
     ("chemosensory_expr", "has_chemosensory_expr_data"),
@@ -208,7 +216,39 @@ SIGNAL_SPEC = [
 ]
 
 
-def build_ranklists_from_df(df, id_col="id"):
+# Signals whose has_*_data flag is honoured when the column is present but
+# whose absence means "this CSV predates the flag", not "no data". Keeping the
+# fallback is what stops a legacy ranked CSV from producing an EMPTY ranklist
+# set (a gated signal with no flag column is skipped entirely).
+_OPTIONAL_FLAG_SIGNALS = frozenset({"phylo", "purifying", "positive", "lse_depth"})
+
+
+def excluded_signals_from_weights(weights, env_var="RANKAGG_EXCLUDED_SIGNALS"):
+    """Signals that must NOT vote under rank aggregation.
+
+    RRA is weight-free by design and stays so: this does NOT reinterpret
+    weights as RRA inputs. It reads one specific, discrete piece of intent out
+    of them -- a weight of exactly 0 is an EXCLUSION, not a small weight -- and
+    turns it into an explicit named set, so the semantics are visible in the
+    ranking's provenance rather than implied by a number the aggregator never
+    sees.
+
+    The motivating case is ``PURIFYING_WEIGHT=0`` (bead -ea9): whole-gene
+    purifying selection is the wrong signal for chemoreceptor discovery, so the
+    weighted scorer drops the axis entirely. Without this, `purifying` votes at
+    full strength under the production default RANK_METHOD=rankagg.
+
+    Policy is reversible without touching weights: setting
+    ``RANKAGG_EXCLUDED_SIGNALS`` overrides the derivation verbatim (a
+    comma-separated signal list; empty string = exclude nothing).
+    """
+    override = os.getenv(env_var)
+    if override is not None:
+        return {name.strip() for name in override.split(",") if name.strip()}
+    return {name for name, weight in weights.items() if float(weight) == 0.0}
+
+
+def build_ranklists_from_df(df, id_col="id", excluded=None):
     """Build ``{signal: {id: score}}`` for every signal in SIGNAL_SPEC from a df.
 
     The 12 core ranking signals prefer the normalized ``<signal>_score_norm``
@@ -229,12 +269,21 @@ def build_ranklists_from_df(df, id_col="id"):
     signals are dropped so a signal only "votes" where it has data; a signal
     whose column (or, for a gated signal, whose flag column) is entirely
     absent from ``df`` is skipped -- this is what keeps the Task-6 channels
-    dormant until merge_evidence_channels() has actually joined them in.
+    dormant until merge_evidence_channels() has actually joined them in. The
+    exception is _OPTIONAL_FLAG_SIGNALS, which fall back to voting when their
+    flag column is missing so a legacy CSV still ranks.
+
+    ``excluded`` names signals that must not vote at all (see
+    :func:`excluded_signals_from_weights`); the default excludes nothing, so
+    omitting it reproduces the previous behaviour exactly.
     """
+    excluded = set(excluded or ())
     ids = list(df[id_col])
     ranklists = {}
     for spec in SIGNAL_SPEC:
         key, flag = spec[0], spec[1]
+        if key in excluded:
+            continue
         column = spec[2] if len(spec) > 2 else None
         invert = spec[3] if len(spec) > 3 else False
         if column is not None:
@@ -249,6 +298,9 @@ def build_ranklists_from_df(df, id_col="id"):
             keep = [True] * len(ids)
         elif flag in df.columns:
             keep = [bool(v) for v in df[flag]]
+        elif key in _OPTIONAL_FLAG_SIGNALS:
+            # legacy CSV predating the flag column -> keep the signal voting
+            keep = [True] * len(ids)
         else:
             # gated signal whose flag column is absent -> treat as no data
             continue
@@ -327,7 +379,7 @@ def normalize_group_names(groups):
     return [[strip(n) for n in group] for group in groups]
 
 
-def rerank_output(df_sorted, method, groups=None):
+def rerank_output(df_sorted, method, groups=None, excluded=None):
     """Return ``df_sorted`` reordered by the chosen ranking method.
 
     ``method != "rankagg"`` (the default ``"weighted"``): returns ``df_sorted``
@@ -335,12 +387,15 @@ def rerank_output(df_sorted, method, groups=None):
     stays byte-identical. ``method == "rankagg"``: reorders rows by a Robust
     Rank Aggregation fusion of the SIGNAL_SPEC per-signal ranklists (the 12
     core signals, plus any Task-6 evidence channels present; ``groups`` fuses
-    confounded signals into one vote); ids covered by no signal keep their
+    confounded signals into one vote; ``excluded`` names signals barred from
+    voting, e.g. a zero-weight axis -- see
+    :func:`excluded_signals_from_weights`); ids covered by no signal keep their
     incoming (weighted) order at the tail via a stable sort.
     """
     if method != "rankagg":
         return df_sorted
-    order = aggregate(build_ranklists_from_df(df_sorted), method="rra", groups=groups)
+    ranklists = build_ranklists_from_df(df_sorted, excluded=excluded)
+    order = aggregate(ranklists, method="rra", groups=groups)
     pos = {idv: i for i, idv in enumerate(order)}
     tail = len(pos)
     keyed = df_sorted.assign(_rankagg_pos=[pos.get(i, tail) for i in df_sorted["id"]])

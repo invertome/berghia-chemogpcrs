@@ -141,6 +141,20 @@ def add_classification_columns(ranked_csv_path: str,
     # unsuppressed score, and re-sort. This SUPPRESSES rather than drops, so a
     # mislabelled divergent candidate stays recoverable from the full list; set
     # both factors to 1.0 to disable.
+    #
+    # The re-sort keys on `final_rank`, the PRODUCTION order, NOT on
+    # `rank_score`. Under RANK_METHOD=rankagg (the production default)
+    # `rank_score` stays the DEMOTED weighted composite while row order carries
+    # the rank-aggregation result, so sorting by rank_score silently restored
+    # the weighted ordering -- even with nothing reclassified and every factor
+    # 1.0. That matters downstream because 08_structural_analysis.sh picks the
+    # AlphaFold set by ROW POSITION (`head -n N | cut -d, -f1`).
+    #
+    # Suppression is therefore applied as a demotion of the production order:
+    # candidates sort by (suppression factor descending, final_rank ascending),
+    # so a classified non-chemoreceptor sinks below the unclassified ones while
+    # everything keeps its production order WITHIN its class, under either
+    # RANK_METHOD. Both factors at 1.0 is then exactly order-preserving.
     if "rank_score" in df.columns:
         factor = df["classification"].map({
             "non-chemoreceptor": float(nonchemo_rank_factor),
@@ -149,8 +163,21 @@ def add_classification_columns(ranked_csv_path: str,
         df["rank_score_prefilter"] = df["rank_score"]
         df["classification_rank_factor"] = factor
         df["rank_score"] = pd.to_numeric(df["rank_score"], errors="coerce") * factor
-        df = df.sort_values("rank_score", ascending=False,
-                            kind="mergesort").reset_index(drop=True)
+
+        if "final_rank" in df.columns:
+            df["final_rank_prefilter"] = pd.to_numeric(
+                df["final_rank"], errors="coerce")
+            df = (df.assign(_factor=factor)
+                    .sort_values(["_factor", "final_rank_prefilter"],
+                                 ascending=[False, True], kind="mergesort")
+                    .drop(columns="_factor")
+                    .reset_index(drop=True))
+            df["final_rank"] = range(1, len(df) + 1)
+        else:
+            # Legacy ranked CSV predating final_rank: the weighted composite is
+            # the only order available.
+            df = df.sort_values("rank_score", ascending=False,
+                                kind="mergesort").reset_index(drop=True)
         if "rank" in df.columns:
             df["rank"] = range(1, len(df) + 1)
 

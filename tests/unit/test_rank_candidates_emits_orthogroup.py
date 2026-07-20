@@ -158,7 +158,13 @@ def _extract_results_append_dict() -> dict:
     # We only care that 'orthogroup' is a key — not the actual values.
     ns: dict = {
         'cand_id': 'dummy_id',
-        'leaf_lookup': {},  # o98: 'has_phylo_data': cand_id in leaf_lookup
+        'leaf_lookup': {},  # o98: has_phylo = cand_id in leaf_lookup
+        # Bound at rank_candidates.py:1918-1919, well before the dict literal at
+        # :2040-2041 uses them. This harness execs only the literal, so the
+        # loop-local names must be supplied here.
+        'has_phylo': False,
+        'has_dnds': False,
+        'completeness': 0.0,
         'phylo_score': 0.0,
         'purifying_score': 0.0,
         'positive_score': 0.0,
@@ -239,8 +245,13 @@ def test_rank_candidates_output_cols_include_orthogroup() -> None:
 
     # Find all output_cols = [ ... ] list definitions
     occurrences = [m.start() for m in re.finditer(r'output_cols\s*=\s*\[', src)]
-    assert len(occurrences) == 2, (
-        f"Expected exactly 2 'output_cols = [' definitions in rank_candidates.py, "
+    # There must be exactly ONE. There used to be two: the second was a drifted
+    # hand-maintained literal that omitted 'final_rank', and because it was
+    # assigned last it won -- so the production rank order never reached the
+    # shipped CSV at all. A second copy is the defect, not the design.
+    assert len(occurrences) == 1, (
+        f"Expected exactly ONE 'output_cols = [' definition in rank_candidates.py "
+        f"(a second, drifting copy is how 'final_rank' was lost), "
         f"found {len(occurrences)}"
     )
 
@@ -277,7 +288,7 @@ def test_output_cols_include_norm_signals_for_discovery_view() -> None:
     with open(os.path.join(repo, 'scripts', 'rank_candidates.py')) as f:
         src = f.read()
     occurrences = [m.start() for m in re.finditer(r'output_cols\s*=\s*\[', src)]
-    assert len(occurrences) == 2
+    assert len(occurrences) == 1  # one definition; a second drifting copy is the defect
     for pos in occurrences:
         bracket_depth = 0
         list_start = src.index('[', pos)

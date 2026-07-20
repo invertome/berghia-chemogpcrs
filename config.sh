@@ -510,6 +510,10 @@ export CROSSVAL_FOLDS=5                  # Number of CV folds
 export SALMON_QUANT_DIR="${BASE_DIR}/expression_data"  # Directory with Salmon quant.sf outputs
 export MIN_TPM_THRESHOLD=1.0             # Minimum TPM for "expressed"
 export TAU_THRESHOLD=0.8                 # Tau index threshold for tissue-specific
+# THE controlled vocabulary of chemosensory tissue names. Single source of
+# truth: CHEMOSENSORY_TISSUE_WEIGHTS (below) assigns relative weights over
+# THIS list and may not introduce names of its own. Names must match the
+# <tissue>_tpm columns the expression stage emits -- lookups are by exact key.
 export CHEMOSENSORY_TISSUES="rhinophore,oral_veil,tentacle,cephalic"  # Tissues to check for enrichment
 
 # --- Run Mode ---
@@ -740,7 +744,14 @@ export LOCAL_DB_DIR="${BASE_DIR}/databases"
 export NON_CHEMOSENSORY_TISSUES="foot,digestive,gonad,mantle"  # For tau index calculation
 export CHEMOSENSORY_EXPR_WEIGHT=3         # Weight for chemosensory-specific expression score
 export CHEMOSENSORY_HARD_FILTER=false     # If true, exclude candidates without chemosensory expression
-export CHEMOSENSORY_TISSUE_WEIGHTS="rhinophore:2.0,oral-tentacle:1.0"  # Rhinophore prioritized over oral tentacle
+# Relative weights over the CHEMOSENSORY_TISSUES vocabulary ONLY. Any tissue in
+# that vocabulary with no entry here defaults to weight 1.0; naming a tissue
+# NOT in the vocabulary is a hard error (rank_candidates.py:resolve_tissue_weights).
+# Previously this read "rhinophore:2.0,oral-tentacle:1.0" -- `oral-tentacle`
+# matched no emitted tissue column, so tentacle/oral_veil/cephalic TPM
+# contributed exactly 0 while the phantom entry still diluted the divisor, and
+# the rhinophore-dominance test always passed (making the 1.5x branch dead).
+export CHEMOSENSORY_TISSUE_WEIGHTS="rhinophore:2.0"  # Rhinophore prioritized; others default to 1.0
 
 # === NEW: G-protein Co-expression (Phase 2) ===
 # Identify GPCRs co-expressed with olfactory G-proteins (Golf, Gi, Go)

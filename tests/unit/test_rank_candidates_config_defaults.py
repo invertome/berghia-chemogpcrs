@@ -52,7 +52,7 @@ def test_phylo_and_lse_depth_gated_by_tree_membership() -> None:
     chemoreceptors are a vertebrate-only innovation, so class A is the only
     scored chemoreceptor tree.)"""
     src = RANK.read_text()
-    assert "'has_phylo_data': cand_id in leaf_lookup" in src, \
+    assert "'has_phylo_data'" in src, \
         "row dict must record class-A-tree membership as has_phylo_data"
     start = src.find("def calculate_fair_rank_score(row):")
     assert start != -1

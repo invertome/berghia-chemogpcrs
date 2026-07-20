@@ -149,13 +149,10 @@ LSE_DEPTH_WEIGHT = float(os.getenv('LSE_DEPTH_WEIGHT', 1))
 CHEMOSENSORY_EXPR_WEIGHT = float(os.getenv('CHEMOSENSORY_EXPR_WEIGHT', 3))
 CHEMOSENSORY_HARD_FILTER = os.getenv('CHEMOSENSORY_HARD_FILTER', 'false').lower() == 'true'
 
-# Tissue-specific weights for chemosensory scoring (rhinophore prioritized)
-# Format: comma-separated tissue:weight pairs
-CHEMOSENSORY_TISSUE_WEIGHTS_STR = os.getenv('CHEMOSENSORY_TISSUE_WEIGHTS', 'rhinophore:2.0,oral-tentacle:1.0')
-CHEMOSENSORY_TISSUE_WEIGHTS = {}
-for pair in CHEMOSENSORY_TISSUE_WEIGHTS_STR.split(','):
-    tissue, weight = pair.strip().split(':')
-    CHEMOSENSORY_TISSUE_WEIGHTS[tissue.strip()] = float(weight.strip())
+CHEMOSENSORY_TISSUES_STR = os.getenv(
+    'CHEMOSENSORY_TISSUES', 'rhinophore,oral_veil,tentacle,cephalic')
+CHEMOSENSORY_TISSUE_WEIGHTS_STR = os.getenv(
+    'CHEMOSENSORY_TISSUE_WEIGHTS', 'rhinophore:2.0')
 
 # NEW: Phase 2 - G-protein co-expression weight
 GPROTEIN_COEXPR_WEIGHT = float(os.getenv('GPROTEIN_COEXPR_WEIGHT', 2))
@@ -1072,6 +1069,91 @@ def load_chemosensory_expression(results_dir):
     return expr_data
 
 
+def evidence_completeness(*, has_phylo_data, has_dnds_data, has_synteny,
+                          has_expression, has_lse_data, has_chemo_expr,
+                          has_gprotein, has_ecl, has_expansion, has_og_data,
+                          has_tandem):
+    """Fraction of the 11 evidence axes that HAVE DATA for a candidate.
+
+    Availability, never value. Three axes used to be tested with ``score > 0``,
+    which conflates "we never measured this" with "we measured it and it came
+    out low":
+
+      - ``lse_depth``: get_lse_depth_score() returns 0.0 for any candidate at
+        or below ``lse_threshold``, and that threshold is the
+        LSE_DEPTH_PERCENTILE (75th) percentile of ALL candidate depths. So ~75%
+        of candidates can never score > 0 BY CONSTRUCTION while being perfectly
+        well measured. Availability is tree membership -- the same
+        ``has_phylo_data`` the phylo axis uses (bead o98).
+      - ``phylo``: same tree-membership question, and the flag already existed.
+      - ``purifying``/``positive``: availability is whether aBSREL reported at
+        all (``has_dnds_data``). Under PURIFYING_WEIGHT=0 a conserved gene
+        scores 0.0 on both, which is a result, not a gap.
+
+    This matters beyond bookkeeping: understating completeness by one axis
+    (0.636 vs 0.727 for a candidate with 7 genuine sources plus a measured
+    subthreshold depth) crosses the CONFIDENCE_MIN_COMPLETENESS default of 0.7
+    and silently drops the candidate out of emit_ranked_views' confidence view.
+    """
+    sources = [
+        has_phylo_data,
+        has_dnds_data,
+        has_synteny,
+        has_expression,
+        has_lse_data,
+        has_chemo_expr,
+        has_gprotein,
+        has_ecl,
+        has_expansion,
+        has_og_data,
+        has_tandem,
+    ]
+    return sum(bool(s) for s in sources) / len(sources)
+
+
+def resolve_tissue_weights(tissues, weights_str):
+    """Build the effective ``{tissue: weight}`` map from ONE vocabulary.
+
+    ``CHEMOSENSORY_TISSUES`` is the single controlled vocabulary of chemosensory
+    tissue names; ``CHEMOSENSORY_TISSUE_WEIGHTS`` only assigns *relative
+    weights* over it and may not introduce names of its own. Every vocabulary
+    member with no explicit weight defaults to 1.0, so a tissue can never be
+    silently dropped by omitting it from the weights string.
+
+    The two used to be independent definitions that disagreed: the weights
+    named ``oral-tentacle``, which matches no ``<tissue>_tpm`` column the
+    expression producer emits. ``tissue_tpms`` is looked up by EXACT key, so
+    that entry contributed 0.0 for every candidate while still counting in the
+    weighted mean's divisor, AND it made `other_chemo_tpms` permanently [0.0]
+    (see get_chemosensory_expression_score). A weight naming a tissue outside
+    the vocabulary is now a hard error rather than a silent zero.
+    """
+    vocabulary = [t.strip() for t in str(tissues).split(',') if t.strip()]
+    weights = {t: 1.0 for t in vocabulary}
+    unknown = []
+    for pair in str(weights_str).split(','):
+        if not pair.strip():
+            continue
+        tissue, _, weight = pair.partition(':')
+        tissue = tissue.strip()
+        if tissue not in weights:
+            unknown.append(tissue)
+            continue
+        weights[tissue] = float(weight.strip())
+    if unknown:
+        raise ValueError(
+            f"CHEMOSENSORY_TISSUE_WEIGHTS names tissue(s) {sorted(unknown)} "
+            f"that are not in the CHEMOSENSORY_TISSUES vocabulary "
+            f"{vocabulary}. Tissue TPMs are looked up by exact key, so these "
+            f"weights would match nothing the expression stage emits. Add the "
+            f"tissue to CHEMOSENSORY_TISSUES or correct the spelling.")
+    return weights
+
+
+CHEMOSENSORY_TISSUE_WEIGHTS = resolve_tissue_weights(
+    CHEMOSENSORY_TISSUES_STR, CHEMOSENSORY_TISSUE_WEIGHTS_STR)
+
+
 def get_chemosensory_expression_score(candidate_id, chemo_expr_data,
                                       tissue_weights=None):
     """
@@ -1096,7 +1178,7 @@ def get_chemosensory_expression_score(candidate_id, chemo_expr_data,
         return 0.0, False
 
     if tissue_weights is None:
-        tissue_weights = {'rhinophore': 2.0, 'oral-tentacle': 1.0}
+        tissue_weights = CHEMOSENSORY_TISSUE_WEIGHTS
 
     score = 0.0
     tissue_tpms = data.get('tissue_tpms', {})
@@ -1829,6 +1911,12 @@ for cand_id in candidates['id']:
 
     # Selection scores (separate purifying and positive)
     purifying_score, positive_score, selection_significant = get_selection_scores(cand_id, dnds_data)
+    # AVAILABILITY of each axis, kept separate from its VALUE. `has_dnds_data`
+    # is whether aBSREL actually reported for this candidate: under
+    # PURIFYING_WEIGHT=0 a purely-purifying gene scores 0.0 on both selection
+    # axes, which is a measured result, not missing evidence.
+    has_dnds = cand_id in dnds_data
+    has_phylo = cand_id in leaf_lookup
 
     # Bead -urk: BUSTED-S/MH gene-wide signal + MEME site-level signal for
     # this candidate's OG. These are SUPPLEMENTARY to the per-branch aBSREL
@@ -1925,23 +2013,20 @@ for cand_id in candidates['id']:
     has_tandem = cand_id in tandem_cluster_info
     tandem_size, tandem_cluster_label = tandem_cluster_info.get(cand_id, (None, None))
 
-    # Track evidence completeness (based on data availability, not just score > 0)
-    # Updated to include new score sources
-    evidence_sources = [
-        phylo_score > 0,
-        purifying_score > 0 or positive_score > 0,
-        has_synteny,
-        has_expression,
-        lse_score > 0,
-        has_chemo_expr,
-        has_gprotein,
-        has_ecl,
-        has_expansion,
-        has_og_data,
-        has_tandem,
-    ]
-    evidence_count = sum(evidence_sources)
-    evidence_completeness = evidence_count / len(evidence_sources)
+    # Track evidence completeness. AVAILABILITY only -- see evidence_completeness().
+    completeness = evidence_completeness(
+        has_phylo_data=has_phylo,
+        has_dnds_data=has_dnds,
+        has_synteny=has_synteny,
+        has_expression=has_expression,
+        has_lse_data=has_phylo,
+        has_chemo_expr=has_chemo_expr,
+        has_gprotein=has_gprotein,
+        has_ecl=has_ecl,
+        has_expansion=has_expansion,
+        has_og_data=has_og_data,
+        has_tandem=has_tandem,
+    )
 
     results.append({
         'id': cand_id,
@@ -1952,7 +2037,8 @@ for cand_id in candidates['id']:
         # (not scored as a present 0.0) and the candidate is judged on its other
         # axes rather than penalized. Berghia GPCR chemoreceptors are class-A
         # rhodopsin-like; class C chemoreceptors are a vertebrate-only innovation.
-        'has_phylo_data': cand_id in leaf_lookup,
+        'has_phylo_data': has_phylo,
+        'has_dnds_data': has_dnds,
         'purifying_score': purifying_score,
         'positive_score': positive_score,
         'selection_significant': selection_significant,
@@ -2008,7 +2094,7 @@ for cand_id in candidates['id']:
         # — that takes dN/dS out of fair-scoring entirely for that row.
         'dnds_reliability_weight': (
             og_dnds_reliability.get(cand_og, 0.0) if cand_og else 0.0),
-        'evidence_completeness': evidence_completeness
+        'evidence_completeness': completeness
     })
 
 df = pd.DataFrame(results)
@@ -2211,11 +2297,23 @@ df_sorted = df.sort_values('rank_score', ascending=False)
 # stage-07 audit's groups.json, if present). Switching the production shortlist
 # is a separate gated decision; this only reorders the emitted CSV on request.
 if RANK_METHOD == 'rankagg':
-    from rank_aggregation import rerank_output as _rerank_output
+    from rank_aggregation import (rerank_output as _rerank_output,
+                                  excluded_signals_from_weights as _excluded)
     _channels_dir = os.path.join(os.path.dirname(output_file), 'channels')
     df_sorted = _merge_channels_if_present(df_sorted, _channels_dir)
     _signal_groups = _load_signal_groups(output_file)
-    df_sorted = _rerank_output(df_sorted, 'rankagg', groups=_signal_groups)
+    # RRA is weight-free and stays so, but a weight of exactly 0 is an
+    # EXCLUSION, not a small weight (PURIFYING_WEIGHT=0, bead -ea9). Turn that
+    # one discrete piece of intent into an explicit named set so a zero-weight
+    # axis cannot vote at full strength here; RANKAGG_EXCLUDED_SIGNALS
+    # overrides in either direction.
+    _excluded_signals = _excluded(SCORING_WEIGHTS)
+    if _excluded_signals:
+        print(f"rankagg: excluding zero-weight signal(s) "
+              f"{sorted(_excluded_signals)} from the aggregation",
+              file=sys.stderr)
+    df_sorted = _rerank_output(df_sorted, 'rankagg', groups=_signal_groups,
+                               excluded=_excluded_signals)
 
 # Persist the PRODUCTION order as an explicit 1-based rank. The active
 # RANK_METHOD (weighted or rankagg) determines df_sorted's row order, but
@@ -2230,8 +2328,11 @@ df_sorted['final_rank'] = range(1, len(df_sorted) + 1)
 # computed on the final df_sorted (post-shrink, post-rankagg -- so it also counts
 # any evidence channels merged in above). The reliability shrink changed signal
 # VALUES upstream, not signal PRESENCE, so this count is unaffected by it.
+# Excluded (zero-weight) signals are omitted under rankagg so the count
+# describes the voters that actually shaped the order.
 from rank_aggregation import build_ranklists_from_df as _brl
-_rls = _brl(df_sorted)
+_rls = _brl(df_sorted,
+            excluded=(_excluded_signals if RANK_METHOD == 'rankagg' else None))
 df_sorted['n_signals_present'] = df_sorted['id'].map(
     lambda i: sum(1 for s in _rls.values() if i in s))
 
@@ -2239,7 +2340,8 @@ df_sorted['n_signals_present'] = df_sorted['id'].map(
 output_cols = [
     'id', 'final_rank', 'dnds_reliability_weight', 'n_signals_present',
     'orthogroup', 'rank_score', 'confidence_tier', 'evidence_completeness',
-    'phylo_score', 'purifying_score', 'positive_score', 'positive_score_norm', 'selection_significant',
+    'phylo_score', 'purifying_score', 'purifying_score_norm',
+    'positive_score', 'positive_score_norm', 'selection_significant',
     # Bead -urk: BUSTED/MEME diagnostic columns
     'busted_s_p', 'busted_s_significant', 'busted_mh_p', 'busted_mh_significant',
     'meme_n_episodic_sites', 'meme_fraction_episodic_sites',
@@ -2247,7 +2349,7 @@ output_cols = [
     'meme_high_confidence_sites', 'meme_lenient_only_sites',
     'meme_strict_only_sites', 'meme_alignment_robustness_index',
     'synteny_score', 'has_synteny_data', 'expression_score', 'has_expression_data',
-    'lse_depth_score', 'raw_tree_depth',
+    'lse_depth_score', 'raw_tree_depth', 'has_phylo_data', 'has_dnds_data',
     # NEW: Phase 1-5 scores
     'chemosensory_expr_score', 'has_chemosensory_expr_data',
     'gprotein_coexpr_score', 'has_gprotein_data',
@@ -2443,29 +2545,12 @@ if RUN_CROSSVAL and len(ref_ids) >= CROSSVAL_FOLDS:
               file=sys.stderr)
 
 # --- Update output columns if sensitivity was run ---
-output_cols = [
-    'id', 'orthogroup', 'rank_score', 'confidence_tier', 'evidence_completeness',
-    'phylo_score', 'purifying_score', 'positive_score', 'positive_score_norm', 'selection_significant',
-    # Bead -urk: BUSTED/MEME diagnostic columns
-    'busted_s_p', 'busted_s_significant', 'busted_mh_p', 'busted_mh_significant',
-    'meme_n_episodic_sites', 'meme_fraction_episodic_sites',
-    # Bead -7cy: MEME concordance stratification (alignment-robust subset).
-    'meme_high_confidence_sites', 'meme_lenient_only_sites',
-    'meme_strict_only_sites', 'meme_alignment_robustness_index',
-    'synteny_score', 'has_synteny_data', 'expression_score', 'has_expression_data',
-    'lse_depth_score', 'raw_tree_depth',
-    # NEW: Phase 1-5 scores
-    'chemosensory_expr_score', 'has_chemosensory_expr_data',
-    'gprotein_coexpr_score', 'has_gprotein_data',
-    'ecl_divergence_score', 'has_ecl_data',
-    'expansion_score', 'has_expansion_data',
-    'og_confidence_score', 'has_og_confidence_data',
-    # Bead -ar8: tandem cluster columns
-    'tandem_cluster_score', 'tandem_cluster_score_norm', 'tandem_cluster_size', 'tandem_cluster_id',
-    'has_tandem_cluster_data',
-    # Bead -325: CDS provenance (native vs miniprot-recovered)
-    'cds_source',
-]
+# The column list is defined ONCE above. This block used to re-declare a
+# second hand-written literal, which drifted: it omitted final_rank,
+# n_signals_present and dnds_reliability_weight. Since this write is
+# unconditional and runs LAST, the shipped CSV silently lost the production
+# order column that emit_ranked_views.py and add_classification_columns.py
+# key on. Derive, never re-declare.
 
 if sensitivity_results and 'rank_stability' in df_sorted.columns:
     output_cols.extend(['rank_stability', 'std_rank', 'rank_range'])
