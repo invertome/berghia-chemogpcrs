@@ -2022,3 +2022,483 @@ run_alignment_filter_stack() {
     log "filter_stack[$tag]: $output ready (n=$(grep -c '^>' "$output"); canonical sibling: $(basename "$canonical_sibling"))"
     return 0
 }
+
+# ==========================================================================
+# STAGE OUTPUT CONTRACT
+# ==========================================================================
+#
+# Why this block exists
+# ---------------------
+# A completion flag used to mean "the script reached its last line". It did
+# NOT mean "the stage produced anything". Stage 05 read a per-orthogroup path
+# that stage 04's per-class refactor had moved two levels deeper, produced no
+# aBSREL / GARD / BUSTED / MEME / ASR output for ANY orthogroup, wrote
+# step_completed_05.txt anyway, and stage 07 ran on and merely logged "aBSREL
+# results not found". An audit found 1 of 18 stages verified a declared output
+# before flagging itself complete.
+#
+# Three mechanisms below close that hole. All three live HERE, in functions.sh,
+# rather than in run_pipeline.sh, because stages are routinely submitted
+# individually with a bare `sbatch 05_selective_pressure_and_asr.sh` and never
+# see the orchestrator. Everything here works with functions.sh sourced alone.
+#
+# The design rule throughout: encode the RELATIONSHIP, not the VALUE. Three
+# independent copies of "where stage 04 puts a per-OG tree" drifted out of
+# sync because each stored a literal path. A resolver that derives location
+# from the class map, and a declaration that names a product by kind, cannot
+# drift the same way.
+#
+# NOTE: this is the MECHANISM only. Rewiring the 18 stages to call it is a
+# separate, consult-gated change. Intended adopters are named per function.
+# ==========================================================================
+
+# --- Per-class / per-orthogroup output layout -----------------------------
+#
+# Stage 04 emits two shapes under ${RESULTS_DIR}/phylogenies/protein:
+#
+#   per-class (global)   class_<C>/class_<C>.treefile      + class_<C>_trimmed.fa
+#   per-orthogroup       class_<C>/<base>/<base>.treefile  + <base>_trimmed.fa
+#
+# The single place that knows that layout.
+og_layout_root() {
+    echo "${RESULTS_DIR}/phylogenies/protein"
+}
+
+# --- Product-name relationships -------------------------------------------
+# Maps a logical product KIND to the basename pattern stage 04 writes, with
+# @@ standing in for the base. A pattern is a relationship; a path is a value.
+# Callers say `tree`, never "<base>.treefile", so a rename lands in one place.
+og_product_pattern() {
+    case "$1" in
+        tree|treefile)      echo '@@.treefile' ;;
+        alignment|trimmed)  echo '@@_trimmed.fa' ;;
+        aligned)            echo '@@_aligned.fa' ;;
+        *)                  return 1 ;;
+    esac
+}
+
+# --- Resolve an orthogroup's class ----------------------------------------
+# Arguments: $1 - orthogroup base (e.g. OG0000123)
+# Prints the class to stdout. Mirrors stage 04's routing exactly, including
+# both of its fallbacks, so readers and the writer cannot disagree.
+#
+# Intended adopters: 04_phylogenetic_analysis.sh:524-534 (the writer) and
+# 05_selective_pressure_and_asr.sh:274-284 (resolve_perog_paths). Neither is
+# edited here.
+resolve_og_class() {
+    local og_base="$1"
+    local og_class_tsv="${RESULTS_DIR}/classification/og_class_majority.tsv"
+    local cls=""
+
+    if [ -f "${og_class_tsv}" ]; then
+        cls=$(awk -F'\t' -v og="${og_base}" 'NR>1 && $1==og {print $2; exit}' "${og_class_tsv}")
+        if [ -z "${cls}" ]; then
+            # Stage 04 routes unknown OGs to class_unclassified.
+            cls="unclassified"
+        fi
+    else
+        # Back-compat: runs predating per-OG class assignment went to class_A.
+        cls="A"
+    fi
+    echo "${cls}"
+}
+
+# --- Resolve the directory holding an orthogroup's (or class's) outputs ----
+# Arguments: $1 - orthogroup base, or a `class_<C>` global base
+# Prints the directory. Does NOT require the products to exist, so it is safe
+# for writers (mkdir -p) as well as readers.
+resolve_og_dir() {
+    local base="$1"
+    local root
+    root="$(og_layout_root)"
+
+    # `class_A` is stage 04's GLOBAL per-class output, which lives directly in
+    # the class directory -- not nested one level deeper as class_A/class_A.
+    case "$base" in
+        class_*) echo "${root}/${base}" ;;
+        *)       echo "${root}/class_$(resolve_og_class "$base")/${base}" ;;
+    esac
+}
+
+# --- Resolve one product of one orthogroup --------------------------------
+# Arguments: $1 - base, $2 - product kind (tree|alignment|aligned)
+# Prints the resolved path on stdout.
+# Returns: 0 resolved
+#          1 not found -- EXPECTED and quiet (stage 04 skips OGs it cannot
+#            build a tree for; an INFO, never an ERROR, or the log becomes
+#            the wall of noise that hid stage 05 in the first place)
+#          2 ambiguous -- the same OG under two classes; refuses to guess,
+#            because guessing silently attaches results to the wrong tree
+#          3 usage error -- unknown product kind
+#
+# Intended adopters: 05_selective_pressure_and_asr.sh (resolve_perog_paths),
+# 03d_notung_reconciliation.sh:105-135 (the families.txt alignment lookup),
+# and scripts/rank_candidates.py:237 (which hardcodes class_A/class_A.treefile
+# via PHYLO_TREE_FILENAME). None is edited here.
+resolve_og_product() {
+    local base="$1"
+    local kind="$2"
+    local pattern root want dir cand found_dir
+    local -a matches=()
+
+    if ! pattern="$(og_product_pattern "$kind")"; then
+        log --level=ERROR "resolve_og_product: unknown product kind '${kind}' (known: tree, alignment, aligned)"
+        return 3
+    fi
+    root="$(og_layout_root)"
+
+    # A product is only real if it is non-empty. A zero-byte treefile IS the
+    # "produced nothing" failure wearing the costume of a success.
+    want="$(resolve_og_dir "$base")/${pattern//@@/$base}"
+    if [ -s "$want" ]; then
+        echo "$want"
+        return 0
+    fi
+
+    # Not where the class map says. Sweep the other classes before giving up:
+    # the map is regenerated independently of stage 04, so the two can disagree.
+    # Only per-OG (nested) layouts can move class this way.
+    case "$base" in
+        class_*) ;;
+        *)
+            for cand in "${root}"/class_*/"${base}/${pattern//@@/$base}"; do
+                # TreeShrink writes `<base>.original.treefile` as a COPY OF ITS
+                # INPUT. It matches a naive *.treefile glob and is not an
+                # output. 03d had to rediscover this; handle it once, here.
+                case "$(basename "$cand")" in *.original.treefile) continue ;; esac
+                [ -s "$cand" ] && matches+=("$cand")
+            done
+            ;;
+    esac
+
+    if [ "${#matches[@]}" -eq 0 ]; then
+        # >&2: stdout is this function's RETURN CHANNEL (the caller does
+        # `p=$(resolve_og_product ...)`), and log() sends INFO/WARN to stdout.
+        # Logging here without redirect hands the caller a log line as its path.
+        log "No ${kind} for ${base}; none was built. Skipping." >&2
+        return 1
+    fi
+
+    if [ "${#matches[@]}" -gt 1 ]; then
+        log --level=ERROR "Orthogroup ${base} has a ${kind} under MULTIPLE classes (${matches[*]}); refusing to guess. Rebuild stage 04 outputs or prune the stale class directory."
+        return 2
+    fi
+
+    found_dir="$(dirname "${matches[0]}")"
+    # >&2 for the same reason, and it matters MORE here: this branch returns 0
+    # (success) and echoes the path, so an unredirected WARN would be captured
+    # ahead of the path, `[ -f "$p" ]` would fail, and the caller would silently
+    # skip the orthogroup -- the exact silent attrition this resolver prevents.
+    log --level=WARN "OG ${base}: ${kind} found at ${found_dir}, not at the class the map names ($(dirname "$want")). Using it, but the class map and stage 04 outputs disagree." >&2
+    echo "${matches[0]}"
+    return 0
+}
+
+
+# --- Stage output declaration + verification ------------------------------
+#
+# A stage declares WHAT it expects to produce and WITH WHAT CARDINALITY;
+# complete_stage verifies the declaration and is the ONLY thing that writes a
+# completion flag.
+#
+# Cardinality is `MIN..MAX`, where MAX may be `N` for unbounded:
+#   0..N   legitimately may produce nothing (the false-alarm guard: some
+#          stages genuinely yield no rows for some datasets, and forcing a
+#          non-emptiness assumption on them would train everyone to ignore
+#          the alarm)
+#   1..N   must produce something -- the assertion stage 05 never made
+#   k..k   exactly k, for one-output-per-input stages. k should be COMPUTED
+#          at runtime (e.g. the manifest line count), which keeps it a
+#          relationship rather than a hardcoded number.
+#
+# A spec names an output as one of:
+#   path:<file>       one specific file
+#   glob:<pattern>    every match of a glob
+#   og_product:<kind> every per-OG product of that kind, across all classes,
+#                     located by the resolver above -- so the stage script
+#                     repeats NO path string that could drift
+#
+# Only non-empty files count, throughout.
+#
+# Intended adopters: all 18 stages, at the point each currently calls
+# create_checkpoint / touches step_completed_*.txt. 06c already has the
+# right granularity (named sub-steps via is_step_completed) and is the model
+# this propagates; it should declare per sub-step. Not edited here.
+
+_STAGE_DECL=()
+
+# declare_stage_output <stage> <label> <cardinality> <spec>
+declare_stage_output() {
+    local stage="$1" label="$2" card="$3" spec="$4"
+
+    if [ "$#" -ne 4 ]; then
+        log --level=ERROR "declare_stage_output: need <stage> <label> <cardinality> <spec>, got $# arg(s)"
+        return 1
+    fi
+
+    # Validate cardinality up front, so a typo fails at declaration time
+    # rather than silently passing verification later.
+    if ! [[ "$card" =~ ^[0-9]+\.\.([0-9]+|N)$ ]]; then
+        log --level=ERROR "declare_stage_output[${stage}/${label}]: malformed cardinality '${card}' (want MIN..MAX, MAX may be N, e.g. 0..N / 1..N / 3..3)"
+        return 1
+    fi
+
+    case "$spec" in
+        path:*|glob:*) ;;
+        og_product:*)
+            if ! og_product_pattern "${spec#og_product:}" >/dev/null; then
+                log --level=ERROR "declare_stage_output[${stage}/${label}]: unknown og_product kind '${spec#og_product:}'"
+                return 1
+            fi
+            ;;
+        *)
+            log --level=ERROR "declare_stage_output[${stage}/${label}]: unknown spec kind in '${spec}' (want path:/glob:/og_product:)"
+            return 1
+            ;;
+    esac
+
+    # Tab-delimited record; labels and specs may contain spaces.
+    _STAGE_DECL+=("${stage}"$'\t'"${label}"$'\t'"${card}"$'\t'"${spec}")
+    return 0
+}
+
+# _count_stage_spec <spec> -- prints how many non-empty outputs the spec matches
+_count_stage_spec() {
+    local spec="$1"
+    local n=0 f kind pattern root
+
+    # Specs are stored UNEXPANDED so that ${RESULTS_DIR} resolves at
+    # verification time rather than declaration time. A stage may declare its
+    # outputs before RESULTS_DIR is final, and storing the expanded string
+    # would bake in a value -- the exact drift this contract exists to avoid.
+    local pat
+    case "$spec" in
+        path:*)
+            eval "pat=\"${spec#path:}\""
+            [ -s "$pat" ] && n=1
+            ;;
+        glob:*)
+            eval "pat=\"${spec#glob:}\""
+            for f in $pat; do
+                [ -s "$f" ] && n=$((n + 1))
+            done
+            ;;
+        og_product:*)
+            kind="${spec#og_product:}"
+            pattern="$(og_product_pattern "$kind")" || { echo 0; return 0; }
+            root="$(og_layout_root)"
+            # Derive the suffix FROM the pattern rather than restating it, so
+            # og_product_pattern stays the only place that knows product names.
+            local suffix="${pattern#@@}"
+            # Per-OG products live one level below the class directory.
+            for f in "${root}"/class_*/*/*"${suffix}"; do
+                # TreeShrink's `<base>.original.treefile` is a copy of its
+                # INPUT, not an output, and it matches a *.treefile glob.
+                case "$(basename "$f")" in
+                    *.original.treefile) continue ;;
+                esac
+                [ -s "$f" ] && n=$((n + 1))
+            done
+            ;;
+    esac
+    echo "$n"
+}
+
+# verify_stage_outputs <stage>
+# Returns 0 if every declaration for <stage> is met, 1 otherwise.
+# Reports EVERY unmet declaration, not just the first, so one run surfaces the
+# whole truth instead of one failure per re-run.
+verify_stage_outputs() {
+    local stage="$1"
+    local rec s label card spec min max n
+    local found=0 failed=0
+
+    # The `[@]+` guard keeps an empty declaration list from tripping `set -u`
+    # on bash < 4.4. A guard that itself aborts the stage would be worse than
+    # no guard at all.
+    for rec in ${_STAGE_DECL[@]+"${_STAGE_DECL[@]}"}; do
+        IFS=$'\t' read -r s label card spec <<< "$rec"
+        [ "$s" = "$stage" ] || continue
+        found=$((found + 1))
+
+        min="${card%%..*}"
+        max="${card##*..}"
+        n="$(_count_stage_spec "$spec")"
+
+        if [ "$n" -lt "$min" ]; then
+            log --level=ERROR "stage ${stage}: UNMET output expectation '${label}' -- expected ${card}, found ${n} (${spec}). The stage did not produce what it declared; NOT marking it complete."
+            failed=$((failed + 1))
+            continue
+        fi
+        if [ "$max" != "N" ] && [ "$n" -gt "$max" ]; then
+            log --level=ERROR "stage ${stage}: UNMET output expectation '${label}' -- expected ${card}, found ${n} (${spec}). More outputs than declared; stale results from a previous run are the usual cause."
+            failed=$((failed + 1))
+            continue
+        fi
+        log "stage ${stage}: output '${label}' satisfied (${n} matching ${card})."
+    done
+
+    if [ "$found" -eq 0 ]; then
+        log --level=ERROR "stage ${stage}: declared NO outputs. A completion flag would assert only that the script reached its last line -- exactly the failure this contract exists to prevent. Add declare_stage_output calls."
+        return 1
+    fi
+
+    [ "$failed" -eq 0 ]
+}
+
+# complete_stage <stage>
+# The ONLY sanctioned writer of a completion flag. Verifies first; refuses to
+# flag an unverified stage. Delegates the actual write to create_checkpoint so
+# the existing is_step_completed / skip_if_completed contract (and 06c's named
+# sub-step granularity) keeps working unchanged.
+complete_stage() {
+    local stage="$1"
+
+    if ! verify_stage_outputs "$stage"; then
+        log --level=ERROR "stage ${stage}: refusing to write the completion flag."
+        return 1
+    fi
+    create_checkpoint "$stage"
+    return 0
+}
+
+
+# --- Saturation guard for per-item warnings -------------------------------
+#
+# A per-item warning that fires for 100% of items is indistinguishable from
+# noise. Stage 05 logged "Missing alignment or tree" once per orthogroup, for
+# every orthogroup, forever -- each message individually true and plausible,
+# the aggregate invisible.
+#
+# This tracks outcomes across a loop and escalates to a STAGE-level ERROR when
+# the failure RATE crosses a threshold. Rate, not count: a count tuned for 3000
+# orthogroups never fires on a 3-orthogroup run, and one tuned for 3 screams on
+# every large run.
+#
+# Default threshold 0.9, not 1.0. 100% is the unambiguous case, but a
+# near-total failure is the same bug with one stale directory left over, and
+# insisting on a clean 100% lets that hide. Below N=10, a rate above 0.9
+# requires 100% anyway, so the default cannot fire on a handful of items unless
+# literally everything failed. Legitimate per-item skips here are a minority of
+# items by construction, so 0.9 sits well clear of the healthy band -- and a
+# stage with a genuinely high expected skip rate should pass its own threshold
+# rather than have everyone learn to ignore the alarm.
+#
+# Override per call, or globally with SATURATION_THRESHOLD.
+#
+# Intended adopters: 05_selective_pressure_and_asr.sh's per-OG loop (the
+# original offender), 04_phylogenetic_analysis.sh's per-OG array body, and
+# 03d_notung_reconciliation.sh's families.txt loop, which drops families with a
+# bare `continue` and is the same silent-attrition shape. Not edited here.
+
+_SATURATION_TOTAL=()
+_SATURATION_FAIL=()
+_SATURATION_THRESH=()
+_SATURATION_EXAMPLES=()
+
+_saturation_index() {
+    local label="$1" i
+    for i in ${_SATURATION_TOTAL[@]+"${!_SATURATION_TOTAL[@]}"}; do
+        case "${_SATURATION_TOTAL[$i]}" in
+            "${label}:"*) echo "$i"; return 0 ;;
+        esac
+    done
+    return 1
+}
+
+# saturation_begin <label> [threshold]
+# Starts (or restarts) a tally. Restarting is deliberate: a reused label in a
+# second loop must not inherit the first loop's counts.
+saturation_begin() {
+    local label="$1"
+    local thresh="${2:-${SATURATION_THRESHOLD:-0.9}}"
+    local i
+
+    if i="$(_saturation_index "$label")"; then
+        _SATURATION_TOTAL[$i]="${label}:0"
+        _SATURATION_FAIL[$i]="${label}:0"
+        _SATURATION_THRESH[$i]="${label}:${thresh}"
+        _SATURATION_EXAMPLES[$i]="${label}:"
+        return 0
+    fi
+    _SATURATION_TOTAL+=("${label}:0")
+    _SATURATION_FAIL+=("${label}:0")
+    _SATURATION_THRESH+=("${label}:${thresh}")
+    _SATURATION_EXAMPLES+=("${label}:")
+    return 0
+}
+
+# saturation_record <label> ok|fail [item]
+saturation_record() {
+    local label="$1" outcome="$2" item="${3:-}"
+    local i total fails ex
+
+    if ! i="$(_saturation_index "$label")"; then
+        # Inventing a counter on the fly would recreate the very class of
+        # invisible failure this guard exists to catch.
+        log --level=ERROR "saturation_record: no tally for '${label}'; call saturation_begin first."
+        return 1
+    fi
+
+    case "$outcome" in
+        ok|fail) ;;
+        *)
+            log --level=ERROR "saturation_record[${label}]: outcome must be 'ok' or 'fail', got '${outcome}'"
+            return 1
+            ;;
+    esac
+
+    total="${_SATURATION_TOTAL[$i]#*:}"
+    _SATURATION_TOTAL[$i]="${label}:$((total + 1))"
+
+    if [ "$outcome" = "fail" ]; then
+        fails="${_SATURATION_FAIL[$i]#*:}"
+        _SATURATION_FAIL[$i]="${label}:$((fails + 1))"
+        # Keep a few offenders: naming them turns an alarm into a diagnosis.
+        if [ -n "$item" ] && [ "$fails" -lt 3 ]; then
+            ex="${_SATURATION_EXAMPLES[$i]#*:}"
+            _SATURATION_EXAMPLES[$i]="${label}:${ex:+${ex}, }${item}"
+        fi
+    fi
+    return 0
+}
+
+# saturation_report <label>
+# Returns 0 if the failure rate is below the threshold, 1 if saturated.
+saturation_report() {
+    local label="$1"
+    local i total fails thresh ex pct_fail pct_thresh
+
+    if ! i="$(_saturation_index "$label")"; then
+        log --level=ERROR "saturation_report: no tally for '${label}'; call saturation_begin first."
+        return 1
+    fi
+
+    total="${_SATURATION_TOTAL[$i]#*:}"
+    fails="${_SATURATION_FAIL[$i]#*:}"
+    thresh="${_SATURATION_THRESH[$i]#*:}"
+    ex="${_SATURATION_EXAMPLES[$i]#*:}"
+
+    if [ "$total" -eq 0 ]; then
+        # No denominator, so no rate. Whether "produced nothing" is acceptable
+        # is the cardinality declaration's job, not this guard's.
+        log "saturation[${label}]: no items processed; nothing to rate."
+        return 0
+    fi
+
+    # Integer percent arithmetic -- no bc/awk dependency in the hot path.
+    pct_fail=$(( fails * 100 / total ))
+    pct_thresh=$(awk -v t="$thresh" 'BEGIN { printf "%d", t * 100 }')
+
+    if [ "$pct_fail" -ge "$pct_thresh" ] && [ "$fails" -gt 0 ]; then
+        log --level=ERROR "saturation[${label}]: ${fails}/${total} items FAILED (${pct_fail}%, threshold ${pct_thresh}%). A per-item warning at this rate is not a per-item problem -- treat this as a stage-level failure (moved path, missing input, wrong layout), not as noise. Examples: ${ex:-none recorded}"
+        return 1
+    fi
+
+    if [ "$fails" -gt 0 ]; then
+        log "saturation[${label}]: ${fails}/${total} items failed (${pct_fail}%), below the ${pct_thresh}% threshold."
+    else
+        log "saturation[${label}]: ${total}/${total} items succeeded."
+    fi
+    return 0
+}
