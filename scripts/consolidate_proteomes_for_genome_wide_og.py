@@ -15,10 +15,12 @@ entries in the consolidation_report.tsv are project-level gaps to be fixed
 upstream — 03c will refuse to run CAFE5 until the report is clean.
 
 Path conventions (see docs/plans/2026-05-28-orthology-557-expansion.md).
-Each cache dir is probed over PROTEOME_SUFFIXES, so `<leaf>` below stands for
-any of `<leaf>.faa` / `<leaf>.aa.fna` / `<leaf>.aa` / `<leaf>.fa` /
-`<leaf>.fasta`:
-  Phase 1a  : <base_dir>/references/species_tree/cache/proteomes/<leaf>
+Directories come from PHASE_PROTEOME_DIRS and each is probed over
+PROTEOME_SUFFIXES, so `<leaf>` below stands for any of `<leaf>.faa` /
+`<leaf>.aa.fna` / `<leaf>.aa` / `<leaf>.fa` / `<leaf>.fasta`:
+  Phase 1a  : <base_dir>/species_tree_data/ncbi_proteomes/<leaf>
+              — in practice `<leaf>.faa`, the name
+              download_species_tree_phase1a.py actually writes
   Phase 1f  : <base_dir>/references/species_tree/cache/proteomes_braker4/<leaf>
               — in practice `<leaf>.aa.fna`, the name
               postprocess_braker4_outputs.py actually writes
@@ -26,8 +28,10 @@ any of `<leaf>.faa` / `<leaf>.aa.fna` / `<leaf>.aa` / `<leaf>.fa` /
   Phase 1g  : <base_dir>/references/species_tree/cache/proteomes_denovotranscript/<leaf>
   Berghia   : supplied via --berghia-proteome CLI flag (caller resolves env var)
 
-main() returns 2 when sources existed but NONE resolved — a whole-run path
-failure that must not masquerade as N independently missing species.
+main() returns 2 when any PHASE that had sources resolved NONE of them — a
+path/convention failure that must not masquerade as N independently missing
+species. Per-phase rather than global: one healthy phase must not mask a
+totally broken one.
 """
 from __future__ import annotations
 
@@ -64,6 +68,33 @@ BERGHIA_TAXID = 1287507
 # NUCLEOTIDES next to the protein file, and a loose nucleotide probe risks
 # feeding CDS into OrthoFinder as though it were protein.
 PROTEOME_SUFFIXES = (".faa", ".aa.fna", ".aa", ".fa", ".fasta")
+
+# Per-phase proteome DIRECTORIES, relative to --base-dir, canonical first.
+#
+# This table is the phase -> directory mapping that used to be three hardcoded
+# strings inside _locate_proteome. It was wrong for Phase 1a in a way no
+# suffix probe could reach: the code read
+# `references/species_tree/cache/proteomes/`, a directory that no producer
+# writes and that does not exist on the cluster at all, while
+# download_species_tree_phase1a.py writes `<cache_dir>/<taxid>_<binomial>.faa`
+# with cache_dir = `species_tree_data/ncbi_proteomes` (NCBI_CACHE_DIR in
+# scripts/unity/run_extension_proteome_harvest.sh). Wrong directory, not wrong
+# suffix — so every Phase-1a species reported `missing_proteome` and the run
+# still exited 0.
+#
+# Each entry is a tuple so a legacy location can stay readable during a
+# migration; the canonical (producer) directory always leads, so a stale tree
+# can never shadow a live download. Keep each phase's first element in sync
+# with that phase's producer.
+PHASE_PROTEOME_DIRS: dict[str, tuple[str, ...]] = {
+    # producer: download_species_tree_phase1a.py
+    "1a": ("species_tree_data/ncbi_proteomes",
+           "references/species_tree/cache/proteomes"),
+    # producer: postprocess_braker4_outputs.py
+    "1f": ("references/species_tree/cache/proteomes_braker4",),
+    # producer: nf-core/denovotranscript harvest (not yet run)
+    "1g": ("references/species_tree/cache/proteomes_denovotranscript",),
+}
 
 
 def _probe_proteome(directory: Path, leaf: str) -> Optional[Path]:
@@ -235,39 +266,32 @@ def _locate_proteome(
 ) -> Path:
     """Return the expected proteome path for a species, given its phase.
 
-    Each cache directory is probed over PROTEOME_SUFFIXES rather than assuming
-    a single extension; see that constant for why. When nothing matches, the
-    `<leaf>.faa` path is returned unchanged so the caller reports
-    `missing_proteome` against a canonical, human-meaningful location.
-
-    For Phase 1a: canonical cache at references/species_tree/cache/proteomes/
-    For Phase 1f (Phase 1d/1e BRAKER4): canonical post-process cache at
-        references/species_tree/cache/proteomes_braker4/; fall back to the
-        BRAKER4 raw output braker.aa file.
-    For Phase 1g: references/species_tree/cache/proteomes_denovotranscript/
+    Directories come from PHASE_PROTEOME_DIRS (canonical producer location
+    first) and each is probed over PROTEOME_SUFFIXES rather than assuming a
+    single extension; see those constants for why. When nothing matches, the
+    canonical directory's `<leaf>.faa` path is returned so the caller reports
+    `missing_proteome` against the location an operator should go look in —
+    never against a directory no producer writes.
     """
     fname = f"{leaf}.faa"
-    cache_root = base_dir / "references" / "species_tree" / "cache"
+    candidate_dirs = [base_dir / d for d in PHASE_PROTEOME_DIRS.get(phase, ())]
 
-    if phase == "1a":
-        d = cache_root / "proteomes"
-        return _probe_proteome(d, leaf) or d / fname
-
-    if phase == "1f":
-        d = cache_root / "proteomes_braker4"
+    for d in candidate_dirs:
         found = _probe_proteome(d, leaf)
         if found is not None:
             return found
+
+    if phase == "1f":
         # Fallback: raw BRAKER4 output directory. NOTE this matches only an
         # UNCOMPRESSED braker.aa; BRAKER4 ships braker.aa.gz and this module
         # reads plain text, so in practice the post-process cache above is the
         # only live path. See the bead spnk report.
         raw = braker4_output_dir / leaf / "results" / "braker.aa"
-        return raw if raw.exists() else d / fname
+        if raw.exists():
+            return raw
 
-    if phase == "1g":
-        d = cache_root / "proteomes_denovotranscript"
-        return _probe_proteome(d, leaf) or d / fname
+    if candidate_dirs:
+        return candidate_dirs[0] / fname
 
     # berghia / recovery — caller provides fasta_path directly
     return base_dir / fname
@@ -498,22 +522,40 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
 
-    # Zero-match guard. Partial gaps stay a warning (03c holds the hard
-    # cleanliness assertion), but resolving NOTHING while sources existed is
-    # never a real result — it means the manifests, the --base-dir, or the
-    # cache naming convention are wrong, and the operator is being told to
-    # chase 500-odd individually "missing" species instead of one bad path.
-    # This is the exact shape of the bead spnk failure: a producer/consumer
-    # suffix mismatch that reported 538 missing_proteome / 0 ok and exited 0.
-    if sources and n_ok == 0:
-        print(
-            f"[consolidate] ERROR: 0 of {len(sources)} proteome sources "
-            f"resolved. That is a path/convention failure, not {len(sources)} "
-            f"independently missing species — check --base-dir, the manifests, "
-            f"and the cache filenames (probed suffixes: "
-            f"{', '.join(PROTEOME_SUFFIXES)}).",
-            file=sys.stderr,
-        )
+    # Per-phase zero-match guard. Partial gaps stay a warning (03c holds the
+    # hard cleanliness assertion, and Phase 1f is legitimately mid-flight for
+    # months while the BRAKER4 array drains), but a phase that had sources and
+    # resolved NONE of them is never a real result — it means that phase's
+    # directory, suffix, or manifest is wrong, and the operator is being told
+    # to chase hundreds of individually "missing" species instead of one bad
+    # path.
+    #
+    # Deliberately per-phase, not global. The global form could only fire when
+    # EVERY phase was broken at once, so a healthy Phase 1f masked a Phase 1a
+    # that resolved literally nothing — 538 missing_proteome / 0 ok, exit 0.
+    per_phase: dict[str, list[int]] = {}
+    for s in statuses:
+        if s.status == "duplicate_taxid":
+            # Deduped into another phase; it was never this phase's to resolve.
+            continue
+        counts = per_phase.setdefault(s.phase, [0, 0])
+        counts[1] += 1
+        if s.status == "ok":
+            counts[0] += 1
+
+    dead_phases = [p for p, (ok, total) in per_phase.items() if total and ok == 0]
+    if dead_phases:
+        for phase in sorted(dead_phases):
+            ok, total = per_phase[phase]
+            dirs = ", ".join(PHASE_PROTEOME_DIRS.get(phase, ("<caller-supplied>",)))
+            print(
+                f"[consolidate] ERROR: phase {phase} resolved {ok}/{total} "
+                f"proteomes. That is a path/convention failure, not {total} "
+                f"independently missing species — check --base-dir, the phase "
+                f"{phase} manifest, and that the producer really writes into "
+                f"[{dirs}] (probed suffixes: {', '.join(PROTEOME_SUFFIXES)}).",
+                file=sys.stderr,
+            )
         return 2
 
     return 0

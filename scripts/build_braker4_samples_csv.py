@@ -31,6 +31,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Union
 
+# Reuse the inventory builder's accession normaliser rather than defining a
+# second one here. build_genome_inventory.append_entries guards the manifest
+# WRITE seam with this same key, and download_species_tree_phase1f_genomes
+# guards the download READ seam with it; a third, divergent copy is precisely
+# how the seams drift apart again.
+from build_genome_inventory import base_accession
+
 
 BRAKER4_COLUMNS = (
     "sample_name", "genome", "genome_masked", "protein_fasta",
@@ -76,13 +83,27 @@ def read_targets(*manifest_paths: Union[str, Path]) -> list[SpeciesTarget]:
         `clade_name`; its `policy_class` column is not carried into
         SpeciesTarget (BRAKER4 doesn't need it).
 
-    Dedup: when the same taxid appears in multiple manifests, the
-    FIRST manifest in `manifest_paths` order wins. Pass Phase 1e first
-    so its annotation lineage takes precedence over a Phase 1d entry
-    for the same species.
+    Dedup: on taxid AND on version-stripped assembly accession. The
+    FIRST manifest in `manifest_paths` order wins, and within a manifest
+    the first row wins. Pass Phase 1e first so its annotation lineage
+    takes precedence over a Phase 1d entry for the same species.
+
+    The accession key is what stops ONE physical genome from being
+    enrolled as TWO organisms: GCA_055670145.1 sat in the inventory under
+    taxid 205083 (Dreissena rostriformis) and taxid 427924
+    (D. r. bugensis), so both reached samples.csv and the same assembly
+    was queued for BRAKER4 twice. Taxid dedup cannot see that; accession
+    dedup can. This reader gates multi-week annotation compute, so a
+    duplicate here costs an annotation slot, not just disk.
+
+    Blank accessions are skipped before dedup, so blank never becomes a
+    key. drop_reason rows are skipped before dedup too, so a
+    'harvested_annotated' row cannot reserve an accession against a live
+    de-novo target.
     """
     targets: list[SpeciesTarget] = []
     seen: set[int] = set()
+    seen_accessions: set[str] = set()
     for manifest_path in manifest_paths:
         with Path(manifest_path).open() as f:
             reader = csv.DictReader(f, delimiter="\t")
@@ -98,7 +119,19 @@ def read_targets(*manifest_paths: Union[str, Path]) -> list[SpeciesTarget]:
                     continue
                 if taxid in seen:
                     continue
+                acc_key = base_accession(accession)
+                if acc_key and acc_key in seen_accessions:
+                    print(
+                        f"[build_braker4_samples_csv] SKIP taxid {taxid} "
+                        f"({(row.get('binomial') or '').strip()}): assembly "
+                        f"{accession} is already enrolled under a different "
+                        f"taxid — one genome, one annotation.",
+                        file=sys.stderr,
+                    )
+                    continue
                 seen.add(taxid)
+                if acc_key:
+                    seen_accessions.add(acc_key)
                 clade = (row.get("clade") or row.get("clade_name") or "").strip()
                 targets.append(SpeciesTarget(
                     taxid=taxid,
