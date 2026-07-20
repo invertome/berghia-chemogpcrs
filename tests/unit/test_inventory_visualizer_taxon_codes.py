@@ -6,6 +6,15 @@ carries a ``phau2_`` prefix -- the Phoronis headers are ``phau_`` and the
 documented rename target (``recover_cds_from_assemblies.SPECIES_MAP``) is
 ``phaust``. So the entry matched nothing and every phoronid leaf fell through
 to the 'phau' entry, colouring it as a gastropod.
+
+2026-07 follow-up (bead 7uby): that fix swapped one dead key for another. The
+``s/^>phau_/>phaust_/`` rename was never applied, so ``phaust`` also matched
+ZERO sequences and all 428 real Phoronis headers still resolved through the
+gastropod ``phau`` entry. The tests below asserted the rename as fact -- using
+a fictional ``ref_phaust_g1`` input that no sequence carries -- and so passed
+the whole time the figures were wrong. They now assert what the DATA says, and
+``test_7uby_prefix_map_validation.py`` checks the map against the real
+proteomes so a fixture can never again stand in for the real key.
 """
 from __future__ import annotations
 
@@ -17,25 +26,29 @@ pytest.importorskip("Bio")
 import visualize_gpcr_tree as vgt
 
 
-def test_phaust_is_the_registered_phoronis_code():
-    assert vgt.PREFIX_TO_GROUP.get("phaust") == "Other Lophotrochozoa"
-
-
 def test_dead_phau2_code_is_gone():
     assert "phau2" not in vgt.PREFIX_TO_GROUP
 
 
-def test_phau_remains_the_gastropod_code():
-    """After the data rename, 'phau' is unambiguously *Physella acuta*."""
-    assert vgt.PREFIX_TO_GROUP.get("phau") == "Gastropoda"
+def test_dead_phaust_code_is_gone():
+    """The rename target is not a real code until the rename is applied."""
+    assert "phaust" not in vgt.PREFIX_TO_GROUP
 
 
-def test_phoronis_leaf_groups_as_lophotrochozoan():
-    assert vgt.get_taxon_group("ref_phaust_g1") == "Other Lophotrochozoa"
+def test_phau_is_ambiguous_not_gastropod():
+    """'phau' is carried by both Physella acuta AND Phoronis australis."""
+    assert "phau" not in vgt.PREFIX_TO_GROUP
+    assert "phau" in vgt.AMBIGUOUS_PREFIXES
 
 
-def test_physella_leaf_groups_as_gastropod():
-    assert vgt.get_taxon_group("ref_phau_g1") == "Gastropoda"
+def test_phoronis_leaf_is_not_coloured_as_a_gastropod():
+    """A real Phoronis header (NMRA01* = its WGS project) must not read Gastropoda."""
+    assert vgt.get_taxon_group("ref_phau_NMRA01000193.1_28409") == "Ambiguous"
+
+
+def test_physella_leaf_is_not_confidently_resolved_either():
+    """The collision is symmetric: neither species can be claimed from the code."""
+    assert vgt.get_taxon_group("ref_phau_JAPYMB010000312.1_29984") == "Ambiguous"
 
 
 def test_registered_codes_are_unique():

@@ -35,6 +35,12 @@ from typing import Callable, Optional, Union
 # found -> silently dropped from the BRAKER set.
 from build_braker4_samples_csv import sanitize_sample_name
 
+# Reuse the inventory builder's accession normaliser rather than defining a
+# second one here. build_genome_inventory.append_entries guards the WRITE seam
+# with this same key; a divergent copy on the READ seam is precisely how one
+# assembly slipped through under two taxids.
+from build_genome_inventory import base_accession
+
 
 @dataclass(frozen=True)
 class DownloadTarget:
@@ -335,12 +341,22 @@ def read_download_targets(*manifest_paths: Union[str, Path]) -> list[DownloadTar
       - Phase 1d (extension_inventory.tsv): clade column named
         `clade_name`; its `policy_class` column is ignored.
 
-    Dedup: when the same taxid appears in multiple manifests, the
-    FIRST manifest in `manifest_paths` order wins. Pass Phase 1e
-    first to keep its annotation lineage as the canonical source.
+    Dedup: on taxid AND on version-stripped assembly accession. When either
+    key repeats, the FIRST manifest in `manifest_paths` order wins. Pass
+    Phase 1e first to keep its annotation lineage as the canonical source.
+
+    The accession key matters because NCBI records one assembly at BOTH its
+    species and subspecies rank, so the same genome can enter the manifest as
+    two organisms: GCA_055670145.1 was enrolled under taxid 205083
+    (Dreissena rostriformis) and 427924 (D. r. bugensis) and downloaded twice,
+    ~1.5 GB of byte-identical duplicate, then annotated twice. Taxid dedup
+    cannot see that; accession dedup can.
+
+    Blank accessions are skipped before dedup, so blank never becomes a key.
     """
     targets: list[DownloadTarget] = []
     seen: set[int] = set()
+    seen_accessions: set[str] = set()
     for manifest_path in manifest_paths:
         path = Path(manifest_path)
         with path.open() as f:
@@ -357,7 +373,19 @@ def read_download_targets(*manifest_paths: Union[str, Path]) -> list[DownloadTar
                     continue
                 if taxid in seen:
                     continue
+                acc_key = base_accession(accession)
+                if acc_key and acc_key in seen_accessions:
+                    print(
+                        f"[download_species_tree_phase1f_genomes] SKIP taxid "
+                        f"{taxid} ({(row.get('binomial') or '').strip()}): "
+                        f"assembly {accession} is already enrolled under a "
+                        f"different taxid — one genome, one download.",
+                        file=sys.stderr,
+                    )
+                    continue
                 seen.add(taxid)
+                if acc_key:
+                    seen_accessions.add(acc_key)
                 clade = (row.get("clade") or row.get("clade_name") or "").strip()
                 targets.append(DownloadTarget(
                     taxid=taxid,

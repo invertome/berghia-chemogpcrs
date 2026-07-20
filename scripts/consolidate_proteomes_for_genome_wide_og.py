@@ -14,12 +14,20 @@ species-tree leaf. Any `missing_proteome` / `empty_fasta` / `duplicate_taxid`
 entries in the consolidation_report.tsv are project-level gaps to be fixed
 upstream — 03c will refuse to run CAFE5 until the report is clean.
 
-Path conventions (see docs/plans/2026-05-28-orthology-557-expansion.md):
-  Phase 1a  : <base_dir>/references/species_tree/cache/proteomes/<leaf>.faa
-  Phase 1f  : <base_dir>/references/species_tree/cache/proteomes_braker4/<leaf>.faa
+Path conventions (see docs/plans/2026-05-28-orthology-557-expansion.md).
+Each cache dir is probed over PROTEOME_SUFFIXES, so `<leaf>` below stands for
+any of `<leaf>.faa` / `<leaf>.aa.fna` / `<leaf>.aa` / `<leaf>.fa` /
+`<leaf>.fasta`:
+  Phase 1a  : <base_dir>/references/species_tree/cache/proteomes/<leaf>
+  Phase 1f  : <base_dir>/references/species_tree/cache/proteomes_braker4/<leaf>
+              — in practice `<leaf>.aa.fna`, the name
+              postprocess_braker4_outputs.py actually writes
               OR <braker4_output_dir>/<leaf>/results/braker.aa (fallback)
-  Phase 1g  : <base_dir>/references/species_tree/cache/proteomes_denovotranscript/<leaf>.faa
+  Phase 1g  : <base_dir>/references/species_tree/cache/proteomes_denovotranscript/<leaf>
   Berghia   : supplied via --berghia-proteome CLI flag (caller resolves env var)
+
+main() returns 2 when sources existed but NONE resolved — a whole-run path
+failure that must not masquerade as N independently missing species.
 """
 from __future__ import annotations
 
@@ -39,6 +47,36 @@ _NON_ID = re.compile(r"[^A-Za-z0-9_]+")
 _MULTI_UNDER = re.compile(r"_+")
 
 BERGHIA_TAXID = 1287507
+
+# Protein-FASTA suffixes probed, in precedence order, when locating a cached
+# proteome. Probing exists because the Phase-1f producer
+# (postprocess_braker4_outputs.postprocess_one) names its output
+# `<leaf>.aa.fna`, while Phase-1a's cache and this module's original
+# expectation both use `<leaf>.faa` — the same directory read under two
+# different conventions, which silently reported every Phase-1f species as
+# `missing_proteome`.
+#
+# `.faa` leads so that a future `.aa.fna` -> `.faa` normalisation is
+# forward-compatible: once a species is migrated the migrated file wins even
+# if the legacy name is still on disk.
+#
+# Bare `.fna` is deliberately ABSENT. The producer writes `<leaf>.cds.fna`
+# NUCLEOTIDES next to the protein file, and a loose nucleotide probe risks
+# feeding CDS into OrthoFinder as though it were protein.
+PROTEOME_SUFFIXES = (".faa", ".aa.fna", ".aa", ".fa", ".fasta")
+
+
+def _probe_proteome(directory: Path, leaf: str) -> Optional[Path]:
+    """First existing `<directory>/<leaf><suffix>` over PROTEOME_SUFFIXES.
+
+    Returns None when the species has no cached proteome under any known
+    suffix, so callers can fall back or report a canonical missing path.
+    """
+    for suffix in PROTEOME_SUFFIXES:
+        candidate = directory / f"{leaf}{suffix}"
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def sanitize_sample_name(name: str) -> str:
@@ -197,6 +235,11 @@ def _locate_proteome(
 ) -> Path:
     """Return the expected proteome path for a species, given its phase.
 
+    Each cache directory is probed over PROTEOME_SUFFIXES rather than assuming
+    a single extension; see that constant for why. When nothing matches, the
+    `<leaf>.faa` path is returned unchanged so the caller reports
+    `missing_proteome` against a canonical, human-meaningful location.
+
     For Phase 1a: canonical cache at references/species_tree/cache/proteomes/
     For Phase 1f (Phase 1d/1e BRAKER4): canonical post-process cache at
         references/species_tree/cache/proteomes_braker4/; fall back to the
@@ -204,20 +247,27 @@ def _locate_proteome(
     For Phase 1g: references/species_tree/cache/proteomes_denovotranscript/
     """
     fname = f"{leaf}.faa"
+    cache_root = base_dir / "references" / "species_tree" / "cache"
 
     if phase == "1a":
-        return base_dir / "references" / "species_tree" / "cache" / "proteomes" / fname
+        d = cache_root / "proteomes"
+        return _probe_proteome(d, leaf) or d / fname
 
     if phase == "1f":
-        canonical = base_dir / "references" / "species_tree" / "cache" / "proteomes_braker4" / fname
-        if canonical.exists():
-            return canonical
-        # Fallback: raw BRAKER4 output directory
+        d = cache_root / "proteomes_braker4"
+        found = _probe_proteome(d, leaf)
+        if found is not None:
+            return found
+        # Fallback: raw BRAKER4 output directory. NOTE this matches only an
+        # UNCOMPRESSED braker.aa; BRAKER4 ships braker.aa.gz and this module
+        # reads plain text, so in practice the post-process cache above is the
+        # only live path. See the bead spnk report.
         raw = braker4_output_dir / leaf / "results" / "braker.aa"
-        return canonical if not raw.exists() else raw
+        return raw if raw.exists() else d / fname
 
     if phase == "1g":
-        return base_dir / "references" / "species_tree" / "cache" / "proteomes_denovotranscript" / fname
+        d = cache_root / "proteomes_denovotranscript"
+        return _probe_proteome(d, leaf) or d / fname
 
     # berghia / recovery — caller provides fasta_path directly
     return base_dir / fname
@@ -447,6 +497,24 @@ def main(argv: list[str] | None = None) -> int:
             "consolidation report is clean (see consolidation_report.tsv).",
             file=sys.stderr,
         )
+
+    # Zero-match guard. Partial gaps stay a warning (03c holds the hard
+    # cleanliness assertion), but resolving NOTHING while sources existed is
+    # never a real result — it means the manifests, the --base-dir, or the
+    # cache naming convention are wrong, and the operator is being told to
+    # chase 500-odd individually "missing" species instead of one bad path.
+    # This is the exact shape of the bead spnk failure: a producer/consumer
+    # suffix mismatch that reported 538 missing_proteome / 0 ok and exited 0.
+    if sources and n_ok == 0:
+        print(
+            f"[consolidate] ERROR: 0 of {len(sources)} proteome sources "
+            f"resolved. That is a path/convention failure, not {len(sources)} "
+            f"independently missing species — check --base-dir, the manifests, "
+            f"and the cache filenames (probed suffixes: "
+            f"{', '.join(PROTEOME_SUFFIXES)}).",
+            file=sys.stderr,
+        )
+        return 2
 
     return 0
 

@@ -37,13 +37,34 @@ from Bio.Phylo.BaseTree import Tree as PhyloTree
 # helper from the circular renderer (same directory, importable).
 import visualize_gpcr_tree as vgt
 from visualize_gpcr_tree import (
-    TAXON_COLORS, get_taxon_group, compute_candidate_tiers, _clade_color,
+    TAXON_COLORS, LEGEND_GROUPS, get_taxon_group, compute_candidate_tiers,
+    _clade_color, validate_prefix_map,
 )
-from species_code_lookup import build_code_species_map, species_for, berghia_display_name
+from species_code_lookup import (
+    AmbiguousSpeciesCodeError, build_code_species_map, species_for,
+    berghia_display_name,
+)
 
 
 def is_berghia(name):
     return bool(name) and (name.startswith('Berste') or name.startswith('TRINITY_'))
+
+
+def _ref_label(name, code_map):
+    """Display label for a non-Berghia reference tip.
+
+    Falls back to the raw leaf id when the species cannot be resolved, which
+    includes the case where the code is ambiguous and ``species_for`` refuses
+    to guess. An unresolved identifier is honest; a confident wrong binomial in
+    a publication figure is not.
+    """
+    try:
+        sp, locus = species_for(name, code_map)
+    except AmbiguousSpeciesCodeError:
+        return name
+    if not sp:
+        return name
+    return f'{sp} ({locus})' if locus else sp
 
 
 def load_ranking(ranking_csv):
@@ -288,7 +309,12 @@ def draw_lse(clade, tier1, rank_of, score_of, code_map, output, dpi, theme_name,
             ax.scatter([xx], [yy], c=TAXON_COLORS['Tier 1'], s=sz_star, marker='*',
                        edgecolors=th['star_edge'], linewidths=0.7, zorder=12)
             if lab:
-                ax.text(label_x, yy, f'#{rank_of[name]}  {berghia_display_name(name)}',
+                # Tier-1 ids come from the ranking CSV, which is not guaranteed
+                # to hold only Berghia transcripts; label a non-Berghia tip as
+                # what it actually is rather than as Berghia.
+                label = (berghia_display_name(name) if is_berghia(name)
+                         else _ref_label(name, code_map))
+                ax.text(label_x, yy, f'#{rank_of[name]}  {label}',
                         va='center', ha='left', fontsize=font_t1, color=th['text'],
                         fontweight='bold', style='italic', zorder=12, clip_on=False)
         elif is_berghia(name):
@@ -299,13 +325,12 @@ def draw_lse(clade, tier1, rank_of, score_of, code_map, output, dpi, theme_name,
                         fontsize=font_b, color=berghia_gray, style='italic', zorder=9,
                         clip_on=False)
         else:
-            group = get_taxon_group(name)
+            group = get_taxon_group(name, code_map)
             col = TAXON_COLORS.get(group, '#cccccc')
             ax.scatter([xx], [yy], c=col, s=sz_ref, marker='o',
                        edgecolors=th['star_edge'], linewidths=0.4, zorder=11)
             if lab:
-                sp, locus = species_for(name, code_map)
-                label = (f'{sp} ({locus})' if (sp and locus) else sp) if sp else name
+                label = _ref_label(name, code_map)
                 ax.text(label_x, yy, label, va='center', ha='left', fontsize=font_ref,
                         color=col, style='italic', fontweight='bold', zorder=11, clip_on=False)
 
@@ -321,7 +346,7 @@ def draw_lse(clade, tier1, rank_of, score_of, code_map, output, dpi, theme_name,
     for leaf in sub.get_terminals():
         nm = leaf.name or ''
         if not is_berghia(nm):
-            ref_group_counts[get_taxon_group(nm)] += 1
+            ref_group_counts[get_taxon_group(nm, code_map)] += 1
 
     handles = [
         plt.scatter([], [], c=TAXON_COLORS['Tier 1'], s=120, marker='*',
@@ -329,8 +354,7 @@ def draw_lse(clade, tier1, rank_of, score_of, code_map, output, dpi, theme_name,
                     label='Tier-1 candidate'),
         mpatches.Patch(color=berghia_gray, label=r'$\mathit{B.\ stephanieae}$'),
     ]
-    for group in ['Gastropoda', 'Bivalvia', 'Cephalopoda', 'Annelida',
-                  'Platyhelminthes', 'Other Mollusca', 'Other Lophotrochozoa']:
+    for group in LEGEND_GROUPS:
         if ref_group_counts.get(group):
             handles.append(mpatches.Patch(color=TAXON_COLORS[group], label=group))
     ax.legend(handles=handles, loc='upper left', bbox_to_anchor=(0.0, 1.0), fontsize=15,
@@ -350,8 +374,7 @@ def _legend(ax, tree, tier1, q90, th):
     for leaf in tree.get_terminals():
         counts[get_taxon_group(leaf.name or '')] += 1
     patches = []
-    for group in ['Gastropoda', 'Bivalvia', 'Cephalopoda', 'Annelida',
-                  'Platyhelminthes', 'Other Mollusca', 'Other Lophotrochozoa']:
+    for group in LEGEND_GROUPS:
         if counts.get(group, 0):
             patches.append(mpatches.Patch(color=TAXON_COLORS[group],
                                           label=f'{group} (n={counts[group]})'))
@@ -378,7 +401,12 @@ def main():
     ap.add_argument('--themes', default='light,dark', help='comma list: light,dark')
     ap.add_argument('--dpi-full', type=int, default=250)
     ap.add_argument('--dpi-lse', type=int, default=300)
+    ap.add_argument('--skip-prefix-validation', action='store_true',
+                    help='render even if PREFIX_TO_GROUP has drifted from the '
+                         'reference proteomes (NOT for publication figures)')
     args = ap.parse_args()
+
+    vgt._validate_prefix_map_or_die(args.skip_prefix_validation)
 
     os.makedirs(args.outdir, exist_ok=True)
     figures = [f.strip() for f in args.figures.split(',') if f.strip()]

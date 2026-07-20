@@ -169,10 +169,20 @@ def berghia_display_name(name):
     'BersteEVm009528t6' -> 'Berghia stephanieae EVm009528t6'. The 'Berste'
     species prefix is expanded to the binomial; the transcript suffix is kept
     to distinguish paralogs.
+
+    Raises :class:`ValueError` for anything that is not a Berghia id. This used
+    to fall through to ``'Berghia stephanieae ' + name`` unconditionally, which
+    fabricated a species for ANY input — a reference leaf handed to it came
+    back labelled as Berghia in a publication figure. Guard the call with
+    :func:`is_berghia` (the caller always has a correct alternative label).
     """
-    if name and name.startswith('Berste'):
+    if not is_berghia(name):
+        raise ValueError(
+            f"{name!r} is not a Berghia transcript id (expected a 'Berste' or "
+            f"'TRINITY_' prefix); refusing to label it 'Berghia stephanieae'")
+    if name.startswith('Berste'):
         return 'Berghia stephanieae ' + name[len('Berste'):]
-    return 'Berghia stephanieae ' + (name or '')
+    return 'Berghia stephanieae ' + name
 
 
 def main():

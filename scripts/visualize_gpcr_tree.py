@@ -17,9 +17,12 @@ Usage:
 
 import argparse
 import csv
+import glob
 import math
+import os
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
+from pathlib import Path
 
 import matplotlib
 matplotlib.use('Agg')
@@ -28,6 +31,8 @@ import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
 import numpy as np
 from Bio import Phylo
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # Taxonomic group -> color
 TAXON_COLORS = {
@@ -41,7 +46,34 @@ TAXON_COLORS = {
     'Berghia':          '#2d2d2d',  # overridden to white in dark theme
     'Tier 1':           '#FFD700',  # gold — Q90
     'Tier 2':           '#C0C0C0',  # silver — above natural break
+    # Deliberately non-taxonomic neutrals. 'Ambiguous' is darker than 'Unknown'
+    # so an unresolvable tip is visible rather than reading as a faint gap.
+    'Ambiguous':        '#666666',
     'Unknown':          '#cccccc',
+}
+
+# Groups a legend enumerates, in order. 'Ambiguous'/'Unknown' are listed last and
+# are only drawn when non-empty, so a figure never hides tips it could not place.
+LEGEND_GROUPS = [
+    'Gastropoda', 'Bivalvia', 'Cephalopoda', 'Annelida', 'Platyhelminthes',
+    'Other Mollusca', 'Other Lophotrochozoa', 'Ambiguous', 'Unknown',
+]
+
+# Header-prefix codes claimed by proteomes in MORE THAN ONE taxonomic group.
+# These can never be resolved from the code alone, so they are deliberately
+# absent from PREFIX_TO_GROUP and get_taxon_group() returns 'Ambiguous' for
+# them. Keep in sync with species_code_lookup.build_code_species_map(), which
+# raises AmbiguousSpeciesCodeError for the same codes;
+# validate_prefix_map() asserts both registers match the real proteomes.
+#
+# 'phau' (measured 2026-07): 1,078 headers in
+# lse+one_to_one/gastropoda/109671_Physella_acuta.faa (Mollusca > Gastropoda)
+# and 428 in .../other_lophotrochozoan_phyla/115415_Phoronis_australis.faa
+# (Phoronida). The 's/^>phau_/>phaust_/' rename that would separate them is
+# tracked separately and has NOT been applied; identifiers here are write-once,
+# so the display layer stays honest instead of guessing.
+AMBIGUOUS_PREFIXES = {
+    'phau': ('Physella acuta', 'Phoronis australis'),
 }
 
 # Species prefix -> taxonomic group
@@ -52,12 +84,16 @@ _groups = {
         'bist', 'caun', 'chori', 'chsq', 'cobe', 'coco', 'cotr', 'dipe', 'drsu',
         'elch', 'elma', 'giae', 'gima', 'goco', 'gofi', 'goge', 'goku', 'gole',
         'hacra', 'hadi', 'hala', 'haru', 'logi', 'losc', 'lyst', 'metu', 'orid',
-        'pade', 'pape', 'pavu', 'phau', 'phli', 'ploc', 'poca', 'raau', 'rave', 'trte',
+        # 'phau' (Physella acuta) is NOT listed: the same code is carried by
+        # Phoronis australis. See AMBIGUOUS_PREFIXES.
+        'pade', 'pape', 'pavu', 'phli', 'ploc', 'poca', 'raau', 'rave', 'trte',
     ],
     'Bivalvia': [
         'arma', 'arpu', 'atja', 'bapl', 'bofu', 'ceed', 'chfa', 'cobi', 'cofl', 'coku',
         'craan', 'craar', 'crahon', 'crgi', 'crpl', 'crvi', 'drpo', 'drro', 'frfr',
-        'frwh', 'gate', 'hihi', 'hycu', 'lael', 'lifo', 'lian2', 'lini', 'maho',
+        # 'liant' = Lithophaga antillarum (772 seqs). Was 'lian2', which matched
+        # no sequence anywhere, so those 772 rendered as 'Unknown'.
+        'frwh', 'gate', 'hihi', 'hycu', 'lael', 'lifo', 'liant', 'lini', 'maho',
         'mama', 'maqu', 'memer', 'miye', 'moph', 'myar', 'myca', 'myco', 'myed',
         'myga', 'myvi', 'osed', 'oslu', 'page', 'paye', 'pema', 'pevi', 'pifu',
         'pifuma', 'piim', 'post', 'ruph', 'sagl', 'sapu', 'scbr', 'sico', 'spso',
@@ -71,29 +107,33 @@ _groups = {
     'Annelida': [
         'acsq', 'alge', 'alvi', 'amco', 'ampa', 'apocal', 'cate', 'digy', 'eueu',
         'haimp', 'hero', 'himan', 'hime', 'hive', 'hyel', 'lalu', 'lasa', 'lecl',
-        'lute', 'mevu', 'owfu', 'paec', 'papa', 'pldu', 'poma', 'ripis', 'ripa',
-        'sinu', 'stbe', 'stli', 'tela', 'whpi',
+        'lute', 'mevu', 'owfu', 'paec', 'papa', 'pige', 'pldu', 'poma', 'ripis',
+        'ripa', 'sinu', 'stbe', 'stli', 'tela', 'whpi',
     ],
+    # 'scint' = Schistosoma intercalatum (71 seqs); was 'scin', which matched
+    # nothing. 'ecol', 'meco', 'moex', 'pake', 'prxe', 'taas', 'tapi', 'taso'
+    # were never mapped at all (361 seqs rendering as 'Unknown').
     'Platyhelminthes': [
         'atwi', 'cafo', 'clsi', 'dican', 'diden', 'dila', 'duja', 'eccap', 'eccan',
-        'ecgr', 'ecmu', 'euni', 'fabu', 'fagi', 'fahe', 'gitig', 'gybu', 'gysa',
-        'heame', 'hydi', 'hyta', 'macl', 'mahy', 'mali', 'opfe', 'opvi', 'pahe',
-        'pask', 'pawe', 'prcro', 'prfa', 'rona', 'scbo', 'sccu', 'scgu', 'scha',
-        'scin', 'scja', 'scman', 'scmar', 'scmat', 'scme', 'scro', 'scso', 'sctur',
-        'sper', 'sppr', 'tacr', 'tamu', 'tasa', 'trre',
+        'ecgr', 'ecmu', 'ecol', 'euni', 'fabu', 'fagi', 'fahe', 'gitig', 'gybu',
+        'gysa', 'heame', 'hydi', 'hyta', 'macl', 'mahy', 'mali', 'meco', 'moex',
+        'opfe', 'opvi', 'pahe', 'pake', 'pask', 'pawe', 'prcro', 'prfa', 'prxe',
+        'rona', 'scbo', 'sccu', 'scgu', 'scha', 'scint', 'scja', 'scman', 'scmar',
+        'scmat', 'scme', 'scro', 'scso', 'sctur', 'sper', 'sppr', 'taas', 'tacr',
+        'tamu', 'tapi', 'tasa', 'taso', 'trre',
     ],
     'Other Mollusca': [
         'accr', 'acgra', 'epba', 'gato', 'gype', 'laant', 'mosw', 'move', 'wiar',
     ],
+    # 'memmem' = Membranipora membranacea (105 seqs); was 'meme', which matched
+    # nothing. 'phaust' (the Phoronis australis rename target) is NOT listed:
+    # the rename has never been applied, so the real Phoronis code is still
+    # 'phau' and is registered in AMBIGUOUS_PREFIXES instead. Listing 'phaust'
+    # here is what previously made the map *look* fixed while every phoronid
+    # leaf still fell through to the gastropod 'phau' entry.
     'Other Lophotrochozoa': [
-        'bune', 'crmu', 'crpa', 'lian', 'liun', 'lilo', 'meme', 'noge', 'pece',
-        # 'phaust' = Phoronis australis. Was 'phau2', which matched no
-        # sequence anywhere, so phoronid leaves fell through to the
-        # gastropod 'phau' entry and were coloured as molluscs. 'phaust'
-        # is the rename target documented in
-        # recover_cds_from_assemblies.SPECIES_MAP; it takes effect once the
-        # 's/^>phau_/>phaust_/' rename is applied to the Phoronis proteome.
-        'phaust', 'phov', 'phpa', 'teme',
+        'bune', 'crmu', 'crpa', 'lian', 'liun', 'lilo', 'memmem', 'noge', 'pece',
+        'phov', 'phpa', 'teme',
     ],
 }
 for group, prefixes in _groups.items():
@@ -101,18 +141,176 @@ for group, prefixes in _groups.items():
         PREFIX_TO_GROUP[p] = group
 
 
-def get_taxon_group(leaf_name):
-    """Determine taxonomic group from leaf name."""
+def get_taxon_group(leaf_name, code_map=None):
+    """Determine taxonomic group from leaf name.
+
+    Returns ``'Ambiguous'`` when the leaf's code is claimed by proteomes in more
+    than one taxonomic group, rather than silently resolving it to whichever
+    group happened to be registered. ``code_map`` is an optional
+    :class:`species_code_lookup.CodeSpeciesMap`; when supplied, collisions it
+    discovered in the data are honoured on top of ``AMBIGUOUS_PREFIXES``, so a
+    NEW collision is refused the first time it appears rather than at the next
+    time somebody edits this file.
+
+    Why 'Ambiguous' and not a raise: ``species_for`` raises because its caller
+    can fall back to printing the raw leaf name, so refusing costs one label.
+    This function is called once per tip and recursively for every internal
+    clade in ``_clade_color``; raising would abort the whole figure over a
+    handful of tips, destroying output that is correct for the other 99%.
+    There is no honest fallback colour, so the collision gets its own visible
+    category and its own legend count instead.
+    """
     if not leaf_name:
         return 'Unknown'
     if leaf_name.startswith('Berste') or leaf_name.startswith('TRINITY_'):
         return 'Berghia'
     name = leaf_name[4:] if leaf_name.startswith('ref_') else leaf_name
-    for p in sorted(PREFIX_TO_GROUP.keys(), key=len, reverse=True):
+    extra = getattr(code_map, 'ambiguous', None) or {}
+
+    def _group(code):
+        return 'Ambiguous' if (code in AMBIGUOUS_PREFIXES or code in extra) \
+            else PREFIX_TO_GROUP.get(code)
+
+    candidates = set(PREFIX_TO_GROUP) | set(AMBIGUOUS_PREFIXES) | set(extra)
+    for p in sorted(candidates, key=len, reverse=True):
         if name.startswith(p + '_') or name == p:
-            return PREFIX_TO_GROUP[p]
-    first = name.split('_')[0]
-    return PREFIX_TO_GROUP.get(first, 'Unknown')
+            return _group(p)
+    return _group(name.split('_')[0]) or 'Unknown'
+
+
+# --- PREFIX_TO_GROUP drift validation -------------------------------------
+#
+# PREFIX_TO_GROUP is hand-maintained against auto-generated header prefixes, so
+# it drifts silently: get_taxon_group()'s final lookup has a 'Unknown' default,
+# which means a stale key and a missing key both render a figure without ever
+# failing a run. The functions below derive the truth from the proteomes
+# themselves and refuse a map that no longer matches.
+
+# references/nath_et_al/<lse|one_to_one_ortholog>/<group_dir>/<taxid>_<Genus_species>.faa
+# The directory is the authoritative taxonomic group (that is how the reference
+# set is organised); the header prefix inside the file is the code.
+DIR_TO_GROUP = {
+    'annelida': 'Annelida',
+    'bivalvia': 'Bivalvia',
+    'cephalopoda': 'Cephalopoda',
+    'gastropoda': 'Gastropoda',
+    'other_lophotrochozoan_phyla': 'Other Lophotrochozoa',
+    'other_molluscan_classes': 'Other Mollusca',
+    'platyhelminthes': 'Platyhelminthes',
+}
+
+
+class PrefixMapDriftError(AssertionError):
+    """PREFIX_TO_GROUP no longer matches the reference proteomes on disk."""
+
+
+class ObservedCode:
+    """What the proteomes actually say about one header-prefix code."""
+
+    def __init__(self, group, count, ambiguous_over, files):
+        self.group = group                      # None when ambiguous
+        self.count = count                      # headers carrying this code
+        self.ambiguous_over = ambiguous_over    # set of groups claiming it
+        self.files = files                      # basenames of claiming proteomes
+
+    def __repr__(self):
+        return (f'ObservedCode(group={self.group!r}, count={self.count}, '
+                f'ambiguous_over={sorted(self.ambiguous_over)})')
+
+
+def scan_reference_codes(references_dir=None):
+    """Scan reference proteomes -> ``{code: ObservedCode}``.
+
+    Only the taxon-organised ``nath_et_al`` tree is in scope. Outgroup and
+    Swiss-Prot references use pipe-delimited headers (``AcCRa|...``,
+    ``O14804|aminergic|...``) that carry no species code and belong to no
+    molluscan group, so 'Unknown' is the correct answer for them.
+    """
+    root = Path(references_dir) if references_dir else PROJECT_ROOT / 'references' / 'nath_et_al'
+    per_group = defaultdict(Counter)   # code -> {group: n}
+    files = defaultdict(set)           # code -> {basename}
+    for faa in sorted(glob.glob(str(Path(root) / '**' / '*.faa'), recursive=True)):
+        group = DIR_TO_GROUP.get(os.path.basename(os.path.dirname(faa)))
+        if group is None:
+            continue
+        with open(faa) as fh:
+            for line in fh:
+                if line.startswith('>'):
+                    code = line[1:].split()[0].split('_')[0]
+                    per_group[code][group] += 1
+                    files[code].add(os.path.basename(faa))
+    observed = {}
+    for code, counts in per_group.items():
+        groups = set(counts)
+        observed[code] = ObservedCode(
+            group=next(iter(groups)) if len(groups) == 1 else None,
+            count=sum(counts.values()),
+            ambiguous_over=groups if len(groups) > 1 else set(),
+            files=files[code])
+    return observed
+
+
+def validate_prefix_map(references_dir=None, prefix_to_group=None, ambiguous=None):
+    """Raise :class:`PrefixMapDriftError` unless the map matches the proteomes.
+
+    Checks, in the order they have historically broken:
+      1. dead keys      — a mapped code matching ZERO sequences (half-applied rename)
+      2. missing codes  — a real code with no entry (renders as 'Unknown')
+      3. wrong group    — a mapped code whose proteome sits in another group
+      4. collisions     — a code claimed by two groups must be declared ambiguous
+                          and must NOT also sit in the group map
+
+    Not run at import: it needs ``references/`` on disk, which unit tests and
+    lightweight consumers do not have. It runs at the entry points that actually
+    render figures, and in the test suite against the real reference directory.
+    """
+    p2g = PREFIX_TO_GROUP if prefix_to_group is None else prefix_to_group
+    amb = set(AMBIGUOUS_PREFIXES if ambiguous is None else ambiguous)
+    observed = scan_reference_codes(references_dir)
+    real_amb = {c for c, o in observed.items() if o.ambiguous_over}
+    problems = []
+
+    dead = sorted(set(p2g) - set(observed))
+    if dead:
+        problems.append(
+            f'{len(dead)} mapped code(s) match ZERO sequences (stale or '
+            f'half-applied rename): {dead}')
+
+    missing = sorted(set(observed) - set(p2g) - amb)
+    if missing:
+        n = sum(observed[c].count for c in missing)
+        problems.append(
+            f'{len(missing)} real header code(s) are unmapped and would render '
+            f'as "Unknown" ({n} sequences): '
+            + ', '.join(f'{c}({observed[c].count})' for c in missing))
+
+    wrong = [(c, p2g[c], observed[c].group) for c in sorted(set(p2g) & set(observed))
+             if observed[c].group is not None and p2g[c] != observed[c].group]
+    if wrong:
+        problems.append('mis-grouped code(s): ' + ', '.join(
+            f'{c} mapped {m!r} but proteome is {o!r}' for c, m, o in wrong))
+
+    undeclared = sorted(real_amb - amb)
+    if undeclared:
+        problems.append('code(s) claimed by >1 taxonomic group but not declared '
+                        'ambiguous: ' + ', '.join(
+                            f'{c} {sorted(observed[c].ambiguous_over)}' for c in undeclared))
+
+    landmines = sorted(amb & set(p2g))
+    if landmines:
+        problems.append(f'ambiguous code(s) still present in the group map, where '
+                        f'they resolve to one phylum: {landmines}')
+
+    stale_amb = sorted(amb - real_amb)
+    if stale_amb:
+        problems.append(f'code(s) declared ambiguous but no longer collide in the '
+                        f'data (rename applied? update the register): {stale_amb}')
+
+    if problems:
+        raise PrefixMapDriftError(
+            'PREFIX_TO_GROUP is out of sync with the reference proteomes:\n  - '
+            + '\n  - '.join(problems))
+    return observed
 
 
 def compute_candidate_tiers(ranking_csv):
@@ -300,8 +498,7 @@ def draw_tree(tree, tier1, tier2, q90_thresh, gap_thresh, output_path, dpi=300, 
         group_counts[get_taxon_group(leaf.name or '')] += 1
 
     legend_patches = []
-    for group in ['Gastropoda', 'Bivalvia', 'Cephalopoda', 'Annelida',
-                   'Platyhelminthes', 'Other Mollusca', 'Other Lophotrochozoa']:
+    for group in LEGEND_GROUPS:
         n = group_counts.get(group, 0)
         if n > 0:
             legend_patches.append(mpatches.Patch(
@@ -345,6 +542,23 @@ def _clade_color(clade):
     return '#cccccc'
 
 
+def _validate_prefix_map_or_die(skip=False):
+    """Refuse to render a figure from a map that has drifted from the data.
+
+    Runs at the entry point rather than at import: the check needs
+    ``references/`` on disk (~0.1 s to scan), which unit tests and lightweight
+    consumers of this module do not have. A missing reference directory is not
+    an error here — only a directory that CONTRADICTS the map is.
+    """
+    if skip:
+        print('WARNING: PREFIX_TO_GROUP validation skipped; taxon colours and '
+              'legend counts are unverified.', file=sys.stderr)
+        return
+    if not (PROJECT_ROOT / 'references' / 'nath_et_al').is_dir():
+        return
+    validate_prefix_map()
+
+
 def main():
     parser = argparse.ArgumentParser(description='Visualize GPCR tree with taxonomy coloring')
     parser.add_argument('--tree', required=True, help='Newick tree file')
@@ -352,7 +566,12 @@ def main():
     parser.add_argument('--output', required=True, help='Output PNG path')
     parser.add_argument('--theme', choices=['light', 'dark'], default='light')
     parser.add_argument('--dpi', type=int, default=300, help='Output DPI')
+    parser.add_argument('--skip-prefix-validation', action='store_true',
+                        help='render even if PREFIX_TO_GROUP has drifted from '
+                             'the reference proteomes (NOT for publication figures)')
     args = parser.parse_args()
+
+    _validate_prefix_map_or_die(args.skip_prefix_validation)
 
     # Compute candidate tiers from ranking data
     print('Computing candidate tiers...')
