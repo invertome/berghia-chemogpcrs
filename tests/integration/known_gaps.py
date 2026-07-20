@@ -73,11 +73,9 @@ KNOWN_GAPS: dict[tuple[str, str], tuple[str, str]] = {
     ),
 
     # --- external binaries own the layout
-    ("03_orthology_clustering.sh", "${RESULTS}/orthogroups/input/OrthoFinder"): (
-        EXTERNAL_TOOL,
-        "OrthoFinder creates its own OrthoFinder/Results_<stamp>/ tree under "
-        "the -f input directory; no repo code writes it.",
-    ),
+    # NOTE: the 03_orthology_clustering.sh entry for this same path was REMOVED
+    # once the run-selection rule converged on a shared resolver -- the probe now
+    # has a producer, so the exemption was stale. The stale-entry guard caught it.
     ("03c_cafe_analysis.sh", "${RESULTS}/orthogroups/input/OrthoFinder"): (
         EXTERNAL_TOOL,
         "Same OrthoFinder-owned directory, probed by the CAFE stage.",

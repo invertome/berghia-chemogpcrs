@@ -17,6 +17,11 @@
 
 source config.sh
 source functions.sh
+# ONE deterministic, chronologically-correct rule for which OrthoFinder
+# run is authoritative (mtime of Orthogroups.tsv). Shared by stages
+# 03/03b/04/05/06c/07 so they can no longer resolve different runs.
+# shellcheck source=scripts/orthofinder_paths.sh
+source "${SCRIPTS_DIR:-scripts}/orthofinder_paths.sh"
 
 # Create output directories
 mkdir -p "${RESULTS_DIR}/selective_pressure" "${RESULTS_DIR}/selective_pressure/nucleotide" "${RESULTS_DIR}/asr" "${LOGS_DIR}" || { log "Error: Cannot create directories"; exit 1; }
@@ -63,7 +68,15 @@ if [ -n "$SLURM_ARRAY_TASK_ID" ]; then
     if [ -f "$MANIFEST_FILE" ]; then
         base=$(get_orthogroup_by_index "$SLURM_ARRAY_TASK_ID" "$MANIFEST_FILE")
     else
-        ORTHOGROUPS=("${RESULTS_DIR}/orthogroups/OrthoFinder/Results"*/Orthogroups/OG*.fa)
+        # Fallback: enumerate the authoritative run's Orthogroup_Sequences/
+        # (scripts/orthofinder_paths.sh). The old glob pointed at
+        # orthogroups/OrthoFinder/Results*/Orthogroups/ — wrong on BOTH
+        # components (the real root is orthogroups/input/OrthoFinder, and
+        # per-OG FASTAs live in Orthogroup_Sequences/, not Orthogroups/), so it
+        # never matched and basename turned the literal pattern into "$base".
+        _og_seq_dir=$(resolve_orthogroup_sequences_dir "${RESULTS_DIR}/orthogroups" || true)
+        [ -n "$_og_seq_dir" ] || { log "Error: no OrthoFinder Orthogroup_Sequences directory"; exit 1; }
+        ORTHOGROUPS=("${_og_seq_dir}"/OG*.fa)
         og="${ORTHOGROUPS[$SLURM_ARRAY_TASK_ID]}"
         base=$(basename "$og" .fa)
     fi
@@ -72,13 +85,21 @@ else
     if [ -f "$MANIFEST_FILE" ]; then
         base=$(get_orthogroup_by_index 0 "$MANIFEST_FILE")
     else
-        ORTHOGROUPS=("${RESULTS_DIR}/orthogroups/OrthoFinder/Results"*/Orthogroups/OG*.fa)
+        _og_seq_dir=$(resolve_orthogroup_sequences_dir "${RESULTS_DIR}/orthogroups" || true)
+        [ -n "$_og_seq_dir" ] || { log "Error: no OrthoFinder Orthogroup_Sequences directory"; exit 1; }
+        ORTHOGROUPS=("${_og_seq_dir}"/OG*.fa)
         base=$(basename "${ORTHOGROUPS[0]}" .fa)
     fi
 fi
 
-# Find the orthogroup FASTA file
-og=$(find "${RESULTS_DIR}/orthogroups" -name "${base}.fa" -type f 2>/dev/null | head -1)
+# Find the orthogroup FASTA file.
+# Anchored to the authoritative run's Orthogroup_Sequences/ (see
+# scripts/orthofinder_paths.sh). The previous unsorted `find ... | head -1`
+# could return the WorkingDirectory/ copy, whose headers are OrthoFinder's
+# internal integer ids — get_taxids_from_fasta then yields nothing, taxa_count
+# is 0, and the `-gt 1` gate below SILENTLY skips selection analysis for that
+# orthogroup.
+og=$(resolve_orthogroup_fasta "${base}" "${RESULTS_DIR}/orthogroups" || true)
 [ -z "$og" ] || [ ! -f "$og" ] && { log "Skipping missing orthogroup: ${base}"; exit 0; }
 # Use centralized metadata lookup to get taxids (excludes references)
 taxids=$(get_taxids_from_fasta "$og" --exclude-refs)

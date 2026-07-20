@@ -16,6 +16,11 @@
 
 source config.sh
 source functions.sh
+# ONE deterministic, chronologically-correct rule for which OrthoFinder
+# run is authoritative (mtime of Orthogroups.tsv). Shared by stages
+# 03/03b/04/05/06c/07 so they can no longer resolve different runs.
+# shellcheck source=scripts/orthofinder_paths.sh
+source "${SCRIPTS_DIR:-scripts}/orthofinder_paths.sh"
 
 # Create output directory
 mkdir -p "${RESULTS_DIR}/orthogroups/input" "${LOGS_DIR}" || { log "Error: Cannot create directories"; exit 1; }
@@ -105,7 +110,12 @@ fi
 #
 # Resume logic: if a previous run exists (e.g., from a crash), use -fg to
 # skip the expensive DIAMOND all-vs-all phase and resume from orthogroups.
-PREV_RESULTS=$(find "${RESULTS_DIR}/orthogroups/input/OrthoFinder" -maxdepth 1 -type d -name "Results_*" 2>/dev/null | sort -r | head -1)
+# `sort -r` on OrthoFinder's Results_<Mon><DD> stamp is neither chronological
+# nor numeric ("Results_Sep05" sorts above "Results_Dec01"; "_10" below "_2"),
+# and the stamp carries no year at all — so resume could latch onto a stale run.
+# resolve_orthofinder_run picks the newest COMPLETED run by Orthogroups.tsv
+# mtime (see scripts/orthofinder_paths.sh).
+PREV_RESULTS=$(resolve_orthofinder_run "${RESULTS_DIR}/orthogroups/input/OrthoFinder" || true)
 
 if [ -n "$PREV_RESULTS" ] && [ -f "$PREV_RESULTS/Orthogroups/Orthogroups.tsv" ]; then
     # Previous run has orthogroups — resume from there (skip DIAMOND + MCL)
@@ -117,7 +127,9 @@ else
 fi
 
 # Verify output
-ORTHOFINDER_RESULTS=$(find "${RESULTS_DIR}/orthogroups" -maxdepth 4 -type d -name "Results_*" 2>/dev/null | sort -r | head -1)
+# Same rule as the resume probe above, so the run this stage VERIFIES is
+# provably the run every downstream stage will read.
+ORTHOFINDER_RESULTS=$(resolve_orthofinder_run "${RESULTS_DIR}/orthogroups" || true)
 if [ -z "$ORTHOFINDER_RESULTS" ] || [ ! -d "$ORTHOFINDER_RESULTS" ]; then
     log "Error: OrthoFinder failed to produce results"
     exit 1

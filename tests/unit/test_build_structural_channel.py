@@ -180,10 +180,11 @@ def test_build_structural_channel_end_to_end_across_dbs(tmp_path):
         "cand_novel\ttargetQ\t0.10\t0.15\t1e-2",
     ])
     afdb = _write_foldseek(tmp_path, "AFDB50.tsv", [
-        "cand_nonchemo\tP31356\t0.85\t0.90\t1e-25",
+        # Real AFDB50 entry name -- foldseek NEVER emits a bare accession.
+        "cand_nonchemo\tAF-P31356-F1-model_v4\t0.85\t0.90\t1e-25",
     ])
     gpcrdb = _write_foldseek(tmp_path, "GPCRdb.tsv", [
-        "cand_other\tunmapped_target\t0.85\t0.90\t1e-25",
+        "cand_other\tHomology_model_gpr101_human_inactive.pdb\t0.85\t0.90\t1e-25",
     ])
     anchor_tsv = _write_anchor_set(tmp_path, [_anchor_row("P31356", "opsin")])
     family_map = bsc.build_family_map(anchor_tsv)
@@ -298,13 +299,18 @@ def test_write_channel_tsv_sorted_by_id_for_deterministic_output(tmp_path):
 # --------------------------------------------------------------------------- #
 
 def test_cli_end_to_end_writes_consumable_tsv(tmp_path):
-    pdb = _write_foldseek(tmp_path, "PDB.tsv", ["cand1\tP31356\t0.85\t0.90\t1e-25"])
+    # Realistic foldseek PDB-database target: <pdbid>_<chain>, resolved to a
+    # family through a target-keyed meta table (a PDB id carries no accession).
+    pdb = _write_foldseek(tmp_path, "PDB.tsv", ["cand1\t1f88_A\t0.85\t0.90\t1e-25"])
     missing_afdb = str(tmp_path / "AFDB50.tsv")
     missing_gpcrdb = str(tmp_path / "GPCRdb.tsv")
     anchor_tsv = _write_anchor_set(tmp_path, [_anchor_row("P31356", "opsin")])
+    pdb_meta = tmp_path / "pdb_meta.tsv"
+    pdb_meta.write_text("target\tfamily\n1f88\topsin\n")
     out = tmp_path / "struct_channel.tsv"
 
     rc = bsc.main([
+        "--gpcrdb-meta", str(pdb_meta),
         "--foldseek-tsvs", pdb, missing_afdb, missing_gpcrdb,
         "--anchor-set", anchor_tsv,
         "--out", str(out),
@@ -323,12 +329,15 @@ def test_cli_end_to_end_writes_consumable_tsv(tmp_path):
 
 
 def test_cli_optional_gpcrdb_meta_flag(tmp_path):
-    pdb = _write_foldseek(tmp_path, "PDB.tsv", ["cand1\tgpcrdb_101\t0.85\t0.90\t1e-25"])
+    pdb = _write_foldseek(
+        tmp_path, "PDB.tsv",
+        ["cand1\tHomology_model_5ht2a_human_active.pdb\t0.85\t0.90\t1e-25"])
     missing_afdb = str(tmp_path / "AFDB50.tsv")
     missing_gpcrdb = str(tmp_path / "GPCRdb.tsv")
     anchor_tsv = _write_anchor_set(tmp_path, [_anchor_row("P31356", "opsin")])
     gpcrdb_meta = tmp_path / "gpcrdb_meta.tsv"
-    gpcrdb_meta.write_text("target\tfamily\ngpcrdb_101\taminergic_5HT\n")
+    gpcrdb_meta.write_text(
+        "target\tfamily\nHomology_model_5ht2a_human_active\taminergic_5HT\n")
     out = tmp_path / "struct_channel.tsv"
 
     rc = bsc.main([

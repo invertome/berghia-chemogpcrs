@@ -22,6 +22,11 @@
 
 source config.sh
 source functions.sh
+# ONE deterministic, chronologically-correct rule for which OrthoFinder
+# run is authoritative (mtime of Orthogroups.tsv). Shared by stages
+# 03/03b/04/05/06c/07 so they can no longer resolve different runs.
+# shellcheck source=scripts/orthofinder_paths.sh
+source "${SCRIPTS_DIR:-scripts}/orthofinder_paths.sh"
 
 # Create output directories
 mkdir -p "${RESULTS_DIR}/phylogenies/protein" "${RESULTS_DIR}/phylogenies/nucleotide" "${RESULTS_DIR}/phylogenies/visualizations" "${LOGS_DIR}" || { log "Error: Cannot create directories"; exit 1; }
@@ -151,7 +156,7 @@ if [ "${STAGE04_PHASE}" != "ogs" ]; then
 # class we have no evidence for (a divergent/unclassifiable or non-GPCR OG still
 # gets its own per-OG tree, just not a class backbone). Only if the whole table
 # cannot be built (inputs missing) does per-OG routing fall back to class_A.
-ORTHOGROUPS_TSV=$(find "${RESULTS_DIR}/orthogroups" -name "Orthogroups.tsv" -path "*/Orthogroups/*" 2>/dev/null | head -1)
+ORTHOGROUPS_TSV=$(resolve_orthogroups_tsv "${RESULTS_DIR}/orthogroups" || true)
 CLASSIFY_DIR=$(dirname "${BERGHIA_CLASS_TSV}")
 # Collect every per-sequence class table classify_gpcr_by_class.py writes into
 # the classify dir (class_phase1a.tsv, class_berghia.tsv, and any full-557 P6
@@ -496,7 +501,15 @@ if [ -n "$SLURM_ARRAY_TASK_ID" ]; then
         base=$(get_orthogroup_by_index "$SLURM_ARRAY_TASK_ID" "$MANIFEST_FILE")
     else
         # Fallback to globbing
-        ORTHOGROUPS=("${RESULTS_DIR}/orthogroups/OrthoFinder/Results"*/Orthogroups/OG*.fa)
+        # Fallback: enumerate the authoritative run's Orthogroup_Sequences/
+        # (scripts/orthofinder_paths.sh). The old glob pointed at
+        # orthogroups/OrthoFinder/Results*/Orthogroups/ — wrong on BOTH
+        # components (the real root is orthogroups/input/OrthoFinder, and
+        # per-OG FASTAs live in Orthogroup_Sequences/, not Orthogroups/), so it
+        # never matched and basename turned the literal pattern into "$base".
+        _og_seq_dir=$(resolve_orthogroup_sequences_dir "${RESULTS_DIR}/orthogroups" || true)
+        [ -n "$_og_seq_dir" ] || { log "Error: no OrthoFinder Orthogroup_Sequences directory"; exit 1; }
+        ORTHOGROUPS=("${_og_seq_dir}"/OG*.fa)
         og="${ORTHOGROUPS[$SLURM_ARRAY_TASK_ID]}"
         base=$(basename "$og" .fa)
     fi
@@ -506,13 +519,21 @@ else
     if [ -f "$MANIFEST_FILE" ]; then
         base=$(get_orthogroup_by_index 0 "$MANIFEST_FILE")
     else
-        ORTHOGROUPS=("${RESULTS_DIR}/orthogroups/OrthoFinder/Results"*/Orthogroups/OG*.fa)
+        _og_seq_dir=$(resolve_orthogroup_sequences_dir "${RESULTS_DIR}/orthogroups" || true)
+        [ -n "$_og_seq_dir" ] || { log "Error: no OrthoFinder Orthogroup_Sequences directory"; exit 1; }
+        ORTHOGROUPS=("${_og_seq_dir}"/OG*.fa)
         base=$(basename "${ORTHOGROUPS[0]}" .fa)
     fi
 fi
 
-# Find the orthogroup FASTA file
-og=$(find "${RESULTS_DIR}/orthogroups" -name "${base}.fa" -type f 2>/dev/null | head -1)
+# Find the orthogroup FASTA file.
+# Anchored to the authoritative run's Orthogroup_Sequences/ (see
+# scripts/orthofinder_paths.sh). The previous unsorted `find ... | head -1`
+# matched the same basename in MultipleSequenceAlignments/ (an ALREADY-ALIGNED
+# MSA — re-aligning it produces a garbage tree and exits 0), in
+# WorkingDirectory/ (internal integer ids), and zero-byte leftovers, in
+# filesystem order.
+og=$(resolve_orthogroup_fasta "${base}" "${RESULTS_DIR}/orthogroups" || true)
 [ -z "$og" ] || [ ! -f "$og" ] && { log "Skipping missing orthogroup: ${base}"; exit 0; }
 
 # --- Per-OG class tagging ---

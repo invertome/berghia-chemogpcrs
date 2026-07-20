@@ -16,6 +16,11 @@
 
 source config.sh
 source functions.sh
+# ONE deterministic, chronologically-correct rule for which OrthoFinder
+# run is authoritative (mtime of Orthogroups.tsv). Shared by stages
+# 03/03b/04/05/06c/07 so they can no longer resolve different runs.
+# shellcheck source=scripts/orthofinder_paths.sh
+source "${SCRIPTS_DIR:-scripts}/orthofinder_paths.sh"
 
 # Create output directory
 mkdir -p "${RESULTS_DIR}/lse_classification" "${LOGS_DIR}" || { log "Error: Cannot create directories"; exit 1; }
@@ -31,8 +36,12 @@ log "Starting LSE classification."
 USE_PYTHON_LSE=${USE_PYTHON_LSE:-true}
 
 # --- Get orthogroup FASTA directory ---
-# OrthoFinder puts per-OG FASTA files in Orthogroup_Sequences/, not Orthogroups/
-OG_DIR=$(find "${RESULTS_DIR}/orthogroups" -maxdepth 5 -type d -name "Orthogroup_Sequences" -path "*/Results_*/*" 2>/dev/null | head -1)
+# OrthoFinder puts per-OG FASTA files in Orthogroup_Sequences/, not Orthogroups/.
+# Resolved off the SAME authoritative run every other stage uses (see
+# scripts/orthofinder_paths.sh) — the previous unsorted `find | head -1` could
+# pick a different run than stages 04/05/06c/07, so an OG id classified here
+# denoted a different gene set downstream while every join still succeeded.
+OG_DIR=$(resolve_orthogroup_sequences_dir "${RESULTS_DIR}/orthogroups" || true)
 if [ -z "$OG_DIR" ] || [ ! -d "$OG_DIR" ]; then
     log "Error: Orthogroup_Sequences directory not found"
     exit 1

@@ -119,13 +119,23 @@ def test_classify_hit_known_other_when_target_absent_from_family_map():
     assert classify_hit(best, family_map={}) == "known_other"
 
 
+@pytest.mark.parametrize("label_form", ["{family}", "{family}_subfamilyX"])
 @pytest.mark.parametrize("family", sorted(NON_CHEMORECEPTOR_FAMILIES))
-def test_classify_hit_recognizes_every_nonchemoreceptor_tag(family):
+def test_classify_hit_recognizes_every_nonchemoreceptor_tag(family, label_form):
     """NON_CHEMORECEPTOR_FAMILIES is a module constant so it is testable and
     overridable (per the spec) -- prove every tag in it actually triggers
-    the exclusion-corroboration state."""
+    the exclusion-corroboration state.
+
+    Both label forms the vocabulary actually uses are exercised: the bare
+    coarse family (what references/anchors/anchor_set.tsv's `family` column
+    really holds -- family and subfamily are separate columns there) and the
+    documented "<coarse>_<subfamily>" composite. The previous
+    "{family}-subfamily-x" form was invented -- nothing emits it -- and it
+    only passed because the match was an unanchored substring test, the very
+    defect that would have let "Class A (Rhodopsin)" match "opsin".
+    """
     best = {"target": "t1", "alntmscore": 1.0, "fident": 1.0, "evalue": 0.0}
-    family_map = {"t1": f"{family}-subfamily-x"}
+    family_map = {"t1": label_form.format(family=family)}
     assert classify_hit(best, family_map) == "known_non_chemoreceptor"
 
 

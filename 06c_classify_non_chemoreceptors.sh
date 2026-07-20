@@ -43,6 +43,11 @@ cd "$SCRIPT_DIR"
 source config.sh
 # shellcheck disable=SC1091
 source functions.sh
+# ONE deterministic, chronologically-correct rule for which OrthoFinder
+# run is authoritative (mtime of Orthogroups.tsv). Shared by stages
+# 03/03b/04/05/06c/07 so they can no longer resolve different runs.
+# shellcheck source=scripts/orthofinder_paths.sh
+source "${SCRIPTS_DIR:-scripts}/orthofinder_paths.sh"
 
 THREADS="${SLURM_CPUS_PER_TASK:-${CPUS:-4}}"
 
@@ -52,7 +57,7 @@ PFAM_DIR="${RESULTS_DIR}/classification/hmms/pfam_fallback"
 LOO_METRICS="${RESULTS_DIR}/classification/loo/loo_metrics.tsv"
 TREE_DIR="${RESULTS_DIR}/classification/trees"
 ANNOTATIONS_TSV="${REFERENCE_DIR:-references}/non_chemo_gpcr/all_references.tsv"
-ORTHOGROUPS_TSV=$(find "${RESULTS_DIR}/orthogroups" -name "Orthogroups.tsv" -path "*/Orthogroups/*" 2>/dev/null | head -1)
+ORTHOGROUPS_TSV=$(resolve_orthogroups_tsv "${RESULTS_DIR}/orthogroups" || true)
 
 OUT_DIR="${RESULTS_DIR}/classification"
 mkdir -p "$OUT_DIR"

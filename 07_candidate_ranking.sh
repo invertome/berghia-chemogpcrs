@@ -15,6 +15,11 @@
 
 source config.sh
 source functions.sh
+# ONE deterministic, chronologically-correct rule for which OrthoFinder
+# run is authoritative (mtime of Orthogroups.tsv). Shared by stages
+# 03/03b/04/05/06c/07 so they can no longer resolve different runs.
+# shellcheck source=scripts/orthofinder_paths.sh
+source "${SCRIPTS_DIR:-scripts}/orthofinder_paths.sh"
 
 # Create output directory
 mkdir -p "${RESULTS_DIR}/ranking" "${LOGS_DIR}" || { log "Error: Cannot create directories"; exit 1; }
@@ -370,7 +375,7 @@ fi
 # change ranking; lets reviewers see which candidates' rankings depend
 # on dN/dS estimates from sparse reference CDS.
 COV_REF_CDS="${RESULTS_DIR}/reference_sequences/cds/all_references_cds.fna"
-COV_OG_TSV=$(find "${RESULTS_DIR}/orthogroups" -name "Orthogroups.tsv" -path "*/Orthogroups/*" 2>/dev/null | head -1)
+COV_OG_TSV=$(resolve_orthogroups_tsv "${RESULTS_DIR}/orthogroups" || true)
 if [ -f "$HCR_AUG_INPUT" ] && [ -f "$COV_REF_CDS" ] && [ -n "$COV_OG_TSV" ]; then
     python3 "${SCRIPTS_DIR}/add_og_coverage_columns.py" \
         --ranked-csv "$HCR_AUG_INPUT" \
