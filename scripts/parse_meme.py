@@ -28,9 +28,54 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Iterable
+
+
+def write_csv_atomic(path, fieldnames, rows) -> None:
+    """Publish a CSV atomically: unique temp in the same dir, then os.replace.
+
+    Stage 05 runs as ``#SBATCH --array=0-999%50``, so up to 50 tasks on
+    DIFFERENT nodes write per-OG CSVs into one shared directory while other
+    tasks glob that same directory to rebuild the cumulative results file.
+    A plain ``open(path, "w")`` truncates the published file at open() and
+    refills it incrementally, so a concurrent globber can read an empty or
+    half-written CSV and concatenate it into the cumulative -- silently,
+    with no error anywhere. ``os.replace`` is atomic within a filesystem,
+    so readers see either the whole old file or the whole new one.
+
+    The staging name folds in the SLURM array identity, not just the PID:
+    PIDs are unique per node only, and this directory is shared storage, so
+    two tasks on different nodes can hold the same PID (same reasoning as
+    TASK_TAG in scripts/hpc/run_selection_stack.sh). The ".tmp.<tag>" suffix
+    also keeps staging files out of the consumers' "*_<variant>.csv" globs.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tag = "{}.{}.{}".format(
+        os.environ.get("SLURM_JOB_ID", "nojob"),
+        os.environ.get("SLURM_ARRAY_TASK_ID", "0"),
+        os.getpid(),
+    )
+    tmp = path.with_name(f"{path.name}.tmp.{tag}")
+    try:
+        with open(tmp, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=fieldnames)
+            w.writeheader()
+            w.writerows(rows)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        # Never leave debris in a directory that concurrent tasks glob.
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
 
 OG_FIELDS = [
     "og_name",
@@ -380,18 +425,10 @@ def main() -> int:
             except Exception as e:
                 print(f"WARN: failed to parse {path}: {e}", file=sys.stderr)
 
-    Path(args.out_og).parent.mkdir(parents=True, exist_ok=True)
-    with open(args.out_og, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=OG_FIELDS)
-        w.writeheader()
-        w.writerows(og_rows)
+    write_csv_atomic(args.out_og, OG_FIELDS, og_rows)
 
     if args.out_sites:
-        Path(args.out_sites).parent.mkdir(parents=True, exist_ok=True)
-        with open(args.out_sites, "w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=SITE_FIELDS)
-            w.writeheader()
-            w.writerows(site_rows)
+        write_csv_atomic(args.out_sites, SITE_FIELDS, site_rows)
 
     print(f"Wrote {len(og_rows)} OG-level + {len(site_rows)} site-level "
           f"MEME records to {args.out_og}", file=sys.stderr)
@@ -412,20 +449,12 @@ def main() -> int:
         )
         out_og_dual = args.out_og_concordance or args.out_og.replace(
             ".csv", "_concordance.csv")
-        Path(out_og_dual).parent.mkdir(parents=True, exist_ok=True)
-        with open(out_og_dual, "w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=OG_FIELDS_DUAL)
-            w.writeheader()
-            w.writerow(dual_og)
+        write_csv_atomic(out_og_dual, OG_FIELDS_DUAL, [dual_og])
         out_sites_dual = (args.out_sites_concordance
                           or (args.out_sites and args.out_sites.replace(
                               ".csv", "_concordance.csv")))
         if out_sites_dual:
-            Path(out_sites_dual).parent.mkdir(parents=True, exist_ok=True)
-            with open(out_sites_dual, "w", newline="") as f:
-                w = csv.DictWriter(f, fieldnames=SITE_FIELDS_DUAL)
-                w.writeheader()
-                w.writerows(dual_sites)
+            write_csv_atomic(out_sites_dual, SITE_FIELDS_DUAL, dual_sites)
         print(f"Wrote concordance: high={dual_og['high_confidence_sites_n']} "
               f"lenient_only={dual_og['lenient_only_sites_n']} "
               f"strict_only={dual_og['strict_only_sites_n']} "

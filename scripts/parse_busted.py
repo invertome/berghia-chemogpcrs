@@ -27,9 +27,53 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Iterable, Optional
+
+def write_csv_atomic(path, fieldnames, rows) -> None:
+    """Publish a CSV atomically: unique temp in the same dir, then os.replace.
+
+    Stage 05 runs as ``#SBATCH --array=0-999%50``, so up to 50 tasks on
+    DIFFERENT nodes write per-OG CSVs into one shared directory while other
+    tasks glob that same directory to rebuild the cumulative results file.
+    A plain ``open(path, "w")`` truncates the published file at open() and
+    refills it incrementally, so a concurrent globber can read an empty or
+    half-written CSV and concatenate it into the cumulative -- silently,
+    with no error anywhere. ``os.replace`` is atomic within a filesystem,
+    so readers see either the whole old file or the whole new one.
+
+    The staging name folds in the SLURM array identity, not just the PID:
+    PIDs are unique per node only, and this directory is shared storage, so
+    two tasks on different nodes can hold the same PID (same reasoning as
+    TASK_TAG in scripts/hpc/run_selection_stack.sh). The ".tmp.<tag>" suffix
+    also keeps staging files out of the consumers' "*_<variant>.csv" globs.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tag = "{}.{}.{}".format(
+        os.environ.get("SLURM_JOB_ID", "nojob"),
+        os.environ.get("SLURM_ARRAY_TASK_ID", "0"),
+        os.getpid(),
+    )
+    tmp = path.with_name(f"{path.name}.tmp.{tag}")
+    try:
+        with open(tmp, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=fieldnames)
+            w.writeheader()
+            w.writerows(rows)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        # Never leave debris in a directory that concurrent tasks glob.
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
 
 FIELDNAMES = [
     "og_name",
@@ -155,11 +199,7 @@ def main() -> int:
             except Exception as e:
                 print(f"WARN: failed to parse {path}: {e}", file=sys.stderr)
 
-    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-    with open(args.out, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=FIELDNAMES)
-        w.writeheader()
-        w.writerows(rows)
+    write_csv_atomic(args.out, FIELDNAMES, rows)
     n_sig = sum(1 for r in rows if r["is_significant"])
     print(f"Wrote {len(rows)} BUSTED-{args.variant} records to {args.out} "
           f"({n_sig} significant at alpha={args.alpha})", file=sys.stderr)

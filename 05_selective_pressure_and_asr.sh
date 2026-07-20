@@ -26,6 +26,15 @@ source "${SCRIPTS_DIR:-scripts}/orthofinder_paths.sh"
 # Create output directories
 mkdir -p "${RESULTS_DIR}/selective_pressure" "${RESULTS_DIR}/selective_pressure/nucleotide" "${RESULTS_DIR}/asr" "${LOGS_DIR}" || { log "Error: Cannot create directories"; exit 1; }
 
+# This stage runs as `#SBATCH --array=0-999%50`, so up to 50 tasks run on
+# DIFFERENT nodes against the same shared results directory. Every path that
+# is NOT namespaced by the orthogroup needs a per-task-unique staging name.
+# $$ alone is insufficient: PIDs are unique per node, the staging directory
+# is shared storage, so two tasks on two nodes can hold the same PID. Compose
+# the SLURM array identity with the PID so the tag is unique cluster-wide.
+# Identical to TASK_TAG in scripts/hpc/run_selection_stack.sh (bead -ih5u).
+TASK_TAG="${SLURM_JOB_ID:-nojob}.${SLURM_ARRAY_TASK_ID:-0}.$$"
+
 # Check dependency
 check_file "${RESULTS_DIR}/step_completed_lse_classification.txt"
 
@@ -76,7 +85,17 @@ if [ -n "$SLURM_ARRAY_TASK_ID" ]; then
         # never matched and basename turned the literal pattern into "$base".
         _og_seq_dir=$(resolve_orthogroup_sequences_dir "${RESULTS_DIR}/orthogroups" || true)
         [ -n "$_og_seq_dir" ] || { log "Error: no OrthoFinder Orthogroup_Sequences directory"; exit 1; }
-        ORTHOGROUPS=("${_og_seq_dir}"/OG*.fa)
+        # Deterministic, locale-independent order. The array index selects
+        # POSITIONALLY and the 50 concurrent tasks run on different nodes, so
+        # index N must denote the SAME orthogroup everywhere; sort under LC_ALL=C
+        # rather than trusting filesystem traversal order or the ambient locale.
+        mapfile -t ORTHOGROUPS < <(LC_ALL=C find "${_og_seq_dir}" -maxdepth 1 -type f -name 'OG*.fa' | LC_ALL=C sort)
+        # A zero-match enumeration must ABORT, never iterate zero times. Bash
+        # leaves an unmatched glob as its literal pattern (nullglob is off), so
+        # the previous array-glob produced the orthogroup name "OG*" and the
+        # stage ran a full analysis against a nonexistent orthogroup, exiting 0.
+        [ "${#ORTHOGROUPS[@]}" -gt 0 ] || { log "Error: ${_og_seq_dir} contains no OG*.fa"; exit 1; }
+        [ "$SLURM_ARRAY_TASK_ID" -lt "${#ORTHOGROUPS[@]}" ] || { log "Error: array index ${SLURM_ARRAY_TASK_ID} is past the ${#ORTHOGROUPS[@]} orthogroups in ${_og_seq_dir}"; exit 1; }
         og="${ORTHOGROUPS[$SLURM_ARRAY_TASK_ID]}"
         base=$(basename "$og" .fa)
     fi
@@ -87,7 +106,10 @@ else
     else
         _og_seq_dir=$(resolve_orthogroup_sequences_dir "${RESULTS_DIR}/orthogroups" || true)
         [ -n "$_og_seq_dir" ] || { log "Error: no OrthoFinder Orthogroup_Sequences directory"; exit 1; }
-        ORTHOGROUPS=("${_og_seq_dir}"/OG*.fa)
+        # Same deterministic order and loud zero-match guard as the array
+        # branch above, so non-array test runs pick the same OG index 0 does.
+        mapfile -t ORTHOGROUPS < <(LC_ALL=C find "${_og_seq_dir}" -maxdepth 1 -type f -name 'OG*.fa' | LC_ALL=C sort)
+        [ "${#ORTHOGROUPS[@]}" -gt 0 ] || { log "Error: ${_og_seq_dir} contains no OG*.fa"; exit 1; }
         base=$(basename "${ORTHOGROUPS[0]}" .fa)
     fi
 fi
@@ -250,11 +272,35 @@ PYTHON_SCRIPT
 # Bead 1z7: rebuild a cumulative CSV from all per-OG CSVs in <dir> matching
 # *<suffix>. Idempotent and safe under SLURM arrays — each task writes only its
 # own per-OG csv then re-runs this concat, so the last task yields the complete
-# cumulative. Header is taken from the first file only; per-task temp avoids
-# clobbering between concurrent tasks.
+# cumulative. Header is taken from the first file only.
+#
+# Staging is namespaced by ${TASK_TAG}, NOT by $$. The original `.tmp.$$` was
+# cited as this project's canonical concurrency fix but is insufficient: PIDs
+# are unique per node while <dir> is shared storage, so two of the 50 concurrent
+# array tasks can collide on the same staging path — task A's `: >` truncates
+# the file task B is mid-append to, and B publishes the truncated result. The
+# final `mv` is atomic within the directory, so readers of the cumulative never
+# observe a partial file.
+#
+# The per-OG CSVs this globs need their OWN atomicity guarantee. Staging
+# protects the OUTPUT of this loop; a non-atomically-written per-OG CSV
+# corrupts its INPUT, and no amount of output staging can recover from that.
+# A plain open(path,"w") truncates the published file at open and refills it
+# incrementally, so a concurrent task globbing this directory can read an
+# empty or half-written per-OG CSV and publish it into the cumulative.
+# Verified status of the three writers (do not assume — this comment
+# previously asserted an atomicity nobody had checked, and it was false):
+#   parse_busted.py  ATOMIC (write_csv_atomic: unique temp + os.replace)
+#   parse_meme.py    ATOMIC (write_csv_atomic: unique temp + os.replace)
+#   parse_absrel.py  NOT ATOMIC — still open(output_csv, "w"/"a"). Its
+#                    docstring's "atomic" refers to per-OG isolation, not to
+#                    the write. This is the aBSREL/dN-dS axis globbed below.
 concat_per_og_csv() {
     local dir="$1" suffix="$2" cumulative="$3"
-    local tmp="${cumulative}.tmp.$$"
+    # The fallback recomposes the SLURM identity rather than degrading to a
+    # bare $$, so the guarantee holds even if this function is sourced
+    # somewhere TASK_TAG was never set.
+    local tmp="${cumulative}.tmp.${TASK_TAG:-${SLURM_JOB_ID:-nojob}.${SLURM_ARRAY_TASK_ID:-0}.$$}"
     : > "$tmp"
     local first=1 csv
     for csv in "$dir"/*"$suffix"; do

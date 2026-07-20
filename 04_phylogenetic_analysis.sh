@@ -509,7 +509,20 @@ if [ -n "$SLURM_ARRAY_TASK_ID" ]; then
         # never matched and basename turned the literal pattern into "$base".
         _og_seq_dir=$(resolve_orthogroup_sequences_dir "${RESULTS_DIR}/orthogroups" || true)
         [ -n "$_og_seq_dir" ] || { log "Error: no OrthoFinder Orthogroup_Sequences directory"; exit 1; }
-        ORTHOGROUPS=("${_og_seq_dir}"/OG*.fa)
+        # Deterministic, locale-independent order. The array index selects
+        # POSITIONALLY and the 50 concurrent tasks run on different nodes, so
+        # index N must denote the SAME orthogroup everywhere; sort under LC_ALL=C
+        # rather than trusting filesystem traversal order or the ambient locale.
+        # Stage 05 enumerates identically — the two stages must agree on which
+        # orthogroup an index denotes or every downstream join silently pairs
+        # stage 04's tree with stage 05's selection results for a different OG.
+        mapfile -t ORTHOGROUPS < <(LC_ALL=C find "${_og_seq_dir}" -maxdepth 1 -type f -name 'OG*.fa' | LC_ALL=C sort)
+        # A zero-match enumeration must ABORT, never iterate zero times. Bash
+        # leaves an unmatched glob as its literal pattern (nullglob is off), so
+        # the previous array-glob produced the orthogroup name "OG*" and the
+        # stage ran a full analysis against a nonexistent orthogroup, exiting 0.
+        [ "${#ORTHOGROUPS[@]}" -gt 0 ] || { log "Error: ${_og_seq_dir} contains no OG*.fa"; exit 1; }
+        [ "$SLURM_ARRAY_TASK_ID" -lt "${#ORTHOGROUPS[@]}" ] || { log "Error: array index ${SLURM_ARRAY_TASK_ID} is past the ${#ORTHOGROUPS[@]} orthogroups in ${_og_seq_dir}"; exit 1; }
         og="${ORTHOGROUPS[$SLURM_ARRAY_TASK_ID]}"
         base=$(basename "$og" .fa)
     fi
@@ -521,7 +534,10 @@ else
     else
         _og_seq_dir=$(resolve_orthogroup_sequences_dir "${RESULTS_DIR}/orthogroups" || true)
         [ -n "$_og_seq_dir" ] || { log "Error: no OrthoFinder Orthogroup_Sequences directory"; exit 1; }
-        ORTHOGROUPS=("${_og_seq_dir}"/OG*.fa)
+        # Same deterministic order and loud zero-match guard as the array
+        # branch above, so non-array test runs pick the same OG index 0 does.
+        mapfile -t ORTHOGROUPS < <(LC_ALL=C find "${_og_seq_dir}" -maxdepth 1 -type f -name 'OG*.fa' | LC_ALL=C sort)
+        [ "${#ORTHOGROUPS[@]}" -gt 0 ] || { log "Error: ${_og_seq_dir} contains no OG*.fa"; exit 1; }
         base=$(basename "${ORTHOGROUPS[0]}" .fa)
     fi
 fi
