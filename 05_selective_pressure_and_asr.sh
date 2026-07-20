@@ -389,14 +389,50 @@ if [ "$berghia_count" -gt 0 ] && [ "$seq_count" -gt 2 ]; then
                     # Extract per-deep-node ancestral sequences for downstream use.
                     if [ -f "${asr_prefix}.state" ]; then
                         for node in $deep_nodes; do
+                            # "$node" is the .state lookup key (IQ-TREE writes
+                            # the bare label). --record-id is the emitted FASTA
+                            # header: IQ-TREE numbers internal nodes per tree,
+                            # so a bare "NodeN" is only unique within THIS
+                            # orthogroup, and stage 08 pools every *_asr.fa into
+                            # one extraction source. Namespacing by ${base}
+                            # matches the filename convention and keeps the
+                            # pooled ids unambiguous.
                             python3 "${SCRIPTS_DIR}/extract_iqtree_asr.py" \
                                 "${asr_prefix}.state" "$node" \
                                 "${RESULTS_DIR}/asr/${base}_${node}_asr.fa" \
+                                --record-id "${base}_${node}" \
                                 2>/dev/null \
                                 || log "Warning: ASR extract failed for ${base} ${node}"
                         done
                     fi
                 else
+                    # KNOWN LIMITATION (ASR_BACKEND=fastml only; iqtree is the
+                    # default and is unaffected). Two separate problems here,
+                    # neither fixed by the --record-id namespacing above --
+                    # FastML writes its own headers, so the extractor that
+                    # honours --record-id is not in this code path at all:
+                    #
+                    #  1. The invocation does not match the real FastML CLI.
+                    #     Per the fastml(1) manual the binary takes single-dash
+                    #     options only (-s sequence, -t tree, -x/-y tree out,
+                    #     -j/-k sequence out); --seq/--tree/--out_seq/--out_tree/
+                    #     --node/--verbose do not exist, and `-t` here is handed
+                    #     a CPU count where FastML expects the tree file. The
+                    #     call therefore fails, no *_asr.fa is written, and
+                    #     stage 08 silently folds extant candidates only.
+                    #  2. FastML has no single-node selection flag: it writes
+                    #     EVERY internal node into one file (seq.marginal.txt /
+                    #     seq.joint.txt) under its own labels (N1, N2, ...).
+                    #     So if (1) were fixed naively, each iteration of this
+                    #     per-node loop would write the same all-nodes file, and
+                    #     those labels are per-tree -- ids would collide both
+                    #     within an orthogroup and across orthogroups, which is
+                    #     exactly what stage 08's duplicate-id guard rejects.
+                    #
+                    # Fixing this means choosing a FastML output contract (run
+                    # once per orthogroup, then split seq.marginal.txt and
+                    # namespace each record as ${base}_<fastml-label>), which is
+                    # a pipeline-behaviour decision, not a mechanical fix.
                     for node in $deep_nodes; do
                         run_command "${base}_${node}_asr" ${FASTML} --seq "$asr_input" --tree "$tree" \
                             --out_seq "${RESULTS_DIR}/asr/${base}_${node}_asr.fa" \

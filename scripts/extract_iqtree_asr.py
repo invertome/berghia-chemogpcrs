@@ -48,9 +48,26 @@ def extract_sites_for_node(state_file: str, node_name: str):
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("state_file", help="IQ-TREE .state file (from --ancestral)")
-    ap.add_argument("node_name", help="Internal node name to extract")
+    ap.add_argument("node_name", help="Internal node name to extract "
+                                      "(the .state lookup key, e.g. 'Node5')")
     ap.add_argument("output_fasta", help="Output FASTA path")
+    # The .state lookup key and the emitted record id are two different jobs.
+    # IQ-TREE numbers internal nodes per tree, so 'Node5' is only unique WITHIN
+    # one orthogroup's tree; two orthogroups would both emit '>Node5' for
+    # completely different ancestral sequences, and stage 08 concatenates every
+    # *_asr.fa into one extraction source. Callers therefore pass a globally
+    # unique id (the '{orthogroup}_{node}' form already used for the filename),
+    # while the lookup below keeps using the bare label IQ-TREE actually wrote.
+    # Optional, defaulting to the bare node name, so the three-positional CLI
+    # stays backward compatible.
+    ap.add_argument("--record-id", default=None,
+                    help="Record id for the emitted FASTA header "
+                         "(default: node_name). Use an orthogroup-namespaced "
+                         "id such as 'OG0000001_Node5' when the output is "
+                         "pooled across orthogroups.")
     args = ap.parse_args()
+
+    record_id = args.record_id if args.record_id is not None else args.node_name
 
     sites = list(extract_sites_for_node(args.state_file, args.node_name))
     if not sites:
@@ -62,9 +79,9 @@ def main() -> int:
     seq = "".join(s for _, s in sites)
     Path(args.output_fasta).parent.mkdir(parents=True, exist_ok=True)
     with open(args.output_fasta, "w") as f:
-        f.write(f">{args.node_name}\n{seq}\n")
+        f.write(f">{record_id}\n{seq}\n")
     print(f"Wrote {len(seq)}-residue ancestral sequence for {args.node_name} "
-          f"-> {args.output_fasta}", file=sys.stderr)
+          f"as {record_id!r} -> {args.output_fasta}", file=sys.stderr)
     return 0
 
 
