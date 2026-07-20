@@ -138,14 +138,42 @@ fi
 NCOL=$(awk '/^>/{next}{print length($0); exit}' "$REF_ALN")
 echo "[a1_backbone] reference alignment: $(grep -c '^>' "$REF_ALN") seqs, ~${NCOL} cols -> $REF_ALN"
 
-# --- Backbone tree: IQ-TREE 3 ------------------------------------------------
+# --- Backbone tree: IQ-TREE 3 with PROFILE MIXTURE MODELS --------------------
+# Divergent class-A GPCR paralogs have strong site-specific amino-acid
+# composition (TM helices vs ECL/ICL loops), which single-matrix models fit
+# poorly. ModelFinder therefore explores profile mixtures alongside the standard
+# nuclear matrices and selects by BIC.
+#   IQTREE_MIXTURE_MODE=madd (default) -> ModelFinder tests --madd candidates
+#   IQTREE_MIXTURE_MODE=pmsf           -> two-stage PMSF (guide tree, then a
+#        fixed profile mixture). PMSF is the field-standard way to apply C-series
+#        mixtures at large taxon counts where full mixture ML is intractable
+#        (Wang et al. 2018); use it if the madd run cannot finish in walltime.
+#   IQTREE_MIXTURE_MODE=off            -> previous behaviour (no mixtures)
+IQTREE_MIXTURE_MODE="${IQTREE_MIXTURE_MODE:-madd}"
+IQTREE_MADD="${IQTREE_MADD:-C10,C20,C30,C40,C50,C60,EX2,EX3,EHO,LG4M,LG4X}"
+IQTREE_PMSF_MODEL="${IQTREE_PMSF_MODEL:-LG+C60+F+G}"
+
 PREFIX="${BACKBONE_DIR}/a1_backbone"
-echo "[a1_backbone] IQ-TREE 3 ..."
-iqtree3 -s "$REF_ALN" --prefix "$PREFIX" \
-  -m MFP -msub nuclear \
-  -B 1000 -alrt 1000 --tbe \
-  -seed "$SEED" -T "$THREADS"
+if [ "$IQTREE_MIXTURE_MODE" = "pmsf" ]; then
+    echo "[a1_backbone] IQ-TREE 3 stage 1/2: guide tree ..."
+    iqtree3 -s "$REF_ALN" --prefix "${PREFIX}_guide" \
+      -m MFP -msub nuclear -seed "$SEED" -T "$THREADS"
+    echo "[a1_backbone] IQ-TREE 3 stage 2/2: PMSF ${IQTREE_PMSF_MODEL} ..."
+    iqtree3 -s "$REF_ALN" --prefix "$PREFIX" \
+      -m "$IQTREE_PMSF_MODEL" -ft "${PREFIX}_guide.treefile" \
+      -B 1000 -alrt 1000 --tbe -seed "$SEED" -T "$THREADS"
+elif [ "$IQTREE_MIXTURE_MODE" = "off" ]; then
+    echo "[a1_backbone] IQ-TREE 3 (no mixtures) ..."
+    iqtree3 -s "$REF_ALN" --prefix "$PREFIX" \
+      -m MFP -msub nuclear -B 1000 -alrt 1000 --tbe -seed "$SEED" -T "$THREADS"
+else
+    echo "[a1_backbone] IQ-TREE 3 exploring mixtures: ${IQTREE_MADD}"
+    iqtree3 -s "$REF_ALN" --prefix "$PREFIX" \
+      -m MFP -msub nuclear --madd "$IQTREE_MADD" \
+      -B 1000 -alrt 1000 --tbe -seed "$SEED" -T "$THREADS"
+fi
 BACKBONE_TREE="${PREFIX}.treefile"
+grep -m1 "Best-fit model" "${PREFIX}.log" 2>/dev/null || true
 
 # --- Anchor leaf ids (first whitespace token of each header) -----------------
 # Consumed downstream to identify which backbone leaves are characterized
