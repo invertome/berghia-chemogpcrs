@@ -350,7 +350,13 @@ class TestCLIEndToEnd:
     def test_main_returns_0_even_with_all_missing_proteomes(
         self, tmp_path: Path
     ) -> None:
-        """All proteomes missing → 0 rows but still succeeds (just warn)."""
+        """All proteomes missing → 0 rows, and that is only tolerated when the
+        caller says so explicitly.
+
+        A zero-resolution run used to succeed silently, which made a wrong
+        --proteomes-dir indistinguishable from a download that had not run yet.
+        It is now rc 2 by default; --allow-empty is the explicit opt-in for the
+        genuine not-yet-downloaded case, which is what this test covers."""
         mf = tmp_path / "manifest.tsv"
         out = tmp_path / "out.tsv"
         _write_manifest(mf, [
@@ -360,6 +366,7 @@ class TestCLIEndToEnd:
             "--manifest", str(mf),
             "--proteomes-dir", str(tmp_path / "proteomes"),
             "--out", str(out),
+            "--allow-empty",
         ])
         assert rc == 0
         # Header should still be there

@@ -18,8 +18,16 @@ Reports per-branch:
   - weight_at_max: site-fraction at the maximum-omega rate class
   - n_rate_classes: number of mixture components
 
-Supports atomic per-OG CSV writes plus a final concatenation step (avoids the
+Writes one per-OG CSV, later joined by a concatenation step (avoids the
 column-misalignment risk from raw appends; bead -mqt).
+
+The publish is ATOMIC in the write sense as well as the per-OG-isolation
+sense: every CSV goes through write_csv_atomic() -- a per-task-unique temp
+in the destination directory, fsync, then os.replace. This docstring
+previously said "Supports atomic per-OG CSV writes", which meant only the
+per-orthogroup isolation; the write itself was a bare open(path, mode)
+truncate-and-refill, and stage 05 globs this file from up to 50 concurrent
+array tasks. Keep the two meanings distinct when editing this line.
 """
 
 import argparse
@@ -32,6 +40,52 @@ from pathlib import Path
 # Allow imports of the shared helpers from sibling module
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _rank_candidates_lib import extract_branch_omega  # noqa: E402
+
+
+def write_csv_atomic(path, fieldnames, rows) -> None:
+    """Publish a CSV atomically: unique temp in the same dir, then os.replace.
+
+    Stage 05 runs as ``#SBATCH --array=0-999%50``, so up to 50 tasks on
+    DIFFERENT nodes write per-OG CSVs into one shared directory while other
+    tasks glob that same directory to rebuild the cumulative results file.
+    A plain ``open(path, "w")`` truncates the published file at open() and
+    refills it incrementally, so a concurrent globber can read an empty or
+    half-written CSV and concatenate it into the cumulative -- silently,
+    with no error anywhere. ``os.replace`` is atomic within a filesystem,
+    so readers see either the whole old file or the whole new one.
+
+    The staging name folds in the SLURM array identity, not just the PID:
+    PIDs are unique per node only, and this directory is shared storage, so
+    two tasks on different nodes can hold the same PID (same reasoning as
+    TASK_TAG in scripts/hpc/run_selection_stack.sh). The ".tmp.<tag>" suffix
+    also keeps staging files out of the consumers' "*_absrel.csv" globs.
+
+    Byte-identical to the helper in parse_busted.py / parse_meme.py: the
+    three stage-05 per-OG writers deliberately share ONE mechanism.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tag = "{}.{}.{}".format(
+        os.environ.get("SLURM_JOB_ID", "nojob"),
+        os.environ.get("SLURM_ARRAY_TASK_ID", "0"),
+        os.getpid(),
+    )
+    tmp = path.with_name(f"{path.name}.tmp.{tag}")
+    try:
+        with open(tmp, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=fieldnames)
+            w.writeheader()
+            w.writerows(rows)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        # Never leave debris in a directory that concurrent tasks glob.
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 FIELDNAMES = [
     'branch_id',
@@ -222,29 +276,31 @@ def parse_absrel_json(json_file, output_csv, append_mode='atomic',
         })
 
     # Write CSV. Atomic mode: per-OG file, no append (avoids schema-drift bug).
+    #
+    # Both modes publish through write_csv_atomic(). Legacy append mode reads
+    # the already-published rows and republishes old+new in ONE os.replace
+    # rather than opening the live file in "a": an in-place append has the
+    # same visibility problem as a truncate-and-refill, because a task
+    # globbing this directory can read the file between the two writes.
+    # Per-OG CSVs are a few hundred rows, so holding them in memory is free.
+    rows_to_write = results
     if append_mode == 'append':
-        file_exists = os.path.exists(output_csv)
-        if file_exists:
+        if os.path.exists(output_csv):
             # Validate header matches before appending (bead -mqt)
-            with open(output_csv) as f:
-                existing_header = next(csv.reader(f), None)
-            if existing_header != FIELDNAMES:
-                raise ValueError(
-                    f"Cannot append to {output_csv}: column schema differs.\n"
-                    f"Existing: {existing_header}\nExpected: {FIELDNAMES}\n"
-                    "Hint: regenerate the per-OG CSV with the new schema "
-                    "or use --append-mode atomic."
-                )
-        mode = 'a' if file_exists else 'w'
-    else:
-        mode = 'w'
+            with open(output_csv, newline='') as f:
+                reader = csv.reader(f)
+                existing_header = next(reader, None)
+                if existing_header != FIELDNAMES:
+                    raise ValueError(
+                        f"Cannot append to {output_csv}: column schema differs.\n"
+                        f"Existing: {existing_header}\nExpected: {FIELDNAMES}\n"
+                        "Hint: regenerate the per-OG CSV with the new schema "
+                        "or use --append-mode atomic."
+                    )
+                prior = [dict(zip(FIELDNAMES, row)) for row in reader if row]
+            rows_to_write = prior + results
 
-    Path(output_csv).parent.mkdir(parents=True, exist_ok=True)
-    with open(output_csv, mode, newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
-        if mode == 'w':
-            writer.writeheader()
-        writer.writerows(results)
+    write_csv_atomic(output_csv, FIELDNAMES, rows_to_write)
 
     print(f"Parsed {len(results)} branches from {json_file} -> {output_csv}",
           file=sys.stderr)

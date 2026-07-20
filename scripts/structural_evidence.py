@@ -25,7 +25,8 @@ from __future__ import annotations
 
 import os
 import re
-from typing import List, Optional
+import sys
+from typing import Dict, List, Optional, Set
 
 # Coarse NON-chemoreceptor GPCR family labels. A module constant (rather than
 # hard-coded inline) so it is testable and overridable by callers without
@@ -147,6 +148,103 @@ def target_keys(target: Optional[str]) -> List[str]:
     return keys
 
 
+# --------------------------------------------------------------------------- #
+# Foldseek QUERY-identifier normalisation
+#
+# Symmetric with target_keys() above, and deliberately living in the same module
+# so the two sides share _strip_structure_suffixes() and cannot drift.
+#
+# structural_channel() used the raw foldseek `query` field VERBATIM as the key
+# of the channel it returns. A raw search-tool output field is not a join key.
+#
+# MEASURED, not assumed (foldseek 10.941cd33, this project's berghia-gpcr env on
+# Unity, srun 61999969; flat query dir staged <candidate_id>.<ext> exactly as
+# scripts/unity/run_foldseek_candidates.sh stages it):
+#
+#     BersteEVm000001t1.cif  (1 chain)   -> query "BersteEVm000001t1"
+#     BersteEVm000002t1.pdb  (1 chain)   -> query "BersteEVm000002t1"
+#     BersteEVm000003t1.cif  (2 chains)  -> queries "BersteEVm000003t1_A"
+#                                                   "BersteEVm000003t1_B"
+#
+# So foldseek STRIPS the extension (structcreatedb.cpp: Util::remove_extension,
+# applied twice for .gz/.zst) and APPENDS "_<chain>" once a file holds more than
+# one chain, emitting one row PER CHAIN. The chain suffix is the real break: a
+# multi-chain AF3 model (receptor + peptide/ligand/G-protein, or any complex)
+# yields <cand_id>_A / <cand_id>_B, neither of which equals the bare candidate
+# id, and one candidate silently becomes two orphan channel rows.
+#
+# target_keys() alone does not repair that: its _PDB_RE wants a 4-character id
+# starting with a digit, so "BersteEVm000003t1_A" normalises to itself. And the
+# chain strip cannot be applied blindly, because a candidate id may legitimately
+# end in "_<alnum>" ("Berghia_scaffold_12"). It is therefore applied ONLY when
+# the stripped form is corroborated against the real candidate id universe --
+# resolution by identity, never by pattern-guess.
+#
+# NOTE: scripts/build_structural_channel.py carries an identical query_keys() /
+# canonical_query_id() pair (it was fixed first, before these were hoisted here
+# beside the target side). That module already imports _strip_structure_suffixes
+# from here; its two local copies should be collapsed into an import of these,
+# leaving one definition. Doing so is a change to a file this pass does not own.
+# --------------------------------------------------------------------------- #
+
+# Trailing "_<chain>" as foldseek appends it (mmCIF/PDB chain ids are short
+# alphanumerics). Only ever consulted against a known candidate id set.
+_CHAIN_SUFFIX_RE = re.compile(r"^(.+)_([A-Za-z0-9]{1,4})$")
+
+
+def query_keys(query: Optional[str]) -> List[str]:
+    """Ordered candidate join keys for one Foldseek query id.
+
+    Mirrors target_keys() for the query side: raw -> path basename ->
+    extension-stripped basename -> chain-stripped.
+
+    Deduplicated and order-stable. An empty/None query yields [].
+    """
+    raw = (query or "").strip()
+    if not raw:
+        return []
+
+    keys: List[str] = []
+
+    def add(key: str) -> None:
+        if key and key not in keys:
+            keys.append(key)
+
+    add(raw)
+    basename = raw.rsplit("/", 1)[-1]
+    add(basename)
+    stem = _strip_structure_suffixes(basename)
+    add(stem)
+
+    chain = _CHAIN_SUFFIX_RE.match(stem)
+    if chain:
+        add(chain.group(1))
+    return keys
+
+
+def canonical_query_id(query: Optional[str],
+                        candidate_ids: Optional[Set[str]] = None) -> Optional[str]:
+    """Resolve a Foldseek query id into the candidate id namespace.
+
+    With `candidate_ids`, returns the first of query_keys() that is a REAL
+    candidate id, or None when none of them is -- an unresolvable query is
+    reported, never rewritten into something that merely looks joinable.
+
+    Without `candidate_ids` there is nothing to corroborate against, so only
+    the unambiguous extension strip is applied and the chain suffix is left
+    alone (stripping it on a guess could truncate a legitimate id).
+    """
+    keys = query_keys(query)
+    if not keys:
+        return None
+    if candidate_ids is None:
+        return _strip_structure_suffixes(keys[0].rsplit("/", 1)[-1]) or None
+    for key in keys:
+        if key in candidate_ids:
+            return key
+    return None
+
+
 def family_for_target(target: Optional[str], family_map: dict) -> str:
     """Family label for a Foldseek target, or "" if none of its keys resolve.
 
@@ -250,8 +348,22 @@ def classify_hit(best: Optional[dict], family_map: dict,
 
 
 def structural_channel(foldseek_path: str, family_map: dict,
-                        tm_threshold: float = 0.5) -> dict:
+                        tm_threshold: float = 0.5,
+                        candidate_ids: Optional[Set[str]] = None) -> dict:
     """Build the per-candidate Foldseek structural-evidence channel.
+
+    Keys are CANDIDATE IDs, not raw Foldseek query fields. Each query is
+    normalised through canonical_query_id() -- symmetric with the target
+    side's family_for_target()/target_keys() -- so a multi-chain model's
+    "<cand_id>_A" / "<cand_id>_B" rows collapse into ONE row for the
+    candidate (strongest alntmscore wins) instead of becoming two orphan
+    keys that join to nothing.
+
+    `candidate_ids` is the real candidate id universe (e.g. the class-A
+    candidate FASTA's headers). Passing it is strongly preferred: it is what
+    lets a chain suffix be resolved rather than guessed, and it enables the
+    zero-overlap assertion below. Without it the function stays
+    backward-compatible (extension strip only, no chain strip, no assertion).
 
     Only emits entries for queries present in the Foldseek output (those get
     has_struct_data=True). A candidate with no Foldseek row at all (e.g. no
@@ -269,12 +381,62 @@ def structural_channel(foldseek_path: str, family_map: dict,
                         "struct_nonchemo_corrob": 1 if known_non_chemoreceptor
                                                   else 0,
                         "has_struct_data": True}}
+
+    Raises:
+        ValueError: if `candidate_ids` is given but empty, or if there are
+            hits and NOT ONE of them resolves to a candidate. Zero key
+            overlap means the channel would left-join to nothing and the
+            structural voter would go dormant while everything exits 0 --
+            the exact silent failure this guard exists to make loud.
     """
+    if candidate_ids is not None and not candidate_ids:
+        raise ValueError(
+            "structural_channel: candidate_ids is empty -- the candidate "
+            "universe could not be read, so every Foldseek query would fail to "
+            "resolve and the structural channel would silently join to nothing."
+        )
+
     hits = parse_foldseek(foldseek_path)
-    out = {}
+
+    # Collapse each model's per-chain rows onto its candidate id first, so the
+    # classification runs once per CANDIDATE rather than once per chain.
+    resolved: Dict[str, dict] = {}
+    unresolved: List[str] = []
     for query, best in hits.items():
+        canonical = canonical_query_id(query, candidate_ids)
+        if canonical is None:
+            unresolved.append(query)
+            continue
+        current = resolved.get(canonical)
+        if current is None or best["alntmscore"] > current["alntmscore"]:
+            resolved[canonical] = best
+
+    if hits and candidate_ids is not None and not resolved:
+        raise ValueError(
+            "structural_channel: ZERO of "
+            f"{len(hits)} Foldseek queries resolved to a known candidate id. "
+            "The structural channel would left-join to nothing and go silently "
+            "dormant.\n"
+            f"  saw (up to 5):      {sorted(unresolved)[:5]}\n"
+            f"  expected ids like:  {sorted(candidate_ids)[:5]}\n"
+            "  Likely cause: the Foldseek query dir was staged under the wrong "
+            "id scheme (e.g. AF3 job names instead of candidate ids -- bead "
+            "5ubd), or the candidate universe is a different candidate set."
+        )
+
+    if unresolved:
+        print(
+            f"[structural_channel] WARNING: {len(unresolved)} of "
+            f"{len(hits)} Foldseek queries did not resolve to a candidate id "
+            f"and were dropped: {sorted(unresolved)[:5]}"
+            f"{' ...' if len(unresolved) > 5 else ''}",
+            file=sys.stderr,
+        )
+
+    out = {}
+    for candidate_id, best in resolved.items():
         state = classify_hit(best, family_map, tm_threshold=tm_threshold)
-        out[query] = {
+        out[candidate_id] = {
             "struct_state": state,
             "struct_novelty": 1 if state == "novel" else 0,
             "struct_nonchemo_corrob": 1 if state == "known_non_chemoreceptor" else 0,
