@@ -450,14 +450,29 @@ def test_lse_depth_collects_depths_on_a_supported_tree() -> None:
     """The ``all_depths`` loop broke on every candidate (ete3's 1.0 < 70), so
     ``np.percentile`` was never reached and the code fell back to a hardcoded
     ``lse_threshold = 0.5`` -- making LSE_DEPTH_PERCENTILE dead config.
+
+    SUPERSEDED IN PART by bead hf3u. Parsing support correctly was necessary
+    but not sufficient: at the real per-node pass rate (0.8238) over a median
+    27-node path, requiring EVERY node to clear 70 still returned 0 of 439
+    candidates. ``collect_candidate_depths`` no longer takes a support
+    threshold at all -- the percentile population is every candidate in the
+    tree, because support anti-correlates with depth (spearman -0.59) and any
+    support filter biases the threshold toward shallow candidates. See
+    tests/unit/test_lsedepth_percentile_population.py.
+
+    What this test still guards is the i3w9 half: depths are collected from a
+    tree whose labels parse, and they are real root distances.
     """
     ns = _extract("annotate_tree_support", "collect_candidate_depths")
     t = Tree(SUPPORTED_NEWICK, format=1)
     ns["annotate_tree_support"](t)
-    depths = ns["collect_candidate_depths"](t, ["cand_1", "cand_2"], 70)
+    depths = ns["collect_candidate_depths"](t, ["cand_1", "cand_2"])
     assert len(depths) == 2
     assert all(d > 0 for d in depths)
 
+    # hf3u: a WEAKLY supported tree is still measured. Low support is a
+    # statement about confidence in the topology, not about the depth of a
+    # leaf within it, and it must no longer empty the percentile population.
     lo = Tree(UNSUPPORTED_NEWICK, format=1)
     ns["annotate_tree_support"](lo)
-    assert ns["collect_candidate_depths"](lo, ["cand_1", "cand_2"], 70) == []
+    assert len(ns["collect_candidate_depths"](lo, ["cand_1", "cand_2"])) == 2

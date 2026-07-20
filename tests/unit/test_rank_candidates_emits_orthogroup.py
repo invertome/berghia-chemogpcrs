@@ -185,6 +185,7 @@ def _extract_results_append_dict() -> dict:
         'has_expression': False,
         'lse_score': 0.0,
         'raw_depth': 0.0,
+        'has_lse_depth': False,   # hf3u: lse_depth availability flag
         'chemo_expr_score': 0.0,
         'has_chemo_expr': False,
         'gprotein_score': 0.0,

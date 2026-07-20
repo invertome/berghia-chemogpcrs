@@ -59,4 +59,8 @@ def test_phylo_and_lse_depth_gated_by_tree_membership() -> None:
     end = src.find("\n\ndef ", start + 1)
     body = src[start:end] if end != -1 else src[start:]
     assert "'phylo': row.get('phylo_score_norm') if row.get('has_phylo_data') else None" in body
-    assert "'lse_depth': row.get('lse_depth_score_norm') if row.get('has_phylo_data') else None" in body
+    # Bead hf3u: lse_depth is gated by a STRICTER flag than tree membership.
+    # It also needs a derivable percentile threshold (LSE_DEPTH_AVAILABLE);
+    # with no threshold there is no measurement for anyone, and the axis must
+    # drop out rather than score against a substituted constant.
+    assert "'lse_depth': row.get('lse_depth_score_norm') if row.get('has_lse_depth_data') else None" in body

@@ -321,15 +321,44 @@ def annotate_tree_support(tree, source='tree', newick_format=1, quiet=False):
     return len(internals), n_with_support, n_labelled
 
 
-def collect_candidate_depths(tree, candidate_ids, bootstrap_threshold):
-    """Root-to-tip depths of candidates whose whole path to the root is supported.
+def collect_candidate_depths(tree, candidate_ids):
+    """Root-to-tip depths of every candidate present in the tree.
 
-    Bead -i3w9: this loop used to read ``getattr(current.up, 'support', None)``,
-    which under ete3 format=1 is always 1.0, so every candidate failed the
-    threshold, the list came back empty, and the caller silently fell back to a
-    hardcoded ``lse_threshold = 0.5`` -- making ``LSE_DEPTH_PERCENTILE`` dead
-    config. Nodes with no parsed support (``None``) are treated as unknown
-    rather than unsupported, matching the previous intent.
+    This is the POPULATION the ``lse_depth`` threshold is a percentile of, so
+    it must be the whole candidate set. Membership is the only criterion: a
+    candidate is either a leaf of this tree (measured) or it is not (absent,
+    never zero).
+
+    Bead hf3u. This used to admit a candidate only if EVERY node on its path to
+    the root cleared ``BOOTSTRAP_THRESHOLD`` (70) -- it ``break``-ed at the
+    first one that did not. Measured on this repo's own 439-leaf class-A-style
+    tree: 437/437 internal nodes carry parsed support, the per-node pass rate
+    at >= 70 is 0.8238, and the median path is 27 nodes, so P(all pass) is
+    ~0.5% and the function returned 0 of 439. ``np.percentile`` was therefore
+    never reached, ``LSE_DEPTH_PERCENTILE`` was dead config, and the caller's
+    hardcoded ``lse_threshold = 0.5`` stood in for it -- putting 98.6% of
+    candidates above threshold where the intent is 25%.
+
+    WHY NO SUPPORT FILTER AT ALL, not even the fraction-of-path criterion the
+    siblings use. ``get_og_confidence_score`` and ``path_bootstrap_confidence``
+    both return "fraction of path nodes with support >= threshold", and
+    softening this gate to that criterion is the obvious repair. It does not
+    work here, because on the real tree support ANTI-correlates with depth:
+
+        support fraction vs root-path node count   spearman = -0.6792
+        support fraction vs patristic depth        spearman = -0.5903
+
+    Deep candidates have longer paths and therefore systematically weaker
+    whole-path support, so ANY support filter preferentially discards deep
+    candidates, drags the 75th percentile down, and re-inflates the pass
+    fraction (measured: 52.8% above at frac>=0.80, 56.7% at 0.85, 61.7% at
+    0.90, vs 25.1% unfiltered). The all-or-nothing gate was simply the
+    ``frac >= 1.00`` endpoint of that biased family.
+
+    Depth is a TOPOLOGICAL quantity; branch support is a STATISTICAL one.
+    Support stays on the axes that already model it as confidence (``phylo``,
+    ``og_confidence``) instead of being fused into this one, where it tracks
+    the opposite of what the axis is named for.
     """
     depths = []
     for cand_id in candidate_ids:
@@ -337,17 +366,7 @@ def collect_candidate_depths(tree, candidate_ids, bootstrap_threshold):
             nodes = tree.search_nodes(name=cand_id)
             if not nodes:
                 continue
-            node = nodes[0]
-            has_good_support = True
-            current = node
-            while current.up:
-                support = getattr(current.up, '_parsed_support', None)
-                if support is not None and support < bootstrap_threshold:
-                    has_good_support = False
-                    break
-                current = current.up
-            if has_good_support:
-                depths.append(node.get_distance(tree))
+            depths.append(nodes[0].get_distance(tree))
         except Exception:
             continue
     return depths
@@ -1068,8 +1087,14 @@ def get_expression_score(candidate_id, expr_data):
 
 
 def get_lse_depth_score(candidate_id, tree, threshold):
-    """
-    Calculate LSE depth score based on tree position.
+    """Calculate LSE depth score based on tree position.
+
+    The SCORE is gated at ``threshold`` (only the deep tail scores), but the
+    RAW depth is reported whenever it could be measured. Bead hf3u: this used
+    to return ``0.0, 0.0`` for a sub-threshold candidate, which zeroed the
+    ``raw_tree_depth`` column too and made "measured, shallow" indistinguishable
+    from "not in the tree" -- the same present-but-unmeasured defect the
+    hardcoded threshold fallback was.
 
     Returns: (depth_score, raw_depth)
     """
@@ -1077,9 +1102,8 @@ def get_lse_depth_score(candidate_id, tree, threshold):
         nodes = tree.search_nodes(name=candidate_id)
         if nodes:
             depth = nodes[0].get_distance(tree)
-            # Only score if above threshold (deep in tree)
-            if depth > threshold:
-                return depth, depth
+            # Only score if above threshold (deep in tree); report raw always.
+            return (depth if depth > threshold else 0.0), depth
     except Exception:
         pass
     return 0.0, 0.0
@@ -1787,7 +1811,7 @@ def calculate_rank_score(df, weights):
     # (dN/dS reliability is shrunk upstream). phylo/lse gate on has_phylo_data (o98).
     _axes = [
         ('phylo', 'phylo_score_norm', 'has_phylo_data'),
-        ('lse_depth', 'lse_depth_score_norm', 'has_phylo_data'),
+        ('lse_depth', 'lse_depth_score_norm', 'has_lse_depth_data'),
         ('purifying', 'purifying_score_norm', None),
         ('positive', 'positive_score_norm', None),
         ('synteny', 'synteny_score_norm', 'has_synteny_data'),
@@ -2037,29 +2061,38 @@ if t is not None and ref_ids:
     print(f"Precomputation complete: {len(precomputed_distances)} candidates indexed",
           file=sys.stderr)
 
-# First pass: collect all depths for percentile calculation
-# Only include nodes on paths with sufficient bootstrap support (H12 fix)
+# First pass: collect all depths for percentile calculation.
+# The population is EVERY candidate present in the tree -- see
+# collect_candidate_depths for why filtering it on branch support biases the
+# percentile toward shallow candidates (bead hf3u).
 all_depths = []
 if t is not None:
-    all_depths = collect_candidate_depths(t, candidates['id'], BOOTSTRAP_THRESHOLD)
+    all_depths = collect_candidate_depths(t, candidates['id'])
 else:
     print("Warning: Skipping depth calculation - tree not available.", file=sys.stderr)
 
-if all_depths:
+# Bead hf3u: whether an lse_depth threshold could be derived AT ALL. False
+# means the axis has no measurement for anyone and must report itself
+# unavailable rather than scoring against a substituted constant.
+LSE_DEPTH_AVAILABLE = len(all_depths) > 0
+
+if LSE_DEPTH_AVAILABLE:
     lse_threshold = np.percentile(all_depths, LSE_DEPTH_PERCENTILE)
     print(f"LSE depth threshold: {lse_threshold:.4f} "
           f"({LSE_DEPTH_PERCENTILE}th percentile of {len(all_depths)} "
-          f"well-supported candidate depths)", file=sys.stderr)
+          f"candidate depths)", file=sys.stderr)
 else:
-    # Bead -i3w9: this fallback used to fire for EVERY run -- ete3's default
-    # support of 1.0 failed the >= 70 test at every node, so all_depths was
-    # always empty and LSE_DEPTH_PERCENTILE was dead config. Say so out loud
-    # rather than quietly substituting a magic number.
-    lse_threshold = 0.5
-    print(f"Warning: no candidate had a fully supported path to the root, so "
-          f"LSE_DEPTH_PERCENTILE={LSE_DEPTH_PERCENTILE} could not be applied; "
-          f"falling back to a fixed lse_threshold of {lse_threshold}.",
-          file=sys.stderr)
+    # No hardcoded stand-in. The previous fallback (`lse_threshold = 0.5`)
+    # fired on EVERY run and was not neutral but INVERTED: 98.6% of candidates
+    # sat above it, where LSE_DEPTH_PERCENTILE=75 intends 25%, so a weight-1
+    # axis was near-saturated and backwards. An axis with no measurement is
+    # dropped for every candidate, exactly as `phylo` is for non-tree-members.
+    lse_threshold = float('inf')
+    print(f"Warning: no candidate was found in the tree, so no lse_depth "
+          f"threshold could be derived (LSE_DEPTH_PERCENTILE="
+          f"{LSE_DEPTH_PERCENTILE}). The lse_depth axis reports itself "
+          f"UNAVAILABLE for every candidate rather than scoring against a "
+          f"substituted constant.", file=sys.stderr)
 
 # --- Load NEW Data Sources (Phases 1-5) ---
 # Phase 1: Chemosensory expression data
@@ -2184,8 +2217,10 @@ for cand_id in candidates['id']:
             expr_score = np.log2(1 + mean_tpm)
             has_expression = True
 
-    # LSE depth score
+    # LSE depth score. Bead hf3u: available only when the candidate is in the
+    # tree AND a threshold could be derived from the candidate population.
     lse_score, raw_depth = get_lse_depth_score(cand_id, t, lse_threshold)
+    has_lse_depth = bool(has_phylo and LSE_DEPTH_AVAILABLE)
 
     # Phase 1 - Chemosensory expression score (tissue-weighted: rhinophore > oral-tentacle)
     chemo_expr_score, has_chemo_expr = get_chemosensory_expression_score(
@@ -2218,7 +2253,7 @@ for cand_id in candidates['id']:
         has_dnds_data=has_dnds,
         has_synteny=has_synteny,
         has_expression=has_expression,
-        has_lse_data=has_phylo,
+        has_lse_data=has_lse_depth,
         has_chemo_expr=has_chemo_expr,
         has_gprotein=has_gprotein,
         has_ecl=has_ecl,
@@ -2261,6 +2296,7 @@ for cand_id in candidates['id']:
         'has_expression_data': has_expression,
         'lse_depth_score': lse_score,
         'raw_tree_depth': raw_depth,
+        'has_lse_depth_data': has_lse_depth,
         # NEW scores
         'chemosensory_expr_score': chemo_expr_score,
         'has_chemosensory_expr_data': has_chemo_expr,
@@ -2422,7 +2458,9 @@ def calculate_fair_rank_score(row):
         'phylo': row.get('phylo_score_norm') if row.get('has_phylo_data') else None,
         'purifying': row.get('purifying_score_norm'),
         'positive': row.get('positive_score_norm'),
-        'lse_depth': row.get('lse_depth_score_norm') if row.get('has_phylo_data') else None,
+        # hf3u: lse_depth additionally needs a DERIVABLE threshold, not just
+        # tree membership -- see LSE_DEPTH_AVAILABLE.
+        'lse_depth': row.get('lse_depth_score_norm') if row.get('has_lse_depth_data') else None,
         'synteny': row.get('synteny_score_norm') if row.get('has_synteny_data') else None,
         'expression': row.get('expression_score_norm') if row.get('has_expression_data') else None,
         'chemosensory_expr': row.get('chemosensory_expr_score_norm') if row.get('has_chemosensory_expr_data') else None,
@@ -2548,7 +2586,8 @@ output_cols = [
     'meme_high_confidence_sites', 'meme_lenient_only_sites',
     'meme_strict_only_sites', 'meme_alignment_robustness_index',
     'synteny_score', 'has_synteny_data', 'expression_score', 'has_expression_data',
-    'lse_depth_score', 'raw_tree_depth', 'has_phylo_data', 'has_dnds_data',
+    'lse_depth_score', 'raw_tree_depth', 'has_lse_depth_data',
+    'has_phylo_data', 'has_dnds_data',
     # NEW: Phase 1-5 scores
     'chemosensory_expr_score', 'has_chemosensory_expr_data',
     'gprotein_coexpr_score', 'has_gprotein_data',
@@ -2646,7 +2685,8 @@ if RUN_SENSITIVITY:
                             'phylo': r.get('phylo_score_norm'),
                             'purifying': r.get('purifying_score_norm'),
                             'positive': r.get('positive_score_norm'),
-                            'lse_depth': r.get('lse_depth_score_norm'),
+                            'lse_depth': (r.get('lse_depth_score_norm')
+                                          if r.get('has_lse_depth_data') else None),
                             'synteny': r.get('synteny_score_norm') if r.get('has_synteny_data') else None,
                             'expression': r.get('expression_score_norm') if r.get('has_expression_data') else None,
                             'chemosensory_expr': r.get('chemosensory_expr_score_norm') if r.get('has_chemosensory_expr_data') else None,

@@ -137,6 +137,7 @@ def test_phylo_counted_when_has_phylo_data(calc) -> None:
     a real switch (not a no-op)."""
     row = _row(positive=0.8, phylo=0.9, lse=0.9)
     row['has_phylo_data'] = True
+    row['has_lse_depth_data'] = True  # hf3u: lse_depth has its own gate
     s_gated_in = calc(pd.DataFrame([row]), WEIGHTS).iloc[0]
     s_gated_out = calc(pd.DataFrame([_row(positive=0.8, phylo=0.9, lse=0.9)]), WEIGHTS).iloc[0]
     assert s_gated_in != pytest.approx(s_gated_out)
@@ -149,6 +150,7 @@ def test_completeness_penalizes_sparse_candidate(calc) -> None:
     sparse = _row(positive=0.8, purifying=0.8)               # 2 axes present
     full = _row(positive=0.8, purifying=0.8, phylo=0.8, lse=0.8)
     full['has_phylo_data'] = True
+    full['has_lse_depth_data'] = True  # hf3u: lse_depth has its own gate
     for flag, col in [('has_synteny_data', 'synteny_score_norm'),
                       ('has_expression_data', 'expression_score_norm'),
                       ('has_chemosensory_expr_data', 'chemosensory_expr_score_norm'),
@@ -179,6 +181,7 @@ def test_sensitivity_matches_production_lib_formula(calc) -> None:
 
     row = _row(positive=0.7, purifying=0.6, phylo=0.5, lse=0.4)
     row['has_phylo_data'] = True
+    row['has_lse_depth_data'] = True  # hf3u: lse_depth has its own gate
     row['has_synteny_data'] = True
     row['synteny_score_norm'] = 0.9
     row['has_expression_data'] = True
