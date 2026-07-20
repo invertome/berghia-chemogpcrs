@@ -35,6 +35,8 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 # Species → (taxid, species_name, assembly_accession)
 SPECIES_MAP = {
     "alvmar": ("1491186", "Alviniconcha_marisindica", "GCA_018857735.1"),
@@ -100,15 +102,35 @@ SPECIES_MAP = {
     # both have NCBI chromosome-level reference assemblies).
     "bune":   ("10212",   "Bugula_neritina",         "GCA_964035545.1"),
     "memmem": ("95170",   "Membranipora_membranacea", "GCA_914767715.1"),
-    # Phoronis australis. Renamed from prefix "phau" -> "phaust" because
-    # the original Nath et al. headers used "phau_" which collides with
-    # Physella acuta (gastropod, taxid 109671 — see "phau" entry above).
-    # The Phoronis .faa headers must be rewritten "phau_" -> "phaust_"
-    # before stage 02 orthology so get_missing_proteins resolves to the
-    # right assembly. One-time rename on Unity (idempotent sed):
-    #   sed -i 's/^>phau_/>phaust_/' \
-    #     references/nath_et_al/lse/other_lophotrochozoan_phyla/115415_Phoronis_australis.faa
-    "phaust": ("115415",  "Phoronis_australis",      "GCA_055505105.1"),
+    # NOTE — Phoronis australis (taxid 115415, GCA_055505105.1) is deliberately
+    # ABSENT. It used to sit here under the code "phaust", the target of a
+    # documented one-time rename:
+    #     sed -i 's/^>phau_/>phaust_/' \
+    #       references/nath_et_al/**/115415_Phoronis_australis.faa
+    # That rename was never applied. Measured 2026-07-20: ZERO sequences
+    # anywhere under references/ carry a "phaust_" prefix, while 428 phoronid
+    # sequences still carry "phau_" (colliding with 1,078 Physella acuta ones).
+    # The entry was therefore a PHANTOM key — species_code_lookup injected it
+    # into the code map, so species_for('ref_phaust_...') confidently named a
+    # species for an identifier that cannot exist.
+    # The collision is registered in AMBIGUOUS_SPECIES_CODES below instead.
+    # Re-adding "phaust" is only correct AFTER the rename is applied to the
+    # data; validate_species_map() fails loudly on a code matching no sequence.
+}
+
+# Header-prefix codes carried by proteomes of MORE THAN ONE species.
+# SPECIES_MAP maps a code to exactly one assembly, so for these codes that
+# mapping is a guess: it silently picks one species' genome for both species'
+# sequences. Declaring the collision here lets validate_species_map() assert
+# that the register still matches the data, and lets callers refuse rather
+# than resolve by curation fiat.
+#
+# 'phau' (measured 2026-07-20 across references/): 1,078 headers in
+# 109671_Physella_acuta.faa (Gastropoda) and 428 in
+# 115415_Phoronis_australis.faa (Phoronida). Identifiers here are write-once,
+# so the register stays honest instead of the data being re-keyed.
+AMBIGUOUS_SPECIES_CODES = {
+    "phau": ("Physella_acuta", "Phoronis_australis"),
 }
 
 CODON_TABLE = {
@@ -564,6 +586,149 @@ def extract_cds_from_gff(genome_fa, gff_path, protein_seqs):
     return cds_seqs, stats
 
 
+# --- SPECIES_MAP drift validation ------------------------------------------
+#
+# SPECIES_MAP is hand-maintained against auto-generated header prefixes, so it
+# drifts silently: every consumer looks a code up with a `.get()`-shaped miss
+# (get_missing_proteins finds no sequences; species_code_lookup injects the
+# entry regardless), which means a stale key and a wrong key both sail through
+# without ever failing a run. The functions below derive the truth from the
+# proteomes themselves and refuse a map that no longer matches.
+#
+# Deliberately NOT checked: codes present in the data but absent from
+# SPECIES_MAP. SPECIES_MAP is a curated subset of the species that have a
+# recoverable genome assembly, not a census of the reference set. Measured
+# 2026-07-20: 57 mapped codes vs 238 observed header codes, so 182 unmapped
+# codes are correct. This is the one place PREFIX_TO_GROUP's checklist must NOT
+# be ported verbatim — its map is meant to be total, this one is not.
+
+# <taxid>_<Genus_species[...]>.faa — the filename is the authoritative species
+# label (same convention species_code_lookup.py reads).
+_SPECIES_FAA_RE = re.compile(r'(\d+)_([A-Z][A-Za-z]+_[a-z0-9_]+)\.(?:faa|fasta)$')
+
+
+class SpeciesMapDriftError(AssertionError):
+    """SPECIES_MAP no longer matches the reference proteomes on disk."""
+
+
+class ObservedSpecies:
+    """What the proteomes actually say about one header-prefix code."""
+
+    def __init__(self, species, count, ambiguous_over, files):
+        self.species = species                  # None when ambiguous
+        self.count = count                      # headers carrying this code
+        self.ambiguous_over = ambiguous_over    # set of species claiming it
+        self.files = files                      # basenames of claiming proteomes
+
+    def __repr__(self):
+        return (f'ObservedSpecies(species={self.species!r}, count={self.count}, '
+                f'ambiguous_over={sorted(self.ambiguous_over)})')
+
+
+def scan_reference_species(references_dir=None):
+    """Scan reference proteomes -> ``{code: ObservedSpecies}``.
+
+    Only files whose basename matches ``<taxid>_<Genus_species>`` are in scope;
+    Swiss-Prot/outgroup references use pipe-delimited headers that carry no
+    species code and belong to no assembly.
+    """
+    root = Path(references_dir) if references_dir else PROJECT_ROOT / 'references'
+    per_species = defaultdict(lambda: defaultdict(int))   # code -> {species: n}
+    files = defaultdict(set)                              # code -> {basename}
+    patterns = ('*.faa', '*.fasta')
+    paths = sorted({p for pat in patterns
+                    for p in glob.glob(os.path.join(str(root), '**', pat),
+                                       recursive=True)})
+    for faa in paths:
+        m = _SPECIES_FAA_RE.search(os.path.basename(faa))
+        if not m:
+            continue
+        species = m.group(2)
+        with open(faa) as fh:
+            for line in fh:
+                if line.startswith('>'):
+                    code = line[1:].split()[0].split('_')[0]
+                    per_species[code][species] += 1
+                    files[code].add(os.path.basename(faa))
+    observed = {}
+    for code, counts in per_species.items():
+        claimed = set(counts)
+        observed[code] = ObservedSpecies(
+            species=next(iter(claimed)) if len(claimed) == 1 else None,
+            count=sum(counts.values()),
+            ambiguous_over=claimed if len(claimed) > 1 else set(),
+            files=files[code])
+    return observed
+
+
+def validate_species_map(references_dir=None, species_map=None, ambiguous=None):
+    """Raise :class:`SpeciesMapDriftError` unless the map matches the proteomes.
+
+    Checks, in the order they have historically broken:
+      1. dead keys    — a mapped code matching ZERO sequences (the 'phaust'
+                        phantom: a rename target recorded as though applied)
+      2. mis-named    — a mapped code whose proteome names another species
+      3. collisions   — a code claimed by two species must be DECLARED
+                        ambiguous, since SPECIES_MAP resolves it to one genome
+      4. stale/changed register — a declared collision that no longer exists,
+                        or whose membership changed (e.g. a third species)
+
+    Returns the ``{code: ObservedSpecies}`` scan on success.
+
+    Not run at import: it needs ``references/`` on disk, which the CDS-recovery
+    job on the cluster does not necessarily have. It runs via
+    ``--validate-species-map`` and in the test suite against the real
+    reference directory.
+    """
+    smap = SPECIES_MAP if species_map is None else species_map
+    amb = dict(AMBIGUOUS_SPECIES_CODES if ambiguous is None else ambiguous)
+    observed = scan_reference_species(references_dir)
+    real_amb = {c: o.ambiguous_over for c, o in observed.items() if o.ambiguous_over}
+    problems = []
+
+    dead = sorted(set(smap) - set(observed))
+    if dead:
+        problems.append(
+            f'{len(dead)} mapped code(s) match ZERO sequences (stale or '
+            f'half-applied rename): {dead}')
+
+    misnamed = [(c, smap[c][1], observed[c].species)
+                for c in sorted(set(smap) & set(observed))
+                if observed[c].species is not None
+                and smap[c][1] != observed[c].species]
+    if misnamed:
+        problems.append('mis-named code(s): ' + ', '.join(
+            f'{c} mapped {m!r} but proteome is {o!r}' for c, m, o in misnamed))
+
+    undeclared = sorted(set(real_amb) - set(amb))
+    if undeclared:
+        problems.append(
+            'code(s) claimed by >1 species but not declared ambiguous — '
+            'SPECIES_MAP resolves each to ONE genome, so the other species\' '
+            'proteins would be recovered against the wrong assembly: '
+            + ', '.join(f'{c} {sorted(real_amb[c])}' for c in undeclared))
+
+    stale = sorted(set(amb) - set(real_amb))
+    if stale:
+        problems.append(
+            f'code(s) declared ambiguous but no longer collide in the data '
+            f'(rename applied? update the register): {stale}')
+
+    changed = [(c, sorted(amb[c]), sorted(real_amb[c]))
+               for c in sorted(set(amb) & set(real_amb))
+               if set(amb[c]) != set(real_amb[c])]
+    if changed:
+        problems.append('code(s) declared ambiguous over the wrong species: '
+                        + ', '.join(f'{c} declared {d} but data says {r}'
+                                    for c, d, r in changed))
+
+    if problems:
+        raise SpeciesMapDriftError(
+            'SPECIES_MAP is out of sync with the reference proteomes:\n  - '
+            + '\n  - '.join(problems))
+    return observed
+
+
 def reverse_complement(seq):
     """Return reverse complement of a DNA sequence."""
     comp = str.maketrans('ACGTacgtNn', 'TGCAtgcaNn')
@@ -661,8 +826,27 @@ def process_species(prefix, og_dir, cds_file, output_dir, genome_dir,
 
 
 def main():
+    # Standalone map audit. Checked before argparse so it can run without the
+    # recovery-run arguments (--og-dir/--cds-file/--output-dir), which are
+    # required=True and irrelevant to validating the map.
+    if '--validate-species-map' in sys.argv[1:]:
+        try:
+            observed = validate_species_map()
+        except SpeciesMapDriftError as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        print(f'SPECIES_MAP OK: {len(SPECIES_MAP)} mapped code(s) all match '
+              f'real sequences; {len(observed)} code(s) observed; '
+              f'{len(AMBIGUOUS_SPECIES_CODES)} declared ambiguous.')
+        return 0
+
     parser = argparse.ArgumentParser(
         description='Recover CDS from genome assemblies via miniprot')
+    parser.add_argument('--validate-species-map', action='store_true',
+                       help='Audit SPECIES_MAP against the reference proteomes '
+                            'and exit (no recovery is run). Fails if a mapped '
+                            'code matches zero sequences, names the wrong '
+                            'species, or collides with another species.')
     parser.add_argument('--species', type=str, default=None,
                        help='Comma-separated species prefixes (default: all)')
     parser.add_argument('--threads', type=int, default=2,

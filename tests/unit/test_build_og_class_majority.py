@@ -92,17 +92,20 @@ class TestMajorityClass:
 # ---------------------------------------------------------------------------
 
 class TestBuild:
-    def test_majority_per_og_and_omits_unclassified(self) -> None:
+    def test_majority_per_og_and_states_unclassified(self) -> None:
+        """An OG with no class evidence is now STATED 'unclassified' rather
+        than omitted, so a failed lookup downstream means a missing/truncated
+        table instead of doubling as 'no evidence'."""
         ogs = {"OG0": ["s1", "s2", "s3"], "OG1": ["x1", "x2"]}
         classes = {"s1": "A", "s2": "A", "s3": "C"}   # OG1 members unclassified
         rows = bom.build(ogs, classes, min_fraction=0.0)
-        assert rows == [("OG0", "A")]                  # OG1 omitted (no classified members)
+        assert rows == [("OG0", "A"), ("OG1", "unclassified")]
 
-    def test_min_fraction_filters_weak_majority(self) -> None:
+    def test_min_fraction_reports_weak_majority_as_unclassified(self) -> None:
         ogs = {"OG0": ["s1", "s2", "s3", "s4"]}
         classes = {"s1": "A", "s2": "C", "s3": "F", "s4": "B"}  # 1/4 each, max frac 0.25
         rows = bom.build(ogs, classes, min_fraction=0.5)
-        assert rows == []                              # no class reaches 50%
+        assert rows == [("OG0", "unclassified")]       # no class reaches 50%
 
 
 class TestWriteTsv:
@@ -134,7 +137,8 @@ class TestCLI:
         assert rc == 0
         text = out.read_text()
         assert "OG0\tA" in text
-        assert "OG1" not in text          # omitted (no classified members)
+        # OG1 has no classified member -> stated explicitly, not omitted.
+        assert "OG1\tunclassified" in text
 
     def test_missing_inputs_writes_nothing(self, tmp_path: Path) -> None:
         """Missing Orthogroups → exit 0 WITHOUT creating the file, so stage 04

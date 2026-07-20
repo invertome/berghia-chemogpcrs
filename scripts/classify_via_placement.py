@@ -65,6 +65,7 @@ def parse_jplace(path: str) -> dict[str, dict]:
         return {}
 
     out: dict[str, dict] = {}
+    need = max(edge_idx, lwr_idx) + 1
     for entry in data.get("placements", []):
         # Query identification can be in `nm` (named multiplicity) or `n`
         names: list[str] = []
@@ -74,15 +75,34 @@ def parse_jplace(path: str) -> dict[str, dict]:
             names = list(entry["n"])
         if not names:
             continue
-        # Best placement = max LWR
-        best = max(entry.get("p", []),
-                    key=lambda p: p[lwr_idx], default=None)
-        if best is None:
+
+        rows = [p for p in entry.get("p", []) if len(p) >= need]
+        # Best placement = max LWR, considering only MEASURABLE ones.
+        #
+        # `max` keeps its running winner unless a later item compares strictly
+        # greater, and every comparison with NaN is False. So a NaN placement
+        # appearing first was never displaced: it shadowed a real, confident
+        # placement behind it, and the candidate was then (correctly) refused
+        # by the NaN gate — turning a measurement into "could not measure".
+        # json.load accepts a bare NaN token, so this is a live ingress.
+        finite = [(p, _finite_lwr(p[lwr_idx])) for p in rows]
+        finite = [(p, v) for p, v in finite if v is not None]
+        if finite:
+            best, best_lwr = max(finite, key=lambda pv: pv[1])
+            determined = True
+        elif rows:
+            # Every placement is degenerate. Keep the query — its edge is still
+            # informative for debugging — but mark the LWR explicitly
+            # undetermined so no consumer can read it as a measured value.
+            best, best_lwr, determined = rows[0], float("nan"), False
+        else:
             continue
+
         for name in names:
             out[name] = {
                 "edge_num": int(best[edge_idx]),
-                "lwr": float(best[lwr_idx]),
+                "lwr": best_lwr,
+                "lwr_determined": determined,
             }
     return out
 
@@ -255,22 +275,30 @@ def classify_placement_for_id(
     lwr_threshold: float = LWR_THRESHOLD,
 ) -> dict:
     if candidate_id not in placements:
+        # EPA-ng returned nothing for this query. That is "no data", not
+        # "LWR = 0" — the flag keeps the two distinguishable downstream.
         return {
             "family": "unclassified-placement",
             "subfamily": "",
             "lwr": 0.0,
+            "lwr_determined": False,
             "edge": -1,
         }
     p = placements[candidate_id]
     lwr = _finite_lwr(p.get("lwr"))
+    # A parser that already knows the LWR was unmeasurable says so; otherwise
+    # a finite value here IS the measurement.
+    determined = bool(p.get("lwr_determined", True)) and lwr is not None
     if lwr is None or lwr < lwr_threshold:
         return {
             "family": "unclassified-placement",
             "subfamily": "",
             # A degenerate LWR is reported as 0.0, never propagated: a NaN
             # would compare False against every downstream threshold too,
-            # recreating this bug further along the pipeline.
+            # recreating this bug further along the pipeline. `lwr_determined`
+            # is what separates this 0.0 from a genuinely measured 0.0.
             "lwr": 0.0 if lwr is None else lwr,
+            "lwr_determined": determined,
             "edge": p.get("edge_num", -1),
         }
     fam, sub = edge_map.get(p["edge_num"], ("", ""))
@@ -278,11 +306,24 @@ def classify_placement_for_id(
         return {
             "family": "unclassified-placement",
             "subfamily": "",
-            "lwr": p["lwr"],
+            "lwr": lwr,
+            "lwr_determined": determined,
             "edge": p["edge_num"],
         }
     return {"family": fam, "subfamily": sub,
-            "lwr": p["lwr"], "edge": p["edge_num"]}
+            "lwr": lwr, "lwr_determined": determined, "edge": p["edge_num"]}
+
+
+def format_lwr(result: dict) -> str:
+    """Render an LWR for the output TSV.
+
+    Returns ``'NA'`` when the ratio could not be measured, so a reader can tell
+    "no data" from a measured ``0.000``. Rows written before the flag existed
+    keep their historical meaning (treated as measured).
+    """
+    if not result.get("lwr_determined", True):
+        return "NA"
+    return f"{result['lwr']:.3f}"
 
 
 def classify_placement(placements: dict[str, dict],
@@ -543,6 +584,8 @@ def main() -> int:
                     final_results[cid]["subfamily"] = sr["subfamily"]
                     final_results[cid]["edge"] = sr["edge"]
                     final_results[cid]["lwr"] = sr["lwr"]
+                    final_results[cid]["lwr_determined"] = sr.get(
+                        "lwr_determined", True)
 
         # --- Output TSV ---
         Path(args.output_tsv).parent.mkdir(parents=True, exist_ok=True)
@@ -559,10 +602,11 @@ def main() -> int:
             for cid in candidate_ids:
                 r = final_results.get(cid, {
                     "family": "unclassified-placement",
-                    "subfamily": "", "lwr": 0.0, "edge": -1,
+                    "subfamily": "", "lwr": 0.0, "lwr_determined": False,
+                    "edge": -1,
                 })
                 w.writerow([cid, r["family"], r["subfamily"],
-                            f"{r['lwr']:.3f}", r["edge"]])
+                            format_lwr(r), r["edge"]])
         print(f"[placement] DONE -> {args.output_tsv}", file=sys.stderr)
     finally:
         shutil.rmtree(work_root, ignore_errors=True)

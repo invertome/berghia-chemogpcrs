@@ -38,6 +38,17 @@ from typing import Optional
 CLASS_ORDER = ["A", "B", "C", "F"]
 _MEMBER_SPLIT = re.compile(r",\s*")
 
+# classify_gpcr_by_class.py writes class in {A, B, C, F, unclassified}.
+# 'unclassified' is a SENTINEL meaning "no class evidence", not a class: it must
+# never cast a vote, never enter the min-fraction denominator, and never win a
+# majority (which would emit a confident assignment whose content is "we do not
+# know"). Matched case-insensitively.
+#
+# This is also the exact token stage 04 and stage 05 route on
+# (results/phylogenies/protein/class_${OG_CLASS}/), so it doubles as the value
+# written for an orthogroup with no real votes.
+UNCLASSIFIED = "unclassified"
+
 
 def parse_class_tsv(path: Path) -> dict[str, str]:
     """Read a classifier TSV → {seq_id: class}. Skips header and empty classes."""
@@ -74,8 +85,19 @@ def parse_orthogroups_tsv(path: Path) -> dict[str, list[str]]:
     return out
 
 
+def real_votes(classes: list[str]) -> list[str]:
+    """Drop the 'unclassified' sentinel — it is an absence of evidence."""
+    return [c for c in classes if c.strip().lower() != UNCLASSIFIED]
+
+
 def majority_class(classes: list[str]) -> Optional[str]:
-    """Plurality class; ties broken by CLASS_ORDER. None if empty."""
+    """Plurality class; ties broken by CLASS_ORDER. None if no real votes.
+
+    The 'unclassified' sentinel is excluded before counting, so it can neither
+    win nor dilute. ``None`` means "no class evidence" — the caller states that
+    explicitly rather than letting an absent row imply it.
+    """
+    classes = real_votes(classes)
     if not classes:
         return None
     counts = Counter(classes)
@@ -93,23 +115,27 @@ def build(
     *,
     min_fraction: float = 0.0,
 ) -> list[tuple[str, str]]:
-    """For each OG, majority class of its classified members.
+    """For each OG, majority class of its members that carry real class evidence.
 
-    OGs with no classified member are omitted (stage 04 then routes them to
-    'unclassified'). If ``min_fraction`` > 0, the winning class must cover at
-    least that fraction of the OG's classified members, else the OG is omitted.
+    Every orthogroup gets exactly one row. An OG with no real votes — no
+    classified member, or only 'unclassified' ones — is written as
+    ``unclassified`` EXPLICITLY rather than omitted, so a failed lookup
+    downstream means a genuinely missing or truncated table instead of
+    doubling as "no evidence".
+
+    If ``min_fraction`` > 0, the winning class must cover at least that
+    fraction of the OG's REAL votes (the sentinel is not in the denominator);
+    otherwise the OG is likewise reported ``unclassified``.
     """
     rows: list[tuple[str, str]] = []
     for og in sorted(orthogroups):
-        member_classes = [class_map[m] for m in orthogroups[og] if m in class_map]
+        member_classes = real_votes(
+            [class_map[m] for m in orthogroups[og] if m in class_map])
         cls = majority_class(member_classes)
-        if cls is None:
-            continue
-        if min_fraction > 0.0:
-            frac = member_classes.count(cls) / len(member_classes)
-            if frac < min_fraction:
-                continue
-        rows.append((og, cls))
+        if cls is not None and min_fraction > 0.0:
+            if member_classes.count(cls) / len(member_classes) < min_fraction:
+                cls = None
+        rows.append((og, cls if cls is not None else UNCLASSIFIED))
     return rows
 
 
@@ -153,11 +179,23 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     class_map: dict[str, str] = {}
     for cf in args.classes:
-        if cf.exists():
-            class_map.update(parse_class_tsv(cf))
-        else:
+        if not cf.exists():
             print(f"[build_og_class_majority] WARN: class file missing: {cf}",
                   file=sys.stderr)
+            continue
+        incoming = parse_class_tsv(cf)
+        # Stage 04 globs class_*.tsv, so several tables can classify the same
+        # seq_id. A bare .update() lets the last file silently win a genuine
+        # disagreement; report it instead of resolving it invisibly.
+        conflicts = sorted(s for s, c in incoming.items()
+                           if s in class_map and class_map[s] != c)
+        if conflicts:
+            print(f"[build_og_class_majority] WARN: {cf.name} reclassifies "
+                  f"{len(conflicts)} seq_id(s) already classified differently "
+                  f"(last file wins): "
+                  f"{', '.join(f'{s} {class_map[s]}->{incoming[s]}' for s in conflicts[:5])}"
+                  f"{' ...' if len(conflicts) > 5 else ''}", file=sys.stderr)
+        class_map.update(incoming)
 
     if not class_map:
         print("[build_og_class_majority] no sequence classes available; writing "
@@ -167,8 +205,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     orthogroups = parse_orthogroups_tsv(args.orthogroups)
     rows = build(orthogroups, class_map, min_fraction=args.min_fraction)
     write_tsv(rows, args.out)
-    print(f"[build_og_class_majority] {len(rows)}/{len(orthogroups)} orthogroups "
-          f"classified → {args.out}", file=sys.stderr)
+    # Count real assignments, not rows: every OG now has a row, and an
+    # 'unclassified' one is an explicit non-answer.
+    n_classified = sum(1 for _og, cls in rows if cls != UNCLASSIFIED)
+    print(f"[build_og_class_majority] {n_classified}/{len(orthogroups)} orthogroups "
+          f"classified ({len(rows) - n_classified} explicitly unclassified) "
+          f"→ {args.out}", file=sys.stderr)
     return 0
 
 
