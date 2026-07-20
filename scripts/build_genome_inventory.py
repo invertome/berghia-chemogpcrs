@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime
+import sys
 from pathlib import Path
 
 from build_species_tree_phase1d_extension_inventory import (
@@ -48,17 +49,63 @@ def _entry_to_unified(entry: ExtensionEntry, source_batch: str) -> dict:
     return row
 
 
+def base_accession(accession: str) -> str:
+    """Version-stripped assembly accession ('GCA_055670145.1' -> 'GCA_055670145').
+
+    Versions are revisions of ONE assembly, so two rows differing only by
+    version denote the same physical genome — downloading and BRAKER4-annotating
+    both burns the same compute twice. Blank stays blank (never a dedup key).
+    """
+    acc = (accession or "").strip()
+    return acc.split(".", 1)[0] if acc else ""
+
+
+def find_duplicate_accessions(rows: list[dict]) -> dict[str, list[dict]]:
+    """Rows sharing one assembly accession, keyed by version-stripped accession.
+
+    ``append_entries`` never mutates existing rows, so duplicates already in the
+    manifest survive until the user reconciles them. This surfaces them instead
+    of letting them stay silent. Rows without an accession are ignored.
+    """
+    by_acc: dict[str, list[dict]] = {}
+    for r in rows:
+        acc = base_accession(r.get("accession", ""))
+        if acc:
+            by_acc.setdefault(acc, []).append(r)
+    return {acc: rs for acc, rs in by_acc.items() if len(rs) > 1}
+
+
 def append_entries(existing: list[dict], entries: list[ExtensionEntry],
                    source_batch: str) -> list[dict]:
-    """Append new entries (by taxid) to existing rows; existing rows are never
-    modified. Returns the combined list sorted by integer taxid."""
-    present = {str(r["taxid"]) for r in existing}
+    """Append new entries to existing rows; existing rows are never modified.
+
+    An entry is skipped when its taxid OR its assembly accession is already
+    present. The accession guard is what stops one genome from entering the
+    manifest twice under two taxids — the failure mode that put
+    GCA_055670145.1 in as both taxid 205083 and taxid 427924, i.e. one genome
+    downloaded and annotated twice and then treated as two species by
+    OrthoFinder/CAFE and as a zero-length sister pair in the species tree.
+
+    Returns the combined list sorted by integer taxid.
+    """
+    present_taxids = {str(r["taxid"]) for r in existing}
+    present_accessions = {a for a in (base_accession(r.get("accession", ""))
+                                      for r in existing) if a}
     combined = list(existing)
     for e in entries:
-        if str(e.taxid) in present:
+        if str(e.taxid) in present_taxids:
+            continue
+        acc = base_accession(e.choice.accession)
+        if acc and acc in present_accessions:
+            print(f"[build_genome_inventory] SKIP taxid {e.taxid} "
+                  f"({e.binomial}): accession {e.choice.accession} is already "
+                  f"in the manifest under a different taxid — one genome, one row.",
+                  file=sys.stderr)
             continue
         combined.append(_entry_to_unified(e, source_batch))
-        present.add(str(e.taxid))
+        present_taxids.add(str(e.taxid))
+        if acc:
+            present_accessions.add(acc)
     combined.sort(key=lambda r: int(r["taxid"]))
     return combined
 
@@ -93,6 +140,20 @@ def main(argv: list[str] | None = None) -> int:
     n_new = len(combined) - len(existing)
     print(f"[build_genome_inventory] {n_new} new species appended "
           f"(batch={batch_tag}); manifest now {len(combined)} rows -> {args.manifest}")
+
+    # Duplicates already in the manifest are NOT auto-removed: rows are
+    # write-once and other work indexes into this file. Report them so the
+    # user can reconcile at the post-drain cleanup step.
+    dups = find_duplicate_accessions(combined)
+    for acc, rows in sorted(dups.items()):
+        who = "; ".join(f"taxid {r['taxid']} ({r['binomial']}, {r['source_batch']})"
+                        for r in rows)
+        print(f"[build_genome_inventory] DUPLICATE ACCESSION {acc}: {who} "
+              f"— same genome in {len(rows)} rows; reconcile before annotation.",
+              file=sys.stderr)
+    if dups:
+        print(f"[build_genome_inventory] {len(dups)} duplicated accession(s) "
+              f"present in the manifest.", file=sys.stderr)
     return 0
 
 

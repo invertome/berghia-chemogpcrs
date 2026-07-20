@@ -121,14 +121,14 @@ def parse_scaffold_from_id(gene_id):
     return None, 'unknown', sp
 
 
-# Map species codes to NCBI assembly accessions (for chromosome-based IDs)
-SPECIES_ASSEMBLIES = {
-    'chsq': 'GCA_019457155.2',   # Chrysomallon squamiferum (chromosomal)
-    'pavu': 'GCA_917563875.2',   # Patella vulgata (chromosomal)
-    'gima': 'GCA_963853765.1',   # Gibbula magus
-    'lyst': 'GCA_944038965.1',   # Lymnaea stagnalis
-    'hadi': 'GCA_011762535.2',   # Haliotis discus hannai
-}
+# NOTE (2026-07): a hardcoded species-code -> assembly-accession map used to
+# live here. It had no caller, and all five of its accessions were verified
+# against the NCBI datasets API to be wrong — two pointed at a bacterium and a
+# dolphin, one at a beetle, one at an oyster, and one did not exist. It was
+# deleted rather than corrected: correcting it would have meant sourcing five
+# accessions for a code path nothing invokes. Any replacement must be built by
+# querying NCBI programmatically, never hand-typed
+# (see tests/unit/test_inventory_scaffold_assemblies_removed.py).
 
 
 def fetch_scaffold_region(scaffold_acc, start=None, end=None, retries=3):

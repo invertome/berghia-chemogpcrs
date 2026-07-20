@@ -187,7 +187,8 @@ def pick_best_assembly(
 
     Tie-breaks within priority class:
       a) higher assembly_level (Complete Genome > Chromosome > Scaffold > Contig)
-      b) more recent submission_date
+      b) more recent release_date (NCBI's own field name; the column it
+         lands in is still called submission_date for schema compatibility)
 
     Returns None when no candidate passes the priority filter.
     """
@@ -210,7 +211,11 @@ def pick_best_assembly(
         ann_rank = 1 if annotated else 0
         level = (r.get("assembly_info") or {}).get("assembly_level", "") or ""
         level_rank = _ASSEMBLY_LEVEL_RANK.get(level, 0)
-        date = (r.get("assembly_info") or {}).get("submission_date", "") or ""
+        # NCBI datasets v2alpha exposes 'release_date'; there is no
+        # 'submission_date' key. Reading the wrong name made this tie-break a
+        # permanent no-op, so which of two equal-ranked assemblies won could
+        # flip between re-queries.
+        date = (r.get("assembly_info") or {}).get("release_date", "") or ""
         # Encode as a single tuple where lower sorts first; negate ranks
         # for descending. Use (src*10+ann) to keep "annotated source X"
         # beating "unannotated source X" before assembly level matters.
@@ -229,7 +234,7 @@ def pick_best_assembly(
         assembly_level=(best.get("assembly_info") or {}).get("assembly_level", "") or "",
         annotation_status=(ann.get("status", "") or "") if best_annotated else "",
         est_protein_count=int(ann_stats.get("protein_coding", 0) or 0),
-        submission_date=(best.get("assembly_info") or {}).get("submission_date", "") or "",
+        submission_date=(best.get("assembly_info") or {}).get("release_date", "") or "",
         contig_n50=n50,
         total_length_bp=total_len,
     )

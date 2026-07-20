@@ -87,7 +87,13 @@ _groups = {
     ],
     'Other Lophotrochozoa': [
         'bune', 'crmu', 'crpa', 'lian', 'liun', 'lilo', 'meme', 'noge', 'pece',
-        'phau2', 'phov', 'phpa', 'teme',
+        # 'phaust' = Phoronis australis. Was 'phau2', which matched no
+        # sequence anywhere, so phoronid leaves fell through to the
+        # gastropod 'phau' entry and were coloured as molluscs. 'phaust'
+        # is the rename target documented in
+        # recover_cds_from_assemblies.SPECIES_MAP; it takes effect once the
+        # 's/^>phau_/>phaust_/' rename is applied to the Phoronis proteome.
+        'phaust', 'phov', 'phpa', 'teme',
     ],
 }
 for group, prefixes in _groups.items():

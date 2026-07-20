@@ -182,7 +182,7 @@ class TestPickBestAssembly:
             },
             "assembly_info": {
                 "assembly_level": level,
-                "submission_date": date,
+                "release_date": date,
             },
         }
 
@@ -194,7 +194,7 @@ class TestPickBestAssembly:
             "source_database": "SOURCE_DATABASE_GENBANK",
             "assembly_info": {
                 "assembly_level": level,
-                "submission_date": date,
+                "release_date": date,
             },
         }
         if annotated:
@@ -641,7 +641,7 @@ class TestPickBestAssemblyUnannotated:
             "source_database": "SOURCE_DATABASE_GENBANK",
             "assembly_info": {
                 "assembly_level": level,
-                "submission_date": date,
+                "release_date": date,
             },
             "assembly_stats": {
                 "contig_n50": n50,
