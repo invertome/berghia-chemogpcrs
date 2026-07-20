@@ -3,7 +3,7 @@
 #SBATCH --account=pi_pkatz_umass_edu
 #SBATCH --partition=cpu
 #SBATCH --qos=long
-#SBATCH --time=7-00:00:00
+#SBATCH --time=14-00:00:00
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=128G
 #SBATCH --output=logs/%x-%j.out
