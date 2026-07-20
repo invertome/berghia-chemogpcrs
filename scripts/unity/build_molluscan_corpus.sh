@@ -349,6 +349,51 @@ mmseqs easy-search "$EVAL_UNION" "$FULL" "$HITS" "$FWTMP" \
     -s "$FIREWALL_SENS" --max-seqs "$FIREWALL_MAXSEQS" -e "$FIREWALL_EVAL" \
     --threads "$CPUS"
 
+# --- Bead rbfs: the firewall must be able to FAIL ----------------------------
+# Everything downstream (the drop set, the audit) is derived from $HITS. If the
+# search silently returns nothing, n_leaked=0, nothing is dropped, the audit's
+# max identity is 0.0000, and the script reports "OK (below cutoff)" -- a
+# completely non-functional firewall producing the most reassuring possible
+# output, with audit_maxid=0 indistinguishable from a perfect firewall. The
+# consequence is homology leakage into the DAPT training corpus, which inflates
+# every downstream validation metric. So establish that the search actually ran
+# and returned something BEFORE anything interprets $HITS. Three states are
+# distinguished explicitly: search failed / returned nothing / returned hits.
+
+# STATE 1 -- search failed: mmseqs wrote no hits file at all. (A non-zero exit
+# is already fatal under `set -e`; this catches the exit-0-no-output case.)
+[ -f "$HITS" ] || die "firewall: mmseqs easy-search produced no hits file ($HITS).
+    The search did not run, so the homology firewall is NOT verified and the
+    firewalled corpus must NOT be used for a generalization measurement."
+
+n_hits=$(wc -l < "$HITS")
+
+# STATE 2 -- search returned nothing. Zero hits is not merely unlikely here, it
+# is impossible for a working search: the eval union contains the whole Berghia
+# proteome (STEP 4 above) and the FULL corpus contains Berghia as well (STEP 1c),
+# so every Berghia eval query must hit at least its own linclust representative
+# at ~100% identity. Zero hits therefore means a broken search -- wrong or empty
+# target DB, over-strict -e ($FIREWALL_EVAL), or mmseqs format drift -- and
+# never a clean corpus.
+if [ "$n_hits" -eq 0 ]; then
+    die "firewall: mmseqs easy-search returned ZERO hits for $n_eval eval queries
+    against the $n_full-sequence corpus. This is impossible for a functioning search
+    (Berghia is in BOTH the eval union and the corpus, so self-hits at ~100% identity
+    are guaranteed). Diagnose the search -- target DB '$FULL', -e '$FIREWALL_EVAL',
+    -s '$FIREWALL_SENS' -- before trusting any firewalled corpus."
+fi
+
+# STATE 3 -- the search returned hits. Guard the column layout the drop rule and
+# the audit both index by position ($2 target, $3 fident, $5 qcov, $6 tcov):
+# a --format-output change or an mmseqs version drift would otherwise shift them
+# silently and make every threshold comparison read the wrong column.
+n_fields=$(head -1 "$HITS" | awk -F'\t' '{ print NF }')
+[ "$n_fields" -eq 8 ] || die "firewall: expected 8 tab-separated columns in $HITS
+    (query,target,fident,alnlen,qcov,tcov,evalue,bits) but the first row has $n_fields.
+    The identity/coverage thresholds would be applied to the wrong columns."
+
+log "  firewall search returned $n_hits hits ($n_fields columns) -- proceeding to drop"
+
 # leaked target IDs = corpus seqs to drop.
 awk -F'\t' -v minid="$FIREWALL_MINID" -v mincov="$FIREWALL_MINCOV" '
     { cov = ($5 > $6 ? $5 : $6)                 # max(qcov, tcov)
@@ -356,6 +401,19 @@ awk -F'\t' -v minid="$FIREWALL_MINID" -v mincov="$FIREWALL_MINCOV" '
 ' "$HITS" | sort -u > "$LEAKED"
 n_leaked=$(wc -l < "$LEAKED" || echo 0)
 log "  firewall: $n_leaked corpus sequences flagged as eval-homologous -> dropped"
+
+# Bead rbfs: dropping nothing means the firewall did nothing. By the same
+# Berghia-in-both-sets argument as STATE 2, the self-hits are at ~100% identity
+# and full coverage, so they clear FIREWALL_MINID/$FIREWALL_MINCOV by a wide
+# margin and MUST appear here. n_leaked=0 with $n_hits hits present means the
+# threshold rule or the column layout is wrong, not that the corpus is clean.
+if [ "$n_leaked" -eq 0 ]; then
+    die "firewall: $n_hits hits were returned but NOT ONE cleared the drop rule
+    (fident >= $FIREWALL_MINID AND max(qcov,tcov) >= $FIREWALL_MINCOV), so no corpus
+    sequence was removed and the firewalled corpus is byte-identical to the full one.
+    Berghia's self-hits alone should clear this rule; check FIREWALL_MINID /
+    FIREWALL_MINCOV and the $HITS column layout."
+fi
 
 # remove leaked targets from FULL -> FIREWALLED (multi-line-FASTA safe stream).
 awk -v leakedfile="$LEAKED" '
@@ -376,15 +434,48 @@ log "STEP 4 done: FIREWALLED validation corpus = $n_fire seqs"
 # corpus seq (target not in the leaked/dropped set). Must be below FIREWALL_MINID;
 # a surviving hit CAN still show id >= minid if its coverage was < mincov (allowed
 # by the id-AND-cov drop rule) — reported honestly if so.
-audit_maxid=$(awk -F'\t' -v leakedfile="$LEAKED" '
-    BEGIN { while ((getline l < leakedfile) > 0) drop[l] = 1; m = 0 }
-    { if (!($2 in drop) && $3 + 0 > m) m = $3 + 0 }
-    END { printf("%.4f", m) }
-' "$HITS")
+# Reached only in STATE 3 (search ran, returned $n_hits hits, dropped $n_leaked),
+# so audit_maxid is now interpretable: a low value means "checked and clean",
+# not "nothing was ever checked".
+#
+# Two quantities, one pass: the max identity to a SURVIVING corpus sequence, and
+# the number of survivors clearing BOTH thresholds. The latter is the genuinely
+# failing branch. The drop rule removes every target with
+# fident >= FIREWALL_MINID AND max(qcov,tcov) >= FIREWALL_MINCOV, so by
+# construction NO survivor can satisfy both -- any that does is a sequence the
+# drop step failed to remove, i.e. a real leak into the validation corpus.
+# Identity alone cannot distinguish that from the benign case the old audit
+# described (high identity surviving legitimately on sub-threshold coverage),
+# which is why the old code could only ever downgrade to an "acceptable" NOTE.
+read -r audit_maxid audit_breaches <<<"$(awk -F'\t' \
+    -v leakedfile="$LEAKED" -v minid="$FIREWALL_MINID" -v mincov="$FIREWALL_MINCOV" '
+    BEGIN { while ((getline l < leakedfile) > 0) drop[l] = 1; m = 0; b = 0 }
+    {
+        if ($2 in drop) next
+        if ($3 + 0 > m) m = $3 + 0
+        cov = ($5 + 0 > $6 + 0) ? $5 + 0 : $6 + 0
+        if ($3 + 0 >= minid + 0 && cov >= mincov + 0) b++
+    }
+    END { printf("%.4f %d", m, b) }
+' "$HITS")"
 log "STEP 4 audit: max eval->surviving-corpus identity = $audit_maxid (cutoff $FIREWALL_MINID)"
-audit_flag="OK (below cutoff)"
-awk -v a="$audit_maxid" -v c="$FIREWALL_MINID" 'BEGIN{ exit !(a+0 >= c+0) }' \
-    && audit_flag="NOTE: >= cutoff — survived on sub-threshold coverage (id-AND-cov rule); acceptable"
+
+if [ "$audit_breaches" -gt 0 ]; then
+    die "firewall BREACH: $audit_breaches surviving corpus sequences clear BOTH
+    fident >= $FIREWALL_MINID AND max(qcov,tcov) >= $FIREWALL_MINCOV, yet were not
+    dropped. The drop step did not remove what the rule selects, so $FIRE still
+    contains eval-homologous sequences. Training a validation model on it would
+    inflate every generalization metric. Fix the drop step before using this corpus."
+fi
+
+if awk -v a="$audit_maxid" -v c="$FIREWALL_MINID" 'BEGIN{ exit !(a+0 >= c+0) }'; then
+    audit_flag="NOTE: >= cutoff — survived on sub-threshold coverage (id-AND-cov rule); acceptable"
+else
+    audit_flag="OK (below cutoff)"
+fi
+# Record the evidence the verdict rests on, so a future reader can tell a
+# verified-clean audit from one that never had anything to check.
+audit_flag="${audit_flag} [verified over ${n_hits} hits, ${n_leaked} dropped, 0 breaches]"
 
 # =============================================================================
 # STEP 5 — manifest (counts + per-clade balance + firewall audit).

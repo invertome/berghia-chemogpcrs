@@ -83,8 +83,17 @@ REPO_ROOT="${REPO_ROOT:-/scratch3/workspace/jperezmoreno_umass_edu-jorge/chemogp
 cd "${REPO_ROOT}"
 source "${REPO_ROOT}/config.sh"
 
-# Candidate AlphaFold models (stage 08 output; one structure file per
-# candidate, mmCIF or PDB). Same default as run_foldseek_candidates.sh.
+# Candidate AlphaFold models (stage 08 output). Same default as
+# run_foldseek_candidates.sh.
+#
+# Bead 5ubd: stage 08 does NOT write one structure file per candidate at the
+# top level. It creates cand_dir=alphafold/<candidate_id> and lets AF3 nest its
+# own output below that, so models land at
+#     alphafold/<candidate_id>/<af3_job_name>/<af3_job_name>_model.cif
+# (08_structural_analysis.sh:298). Iterating this directory at depth 1 yields
+# only DIRECTORIES, every one of which an `isfile` guard skips -- zero
+# iterations, no reports, exit 0, and stage 07 then logs the microswitch
+# channel as "stays dormant" while both jobs report success. Walk the tree.
 AF_DIR="${AF_DIR:-${RESULTS_DIR}/structural_analysis/alphafold}"
 
 # See the REFERENCE_STRUCTURE comment block above.
@@ -118,6 +127,47 @@ echo "[microswitch-bw-transfer] using TM-align: ${TMALIGN_BIN}"
 echo "[microswitch-bw-transfer] reference structure: ${REFERENCE_STRUCTURE}"
 echo "[microswitch-bw-transfer] candidate models: ${AF_DIR} -> ${OUT_DIR}"
 
+# --- Bead 5ubd: resolve <candidate_id> -> <model path> ------------------------
+# The candidate id is the FIRST path component under AF_DIR -- that is the
+# `cand_dir` stage 08 itself created (08:222, `alphafold/${candidate_id}`), and
+# it is what stage 08 reads back when rendering figures (08:303,
+# `basename $(dirname $(dirname $cif))`). It is NOT the file stem: the file is
+# named after AF3's internal job name, so deriving the id from the filename
+# produces `<af3_job_name>_model`, which joins against nothing downstream --
+# build_microswitch_channel.py keys candidates on the part before the
+# ".bw_report.txt" suffix and matches them against the ranking table's ids.
+# Taking the first component (rather than literally the grandparent) also stays
+# correct if AF3 changes how deeply it nests inside cand_dir.
+#
+# Deliberately NOT results/structural_analysis/all_pdb/, even though that
+# directory is flat: stage 08 pools GPCRdb REFERENCE structures into it
+# alongside the predictions (08:274), so it would emit bw_reports keyed on
+# reference PDB accessions and contaminate the ranking join with non-candidates.
+# It also flattens to the AF3 job name, losing the candidate id entirely.
+MODEL_MANIFEST="${TMP_DIR}/candidate_models.tsv"
+: > "${MODEL_MANIFEST}"
+while IFS= read -r _model; do
+    [ -n "${_model}" ] || continue
+    _rel="${_model#"${AF_DIR%/}"/}"
+    case "${_rel}" in
+        */*) _cand_id="${_rel%%/*}" ;;                    # <cand_id>/.../<file>
+        *)   _cand_id="$(basename "${_rel%.*}")" ;;       # already flat
+    esac
+    printf '%s\t%s\n' "${_cand_id}" "${_model}" >> "${MODEL_MANIFEST}"
+done < <(find "${AF_DIR}" \( -name '*_model.cif' -o -name '*_model.pdb' \) | sort)
+
+N_MODELS=$(wc -l < "${MODEL_MANIFEST}")
+if [ "${N_MODELS}" -eq 0 ]; then
+    echo "ERROR: no candidate structures found under ${AF_DIR}" >&2
+    echo "       (searched recursively for *_model.cif / *_model.pdb)" >&2
+    echo "       Stage 08 writes alphafold/<candidate_id>/<af3_job>/<af3_job>_model.cif;" >&2
+    echo "       run 08_structural_analysis.sh first, or point AF_DIR at the tree that holds them." >&2
+    echo "       Refusing to exit 0 with zero reports -- that is what made the" >&2
+    echo "       or_microswitch ranking axis silently dormant (bead 5ubd)." >&2
+    exit 3
+fi
+echo "[microswitch-bw-transfer] resolved ${N_MODELS} candidate structures"
+
 # One TM-align run per candidate (rotation matrix + TM-score) followed by a
 # Biopython nearest-Calpha-neighbor pass under that SAME rotation, so the
 # residue pairing reflects TM-align's own optimal superposition rather
@@ -125,7 +175,7 @@ echo "[microswitch-bw-transfer] candidate models: ${AF_DIR} -> ${OUT_DIR}"
 # place TM-align or structure parsing is invoked -- everything downstream
 # (scripts/build_microswitch_channel.py) is pure and unit-tested without
 # needing either.
-AF_DIR="${AF_DIR}" REFERENCE_STRUCTURE="${REFERENCE_STRUCTURE}" OUT_DIR="${OUT_DIR}" \
+MODEL_MANIFEST="${MODEL_MANIFEST}" REFERENCE_STRUCTURE="${REFERENCE_STRUCTURE}" OUT_DIR="${OUT_DIR}" \
 TMP_DIR="${TMP_DIR}" TMALIGN_BIN="${TMALIGN_BIN}" NEIGHBOR_CUTOFF_A="${NEIGHBOR_CUTOFF_A}" \
 python3 - <<'PYEOF'
 import os
@@ -134,7 +184,7 @@ import sys
 
 from Bio.PDB import MMCIFParser, PDBParser
 
-AF_DIR = os.environ["AF_DIR"]
+MODEL_MANIFEST = os.environ["MODEL_MANIFEST"]
 REFERENCE_STRUCTURE = os.environ["REFERENCE_STRUCTURE"]
 OUT_DIR = os.environ["OUT_DIR"]
 TMP_DIR = os.environ["TMP_DIR"]
@@ -236,12 +286,29 @@ def distance(a, b):
 reference_ca = load_ca_atoms(REFERENCE_STRUCTURE)
 print(f"[microswitch-bw-transfer] reference: {len(reference_ca)} CA atoms", file=sys.stderr)
 
+# (candidate_id, model_path) pairs, resolved by the shell above from stage 08's
+# nested alphafold/<candidate_id>/<af3_job>/<af3_job>_model.cif layout. The id
+# comes from the directory tree, never from the filename -- see the
+# MODEL_MANIFEST comment block in the shell section.
+models = []
+with open(MODEL_MANIFEST) as fh:
+    for line in fh:
+        line = line.rstrip("\n")
+        if not line:
+            continue
+        cand_id, _, model_path = line.partition("\t")
+        if cand_id and model_path:
+            models.append((cand_id, model_path))
+
+if not models:
+    sys.exit("ERROR: candidate model manifest is empty: " + MODEL_MANIFEST)
+
 n_ok, n_fail = 0, 0
-for fname in sorted(os.listdir(AF_DIR)):
-    model_path = os.path.join(AF_DIR, fname)
+for cand_id, model_path in models:
     if not os.path.isfile(model_path):
+        print(f"WARNING: model file vanished for {cand_id}: {model_path}", file=sys.stderr)
+        n_fail += 1
         continue
-    cand_id = os.path.splitext(fname)[0]
     matrix_path = os.path.join(TMP_DIR, f"{cand_id}.tmalign_matrix.txt")
     report_path = os.path.join(OUT_DIR, f"{cand_id}.bw_report.txt")
 
@@ -288,6 +355,17 @@ for fname in sorted(os.listdir(AF_DIR)):
 
 print(f"[microswitch-bw-transfer] DONE: {n_ok} reports written, {n_fail} failed -> {OUT_DIR}",
       file=sys.stderr)
+
+# Bead 5ubd: zero reports must never be a success. Stage 07 gates the
+# or_microswitch channel on this directory being non-empty and silently logs
+# "stays dormant" otherwise, so an exit-0-with-nothing-written run removes a
+# scored ranking axis without any failure surfacing anywhere.
+if n_ok == 0:
+    sys.exit(
+        f"ERROR: {len(models)} candidate structures were found but NOT ONE "
+        f"produced a BW report ({n_fail} failed). Refusing to exit 0 -- the "
+        f"or_microswitch ranking axis would silently stay dormant."
+    )
 PYEOF
 
 echo "[microswitch-bw-transfer] next: python3 ${SCRIPTS_DIR}/build_microswitch_channel.py" \

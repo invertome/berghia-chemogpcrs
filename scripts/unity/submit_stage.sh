@@ -49,8 +49,10 @@ source config.sh
 # shellcheck disable=SC1091
 source functions.sh
 
-# Hand envsubst a complete environment — the SBATCH directives reference
-# multiple project variables.
+# Project variables the submitted job should inherit in its environment
+# (sbatch propagates the submitting environment by default). This is NOT the
+# envsubst substitution set. See the SHELL-FORMAT derivation below, which is
+# computed from the stage's own #SBATCH directives.
 export DEFAULT_TIME LOGS_DIR CPUS DEFAULT_MEM RESULTS_DIR
 export SLURM_EMAIL="${SLURM_EMAIL:-${USER}@umass.edu}"
 
@@ -58,10 +60,65 @@ OUT_DIR="${TMPDIR:-/tmp}/berghia_sbatch"
 mkdir -p "$OUT_DIR"
 PREPROCESSED="${OUT_DIR}/${STAGE_BASENAME}.sbatch.sh"
 
-# envsubst handles ${VAR}; sed strips any directive that's a $(...)
-# command substitution since sbatch can't run those at parse time.
-# Resource flags should be passed via CLI overrides instead.
-envsubst < "$STAGE_SCRIPT" | sed '/^#SBATCH \\?\$(/d' > "$PREPROCESSED"
+# --- Bead mqme: substitute ONLY the variables the #SBATCH directives use ------
+# `envsubst` with NO SHELL-FORMAT argument substitutes EVERY $VAR/${VAR} in the
+# whole file and replaces unset ones with the empty string. That guts the stage
+# BODY: loop variables, locals, and (decisively) $SLURM_ARRAY_TASK_ID, which
+# Slurm sets at RUNTIME and is therefore necessarily unset here. Stage 04's
+# `if [ -n "$SLURM_ARRAY_TASK_ID" ]` became `if [ -n "" ]`, false for every array
+# task, so every task skipped all per-orthogroup work and exited 0. Measured on
+# stage 04: 224 corrupted lines.
+#
+# So derive the substitution set from the stage's OWN #SBATCH directives and
+# hand it to envsubst explicitly; every other token in the file passes through
+# untouched. `$(scale_resources)` is not a variable reference and never matches.
+mapfile -t SBATCH_VARS < <(
+    grep '^#SBATCH' "$STAGE_SCRIPT" \
+        | grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*' \
+        | tr -d '${}' \
+        | sort -u
+)
+
+# Each name must resolve to a NON-EMPTY value. An unset one would reintroduce
+# exactly the silent-empty-substitution failure this fix exists to remove, only
+# now inside a resource directive (`--time=` with no value), so fail loudly.
+SHELL_FORMAT=""
+for _var in "${SBATCH_VARS[@]:-}"; do
+    [ -n "$_var" ] || continue
+    if [ -z "${!_var:-}" ]; then
+        echo "ERROR: #SBATCH directive in ${STAGE_SCRIPT} references \${${_var}}," \
+             "which is unset or empty after sourcing config.sh + functions.sh." >&2
+        echo "       Refusing to substitute it with an empty string." >&2
+        exit 4
+    fi
+    export "${_var?}"
+    SHELL_FORMAT+="\$${_var} "
+done
+echo "[submit_stage] envsubst shell-format: ${SHELL_FORMAT:-<none>}" >&2
+
+# Substitution is applied ONLY to `#SBATCH` directive lines. The script body is
+# copied through byte-for-byte, so no body construct can be rewritten even if it
+# happens to mention one of the directive variables. Directives that are a
+# $(...) command substitution are dropped, since sbatch parses directives before
+# running the script and cannot evaluate those; pass resource flags via CLI
+# overrides instead.
+{
+    while IFS= read -r _line || [ -n "$_line" ]; do
+        if [[ "$_line" =~ ^#SBATCH[[:space:]] ]]; then
+            [[ "$_line" =~ ^#SBATCH[[:space:]]+\$\( ]] && continue
+            printf '%s\n' "$_line" | envsubst "$SHELL_FORMAT"
+        else
+            printf '%s\n' "$_line"
+        fi
+    done < "$STAGE_SCRIPT"
+} > "$PREPROCESSED"
+
+# Nothing may reach sbatch with an unresolved reference in a directive: sbatch
+# would either reject the file or silently take a malformed value.
+if grep -nE '^#SBATCH.*\$' "$PREPROCESSED" >&2; then
+    echo "ERROR: unresolved substitution left in a #SBATCH directive (above)." >&2
+    exit 4
+fi
 
 echo "[submit_stage] preprocessed -> $PREPROCESSED" >&2
 echo "[submit_stage] sbatch flags: $*" >&2
