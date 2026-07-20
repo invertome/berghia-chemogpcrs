@@ -30,11 +30,30 @@ SCORE_COLORS = {
     'lse_depth_score': '#8c564b'    # Brown - LSE depth
 }
 
+# Rank-confidence tiers from scripts/rank_confidence.py: the signal bootstrap's
+# P(candidate is in the top k), binned high (>=0.8) / plausible (>=0.2) / tail.
+# NOT the legacy evidence-completeness grade, which is no longer displayed.
+#
+# `tail` is grey, not red: it is a true statistical statement (this candidate
+# seldom reaches the top k), and since only k candidates fit in the top k, most
+# of the list is necessarily tail. Red would paint the expected majority
+# outcome as an error.
+RANK_TIER_ORDER = ['high', 'plausible', 'tail']
 TIER_COLORS = {
-    'High': '#2ca02c',
-    'Medium': '#ff7f0e',
-    'Low': '#d62728'
+    'high': '#2ca02c',       # green  - stably in the top k
+    'plausible': '#ff7f0e',  # orange - membership depends on which signals are drawn
+    'tail': '#7f7f7f'        # grey   - seldom in the top k; not a failure
 }
+# Anything else (blank cell = no signal covers the candidate; absent column =
+# rank_confidence.py did not run) is "not scored" -- never binned as tail.
+TIER_NA_COLOR = '#c7c7c7'
+TIER_NA_LABEL = 'not scored'
+
+
+def rank_tier_series(frame):
+    """Normalized rank_tier values; unrecognized/blank -> TIER_NA_LABEL."""
+    raw = frame['rank_tier'].fillna('').astype(str).str.strip()
+    return raw.where(raw.isin(RANK_TIER_ORDER), TIER_NA_LABEL)
 
 # Command-line arguments
 ranking_file = sys.argv[1]
@@ -109,11 +128,11 @@ if has_components:
         ax1.bar(x, values, bottom=bottom, label=label, color=color, edgecolor='white', linewidth=0.5)
         bottom += values
 
-    # Add confidence tier indicators
-    if 'confidence_tier' in top_df.columns:
-        for i, (_, row) in enumerate(top_df.iterrows()):
-            tier = row.get('confidence_tier', 'Low')
-            color = TIER_COLORS.get(tier, '#7f7f7f')
+    # Add rank-confidence tier indicators
+    if 'rank_tier' in top_df.columns:
+        tiers = rank_tier_series(top_df)
+        for i, tier in enumerate(tiers.values):
+            color = TIER_COLORS.get(tier, TIER_NA_COLOR)
             ax1.plot(i, bottom[i] + 0.1, marker='o', markersize=8, color=color,
                     markeredgecolor='black', markeredgewidth=0.5)
 
@@ -156,14 +175,14 @@ if has_components:
     ax2.spines['top'].set_visible(False)
     ax2.spines['right'].set_visible(False)
 
-    # --- Panel C: Confidence Tier Distribution ---
+    # --- Panel C: Rank-Confidence Tier Distribution ---
     ax3 = fig.add_subplot(gs[1, 1])
 
-    if 'confidence_tier' in df.columns:
-        tier_counts = df['confidence_tier'].value_counts()
-        tier_order = ['High', 'Medium', 'Low']
-        tier_counts = tier_counts.reindex(tier_order).fillna(0)
-        colors = [TIER_COLORS.get(t, '#7f7f7f') for t in tier_order]
+    if 'rank_tier' in df.columns:
+        tiers = rank_tier_series(df)
+        tier_order = RANK_TIER_ORDER + [TIER_NA_LABEL]
+        tier_counts = tiers.value_counts().reindex(tier_order).fillna(0)
+        colors = [TIER_COLORS.get(t, TIER_NA_COLOR) for t in tier_order]
 
         bars = ax3.bar(tier_order, tier_counts.values, color=colors, edgecolor='black', linewidth=0.8)
 
@@ -172,11 +191,20 @@ if has_components:
             ax3.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5,
                     f'{int(count)}', ha='center', va='bottom', fontsize=10, fontweight='bold')
 
-        ax3.set_xlabel('Confidence Tier', fontsize=11)
+        topk = os.getenv('RANK_TOPK', '20')
+        ax3.set_xlabel(f'Rank tier: bootstrap P(in top {topk})', fontsize=11)
         ax3.set_ylabel('Number of Candidates', fontsize=11)
-        ax3.set_title('C. Candidate Confidence Distribution', fontsize=12, fontweight='bold', loc='left')
+        ax3.set_title('C. Rank-Confidence Tier Distribution', fontsize=12, fontweight='bold', loc='left')
     else:
-        ax3.text(0.5, 0.5, 'No confidence tier data', ha='center', va='center', transform=ax3.transAxes)
+        # rank_confidence.py is invoked non-fatally by stage 07, so the column
+        # can legitimately be missing. Say so, rather than drawing an empty or
+        # all-tail bar chart that would read as a real result.
+        ax3.text(0.5, 0.5,
+                 'Rank confidence not computed\n(rank_confidence.py did not run)',
+                 ha='center', va='center', transform=ax3.transAxes, fontsize=10)
+        ax3.set_title('C. Rank-Confidence Tier Distribution', fontsize=12, fontweight='bold', loc='left')
+        ax3.set_xticks([])
+        ax3.set_yticks([])
 
     ax3.spines['top'].set_visible(False)
     ax3.spines['right'].set_visible(False)
@@ -265,11 +293,14 @@ summary_stats = {
 summary_stats['Metric'].append('Total candidates')
 summary_stats['Value'].append(len(df))
 
-if 'confidence_tier' in df.columns:
-    for tier in ['High', 'Medium', 'Low']:
-        count = len(df[df['confidence_tier'] == tier])
-        summary_stats['Metric'].append(f'{tier} confidence')
-        summary_stats['Value'].append(count)
+if 'rank_tier' in df.columns:
+    tier_values = rank_tier_series(df)
+    for tier in RANK_TIER_ORDER + [TIER_NA_LABEL]:
+        summary_stats['Metric'].append(f'Rank tier: {tier}')
+        summary_stats['Value'].append(int((tier_values == tier).sum()))
+else:
+    summary_stats['Metric'].append('Rank tier')
+    summary_stats['Value'].append('not computed')
 
 if 'selection_significant' in df.columns:
     summary_stats['Metric'].append('Significant selection')

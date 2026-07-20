@@ -101,19 +101,22 @@ JCVI_IMG=$(find_image "$SYNTENY_DIR/jcvi" "*/*.*.pdf" "")
 TOTAL_CANDIDATES=$(count_lines "${RESULTS_DIR}/candidates/chemogpcr_candidates.txt")
 RANKED_FILE="${RANKING_DIR}/ranked_candidates_sorted.csv"
 
-HIGH_CONF=""; MED_CONF=""; LOW_CONF=""; SIG_SELECTION=""
+SIG_SELECTION=""
 BUSTED_S_SIG=""; BUSTED_MH_SIG=""; MEME_TOTAL=""
 HCR_FRIENDLY=""; TANDEM_MEMBERS=""
 CDS_NATIVE=""; CDS_MINIPROT=""
 TOP_N_RANKED=""
+# Signal-bootstrap rank tiers (scripts/rank_confidence.py, joined by stage 07).
+# RANK_TIER_AVAILABLE distinguishes "the column is missing" from "the column is
+# present and this tier is empty" -- see the stats block below for why that
+# distinction has to be explicit.
+RANK_TIER_AVAILABLE=0
+RANK_TIER_HIGH=""; RANK_TIER_PLAUSIBLE=""; RANK_TIER_TAIL=""; RANK_TIER_NA=""
 # Non-chemoreceptor classification (stage 06c output, joined into ranked CSV
 # by add_classification_columns.py).
 NONCHEMO_HIGH=""; NONCHEMO_MED=""; CHEMO_CANDIDATE=""
 
 if [ -f "$RANKED_FILE" ]; then
-    HIGH_CONF=$(count_by_value      "$RANKED_FILE" confidence_tier        High)
-    MED_CONF=$(count_by_value       "$RANKED_FILE" confidence_tier        Medium)
-    LOW_CONF=$(count_by_value       "$RANKED_FILE" confidence_tier        Low)
     SIG_SELECTION=$(count_by_value  "$RANKED_FILE" selection_significant  True)
     BUSTED_S_SIG=$(count_by_value   "$RANKED_FILE" busted_s_significant   True)
     BUSTED_MH_SIG=$(count_by_value  "$RANKED_FILE" busted_mh_significant  True)
@@ -126,6 +129,26 @@ if [ -f "$RANKED_FILE" ]; then
     NONCHEMO_HIGH=$(count_by_value  "$RANKED_FILE" classification         non-chemoreceptor)
     NONCHEMO_MED=$(count_by_value   "$RANKED_FILE" classification         likely-non-chemoreceptor)
     CHEMO_CANDIDATE=$(count_by_value "$RANKED_FILE" classification        chemoreceptor-candidate)
+
+    # Rank-confidence tiers. rank_confidence.py bins p_top_k -- the bootstrap
+    # probability of landing in the top RANK_TOPK when the SIGNAL SET is
+    # resampled -- into high (>=0.8) / plausible (>=0.2) / tail. Stage 07 runs
+    # it non-fatally, so a run where it failed leaves the ranked CSV with NO
+    # rank_tier column at all. Probe the header explicitly: count_by_value
+    # returns 0 both for "absent column" and for "present column, no rows in
+    # this tier", and printing three zeros for an absent column would read as a
+    # genuine finding ("nothing ranks stably") instead of "never computed".
+    if [ -n "$(csv_col_idx "$RANKED_FILE" rank_tier)" ]; then
+        RANK_TIER_AVAILABLE=1
+        RANK_TIER_HIGH=$(count_by_value      "$RANKED_FILE" rank_tier high)
+        RANK_TIER_PLAUSIBLE=$(count_by_value "$RANKED_FILE" rank_tier plausible)
+        RANK_TIER_TAIL=$(count_by_value      "$RANKED_FILE" rank_tier tail)
+        # Blank cells are real: annotate_ranked_csv leaves the tier empty for
+        # candidates that no ranking signal covers. They are NOT tail -- there
+        # is simply no bootstrap statement about them -- so they get their own
+        # count and the four together partition the ranked set.
+        RANK_TIER_NA=$(count_by_value        "$RANKED_FILE" rank_tier "")
+    fi
 fi
 
 # --- Generate LaTeX report ---
@@ -191,9 +214,26 @@ cat >> "${RESULTS_DIR}/report/report.tex" <<EOF
 Total GPCR Candidates Identified & ${TOTAL_CANDIDATES:-N/A} \\\\
 Ranked Candidates & ${TOP_N_RANKED:-N/A} \\\\
 \midrule
-High Confidence & \textcolor{highconf}{${HIGH_CONF:-0}} \\\\
-Medium Confidence & \textcolor{medconf}{${MED_CONF:-0}} \\\\
-Low Confidence & \textcolor{lowconf}{${LOW_CONF:-0}} \\\\
+EOF
+
+# Rank-confidence tier counts. Emitted as their own append so the "not computed"
+# state is a genuinely different row set rather than three misleading zeros.
+if [ "${RANK_TIER_AVAILABLE:-0}" = "1" ]; then
+    cat >> "${RESULTS_DIR}/report/report.tex" <<EOF
+Rank tier: high (P(top-${RANK_TOPK:-20}) \$\geq\$ 0.8) & \textcolor{highconf}{${RANK_TIER_HIGH:-0}} \\\\
+Rank tier: plausible (P \$\geq\$ 0.2) & \textcolor{medconf}{${RANK_TIER_PLAUSIBLE:-0}} \\\\
+Rank tier: tail (P \$<\$ 0.2) & \textcolor{neutral}{${RANK_TIER_TAIL:-0}} \\\\
+Rank tier: not scored & \textcolor{neutral}{${RANK_TIER_NA:-0}} \\\\
+EOF
+else
+    # QUOTED heredoc: emitted literally, so the LaTeX row terminator is a plain
+    # `\\` here, NOT the `\\\\` the unquoted heredocs above need.
+    cat >> "${RESULTS_DIR}/report/report.tex" <<'EOF'
+Rank confidence & \textcolor{neutral}{not computed} \\
+EOF
+fi
+
+cat >> "${RESULTS_DIR}/report/report.tex" <<EOF
 \midrule
 aBSREL branch-significant & ${SIG_SELECTION:-0} \\\\
 BUSTED-S gene-significant & ${BUSTED_S_SIG:-0} \\\\
@@ -215,16 +255,53 @@ CDS source: miniprot-recovered & ${CDS_MINIPROT:-0} \\\\
 
 EOF
 
-# Add interpretation guide
-cat >> "${RESULTS_DIR}/report/report.tex" <<'EOF'
+# Add interpretation guide. Unquoted heredoc so the configured top-k
+# (RANK_TOPK) is interpolated -- every literal LaTeX '$' is therefore escaped
+# as '\$' so bash does not treat it as a parameter expansion.
+cat >> "${RESULTS_DIR}/report/report.tex" <<EOF
 
-\subsection{Confidence Tier Interpretation}
+\subsection{Rank Confidence Tiers}
+
+A candidate's tier states how \emph{stably} it ranks, not how much evidence
+supports it. \texttt{scripts/rank\_confidence.py} resamples the signal set with
+replacement (${RANK_CI_N:-1000} draws), re-runs the label-free rank aggregation
+on each draw, and records \$P_{\text{top-}k}\$: the fraction of draws in which
+the candidate landed in the top ${RANK_TOPK:-20}. The tier bins that probability:
 
 \begin{itemize}
-    \item \textbf{\textcolor{highconf}{High Confidence}}: Strong evidence across multiple data sources (phylogenetic proximity to known chemoreceptors, significant selective pressure, synteny conservation, expression in sensory tissues).
-    \item \textbf{\textcolor{medconf}{Medium Confidence}}: Good evidence but incomplete data coverage or moderate scores.
-    \item \textbf{\textcolor{lowconf}{Low Confidence}}: Limited evidence or low scores; requires additional validation.
+    \item \textbf{\textcolor{highconf}{high}} (\$P_{\text{top-}k} \geq 0.8\$):
+      the candidate reaches the top ${RANK_TOPK:-20} under nearly every
+      resampling of the evidence, so its shortlist membership does not hinge on
+      any single signal.
+    \item \textbf{\textcolor{medconf}{plausible}}
+      (\$0.2 \leq P_{\text{top-}k} < 0.8\$): shortlist membership is genuinely
+      uncertain and depends on which signals happen to be drawn.
+    \item \textbf{\textcolor{neutral}{tail}} (\$P_{\text{top-}k} < 0.2\$): the
+      candidate seldom reaches the top ${RANK_TOPK:-20}. This is a statement
+      about rank stability \emph{only}. It is rendered in neutral grey rather
+      than red because it is neither a data-quality problem nor a failed
+      candidate: only ${RANK_TOPK:-20} candidates can occupy the top
+      ${RANK_TOPK:-20}, so most of the list is necessarily \textbf{tail}.
+    \item \textbf{\textcolor{neutral}{n/a}} (reported as \textbf{not scored} in
+      the summary table): no bootstrap statement is available --- either no
+      ranking signal covers the candidate, or \texttt{rank\_confidence.py} did
+      not run for this execution. This is \emph{not} a low tier, and the whole
+      column is reported as \textbf{not computed} when the analysis is missing.
 \end{itemize}
+
+Evidence sufficiency is a separate question, answered separately by the
+\texttt{evidence\_completeness} column (Figure~\ref{fig:ranking}D): a candidate
+can be evidence-complete and still \textbf{tail}, or evidence-sparse and
+\textbf{high}. The legacy \texttt{confidence\_tier} column is still computed and
+still present in the ranked CSV, but it is no longer displayed --- its cutoffs
+are uncalibrated against the current score scale, and it derives from the
+hand-weighted composite that the label-free \texttt{final\_rank} superseded.
+
+EOF
+
+# Back to a QUOTED heredoc: the Methods Overview below is dense with literal
+# LaTeX math ($\to$, $\omega$, ...) that must not be parameter-expanded.
+cat >> "${RESULTS_DIR}/report/report.tex" <<'EOF'
 
 \newpage
 \section{Methods Overview}
@@ -426,7 +503,7 @@ if [ -n "$RANKING_IMG" ] && [ -f "$RANKING_IMG" ]; then
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.95\textwidth]{${RANKING_BASENAME}}
-\caption{Candidate ranking summary. A) Top candidates with score breakdown by component. B) Score distributions. C) Confidence tier distribution. D) Evidence completeness correlation. E) Selection pressure summary.}
+\caption{Candidate ranking summary. A) Top candidates with score breakdown by component; the marker above each bar is the candidate's rank-confidence tier. B) Score distributions. C) Rank-tier distribution --- bootstrap P(in top-\$k\$), not an evidence grade. D) Evidence completeness correlation. E) Selection pressure summary.}
 \label{fig:ranking}
 \end{figure}
 
@@ -454,14 +531,14 @@ if [ -f "$RANKED_FILE" ]; then
 \subsubsection{Top Ranked Candidates}
 
 \begin{longtable}{rlrlcccr}
-\caption{Top 20 ranked GPCR candidates. \textbf{Sel}=aBSREL branch-significant; \textbf{B-MH}=BUSTED-MH gene-significant; \textbf{HCR}=probe-friendly; \textbf{TC size}=tandem-cluster size.} \\
+\caption{Top 20 ranked GPCR candidates. \textbf{Tier}=rank-confidence tier, i.e.\ the bootstrap probability of being in the top $k$ (high $\geq$ 0.8, plausible $\geq$ 0.2, tail below; \emph{n/a} = not computed) --- not an evidence grade; \textbf{Sel}=aBSREL branch-significant; \textbf{B-MH}=BUSTED-MH gene-significant; \textbf{HCR}=probe-friendly; \textbf{TC size}=tandem-cluster size.} \\
 \toprule
-\textbf{\#} & \textbf{ID} & \textbf{Score} & \textbf{Conf} & \textbf{Sel} & \textbf{B-MH} & \textbf{HCR} & \textbf{TC size} \\
+\textbf{\#} & \textbf{ID} & \textbf{Score} & \textbf{Tier} & \textbf{Sel} & \textbf{B-MH} & \textbf{HCR} & \textbf{TC size} \\
 \midrule
 \endfirsthead
 \multicolumn{8}{c}{\tablename\ \thetable\ -- continued} \\
 \toprule
-\textbf{\#} & \textbf{ID} & \textbf{Score} & \textbf{Conf} & \textbf{Sel} & \textbf{B-MH} & \textbf{HCR} & \textbf{TC size} \\
+\textbf{\#} & \textbf{ID} & \textbf{Score} & \textbf{Tier} & \textbf{Sel} & \textbf{B-MH} & \textbf{HCR} & \textbf{TC size} \\
 \midrule
 \endhead
 \bottomrule
@@ -492,9 +569,28 @@ with open(sys.argv[1]) as fh:
     for i, row in enumerate(r, start=1):
         if i > 20:
             break
-        conf = tex_esc(row.get("confidence_tier", ""))
-        color = {"High": "highconf", "Medium": "medconf", "Low": "lowconf"}.get(
-            row.get("confidence_tier", ""), "lowconf")
+        # Rank-confidence tier (rank_confidence.py): the bootstrap P(in top-k),
+        # NOT the legacy evidence-completeness confidence_tier.
+        #
+        # `tail` is deliberately neutral grey, not lowconf red: it is a true
+        # statistical statement (this candidate seldom reaches the top k), and
+        # since only k candidates can occupy the top k, most of the list is
+        # necessarily tail. Red would frame the expected majority outcome as a
+        # failure. lowconf stays reserved for actual alerts.
+        #
+        # Anything else -- a blank cell (no signal covers the candidate), a
+        # missing rank_tier column (stage 07 runs rank_confidence.py
+        # non-fatally), or an unrecognised future value -- renders as a neutral
+        # `n/a` rather than being silently binned into the worst tier.
+        tier_raw = (row.get("rank_tier") or "").strip()
+        tier_color = {"high": "highconf",
+                      "plausible": "medconf",
+                      "tail": "neutral"}.get(tier_raw)
+        if tier_color is None:
+            tier_color, conf = "neutral", "n/a"
+        else:
+            conf = tex_esc(tier_raw)
+        color = tier_color
         try:
             score = float(row.get("rank_score", "0") or 0)
         except ValueError:
@@ -719,12 +815,12 @@ Expression (legacy) & 1.0 & EXPR\_WEIGHT \\
 
 For HCR (in situ hybridization chain reaction) probe design, prioritize candidates satisfying \emph{all three}:
 \begin{itemize}
-    \item \texttt{confidence\_tier = High}
+    \item \texttt{rank\_tier = high} (the candidate holds a top-$k$ slot across essentially every resampling of the evidence)
     \item \texttt{hcr\_probe\_friendly = True}
     \item Either \texttt{tandem\_cluster\_size > 1} \emph{or} \texttt{selection\_significant = True} (i.e.\ at least one chemoreceptor-signature corroborator).
 \end{itemize}
 
-Secondary candidates (Medium confidence, HCR-friendly, with one signature corroborator) are good targets for second-round screens.
+Secondary candidates (\texttt{rank\_tier = plausible}, HCR-friendly, with one signature corroborator) are good targets for second-round screens: their top-$k$ membership is signal-dependent, which is exactly what a second-round screen resolves. Candidates whose \texttt{rank\_tier} is blank or whose column is absent have no rank-confidence statement at all and should be triaged on \texttt{evidence\_completeness} and the signature corroborators instead.
 
 \subsection{Follow-up Analyses}
 
