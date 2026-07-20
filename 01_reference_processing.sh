@@ -470,8 +470,15 @@ if [ -f "${RESULTS_DIR}/reference_sequences/cds/all_references_cds.fna" ]; then
     python3 "${SCRIPTS_DIR}/update_headers.py" \
         "${RESULTS_DIR}/reference_sequences/cds/all_references_cds.fna" "${ID_MAP}" \
         --source-type reference --append
-    mv "${RESULTS_DIR}/reference_sequences/cds/all_references_cds_updated.fna" \
-       "${RESULTS_DIR}/reference_sequences/cds/all_references_cds.fna" 2>/dev/null || true
+    # update_headers.py always writes f"{fasta_file}_updated.fa" -- it appends to
+    # the WHOLE input path, extension included -- so the CDS output is
+    # all_references_cds.fna_updated.fa, matching the protein remap above.
+    # This previously moved all_references_cds_updated.fna (different stem AND
+    # extension) under `2>/dev/null || true`, so CDS headers were never remapped
+    # onto the protein id_map and every downstream CDS-to-protein join ran on
+    # unmapped IDs, silently.
+    mv "${RESULTS_DIR}/reference_sequences/cds/all_references_cds.fna_updated.fa" \
+       "${RESULTS_DIR}/reference_sequences/cds/all_references_cds.fna" || { log "Error: Failed to move updated CDS file"; exit 1; }
 fi
 
 # Create completion flag

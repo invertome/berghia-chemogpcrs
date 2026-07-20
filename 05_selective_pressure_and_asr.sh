@@ -243,12 +243,104 @@ concat_per_og_csv() {
     if [ -s "$tmp" ]; then mv "$tmp" "$cumulative"; else rm -f "$tmp"; fi
 }
 
+# --- Per-OG path resolution (mirrors stage 04's per-class routing) ---
+# Bead F1. Stage 04's per-class refactor writes every per-orthogroup product
+# TWO LEVELS deeper than stage 05 used to look:
+#     ${RESULTS_DIR}/phylogenies/protein/class_<CLASS>/<base>/<base>_trimmed.fa
+#     ${RESULTS_DIR}/phylogenies/protein/class_<CLASS>/<base>/<base>.treefile
+# (see 04:535 OG_OUT_DIR, 04:555 ClipKit output, 04:583 IQ-TREE --prefix).
+# Stage 05 read the pre-refactor FLAT pair, which has no writer anywhere in the
+# repository, so its `[ -f ... ] && [ -f ... ]` guard was NEVER true: no aBSREL
+# / GARD / BUSTED-S / BUSTED-MH / MEME / ASR output was ever produced, while
+# step_completed_05.txt was still touched and stage 07 ran on regardless.
+#
+# The class is resolved exactly the way stage 04 does it (04:524-534): majority
+# class from results/classification/og_class_majority.tsv, with stage 04's two
+# fallbacks preserved verbatim -- OG absent from the TSV -> "unclassified",
+# TSV absent entirely -> "A" (back-compat).
+#
+# Sets globals OG_CLASS, protein_align and tree. Returns 0 only when BOTH
+# products exist; on failure protein_align/tree are left empty so no caller can
+# accidentally run HyPhy against a stale path.
+resolve_perog_paths() {
+    local og_base="$1"
+    local og_class_tsv="${RESULTS_DIR}/classification/og_class_majority.tsv"
+    local og_dir cand found_dir
+    local -a matches=()
+
+    protein_align=""
+    tree=""
+
+    # --- class resolution: identical to stage 04:524-534 ---
+    if [ -f "${og_class_tsv}" ]; then
+        OG_CLASS=$(awk -F'\t' -v og="${og_base}" 'NR>1 && $1==og {print $2; exit}' "${og_class_tsv}")
+        if [ -z "${OG_CLASS}" ]; then
+            log --level=WARN "OG '${og_base}' not found in ${og_class_tsv}; reading from class_unclassified"
+            OG_CLASS="unclassified"
+        fi
+    else
+        log "WARN: ${og_class_tsv} not found; reading ${og_base} from class_A (back-compat)"
+        OG_CLASS="A"
+    fi
+
+    og_dir="${RESULTS_DIR}/phylogenies/protein/class_${OG_CLASS}/${og_base}"
+    if [ -f "${og_dir}/${og_base}_trimmed.fa" ] && [ -f "${og_dir}/${og_base}.treefile" ]; then
+        protein_align="${og_dir}/${og_base}_trimmed.fa"
+        tree="${og_dir}/${og_base}.treefile"
+        return 0
+    fi
+
+    # --- the products are not where the class map says they should be ---
+    # The old code logged one undifferentiated "Missing alignment or tree"
+    # warning here. That warning fired for EVERY orthogroup, which is exactly
+    # why a whole broken stage went unnoticed: a message that is always printed
+    # carries no information. Split it by severity instead, so the log
+    # distinguishes "stage 04 legitimately built no tree for this OG" (normal,
+    # quiet) from "the path is wrong again" (loud).
+    for cand in "${RESULTS_DIR}/phylogenies/protein/class_"*"/${og_base}/${og_base}.treefile"; do
+        [ -f "$cand" ] && matches+=("$cand")
+    done
+
+    if [ "${#matches[@]}" -eq 0 ]; then
+        # Nothing anywhere. Stage 04 skips orthogroups it cannot build a tree
+        # for, so this is an expected, uninteresting outcome -- INFO, not WARN.
+        log "No per-OG tree for ${og_base} (class ${OG_CLASS}); stage 04 built none. Skipping."
+        return 1
+    fi
+
+    if [ "${#matches[@]}" -gt 1 ]; then
+        # The same orthogroup under two classes. Choosing one would be a guess
+        # about which run is authoritative, and a wrong guess silently attaches
+        # selection results to the wrong tree. Refuse.
+        log --level=ERROR "Orthogroup ${og_base} has trees under MULTIPLE classes (${matches[*]}); refusing to guess. Rebuild stage 04 outputs or prune the stale class directory."
+        return 1
+    fi
+
+    found_dir=$(dirname "${matches[0]}")
+    if [ "${found_dir}" != "${og_dir}" ]; then
+        # Stage 04 and stage 05 disagree about this OG's class. Happens when
+        # og_class_majority.tsv is (re)generated after stage 04 already ran
+        # under the class_A back-compat fallback. The single match is
+        # unambiguous, so use it rather than silently producing nothing -- but
+        # shout, because the two stages disagreeing is a real inconsistency.
+        log --level=ERROR "Class-routing mismatch for ${og_base}: class map says '${OG_CLASS}' (${og_dir}) but stage 04 wrote ${found_dir}. Using the found path; re-run stage 04 to make the layout consistent."
+    fi
+
+    if [ ! -f "${found_dir}/${og_base}_trimmed.fa" ]; then
+        # Tree present, trimmed alignment gone: stage 04 got as far as IQ-TREE
+        # but its ClipKit product is missing. A genuine per-OG defect.
+        log --level=WARN "Orthogroup ${og_base}: tree found at ${matches[0]} but no ${og_base}_trimmed.fa beside it; skipping selection/ASR."
+        return 1
+    fi
+
+    protein_align="${found_dir}/${og_base}_trimmed.fa"
+    tree="${matches[0]}"
+    return 0
+}
+
 # --- Selective Pressure with aBSREL ---
 if [ "$taxa_count" -gt 1 ] && [ "$HYPHY_AVAILABLE" = true ]; then
-    protein_align="${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa"
-    tree="${RESULTS_DIR}/phylogenies/protein/${base}.treefile"
-
-    if [ -f "$protein_align" ] && [ -f "$tree" ]; then
+    if resolve_perog_paths "${base}"; then
         # Find nucleotide sequences for this orthogroup
         nuc_align="${RESULTS_DIR}/selective_pressure/nucleotide/${base}_nuc.fa"
 
@@ -300,9 +392,11 @@ if [ "$taxa_count" -gt 1 ] && [ "$HYPHY_AVAILABLE" = true ]; then
         else
             log "Warning: Could not find nucleotide sequences for ${base}, skipping dN/dS analysis"
         fi
-    else
-        log "Warning: Missing alignment or tree for ${base}"
     fi
+    # No `else` here on purpose: resolve_perog_paths already logged a message
+    # specific to WHY the products are unavailable (none built / class-routing
+    # mismatch / ambiguous / incomplete). A second, undifferentiated "Missing
+    # alignment or tree" line would just restore the noise that hid bead F1.
 fi
 
 # --- Berghia-specific LSEs with ASR ---
@@ -311,10 +405,13 @@ berghia_count=$(count_taxid_occurrences "$taxids" "${BERGHIA_TAXID}")
 seq_count=$(grep -c "^>" "$og")
 
 if [ "$berghia_count" -gt 0 ] && [ "$seq_count" -gt 2 ]; then
-    protein_align="${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa"
-    tree="${RESULTS_DIR}/phylogenies/protein/${base}.treefile"
-
-    if [ -f "$protein_align" ] && [ -f "$tree" ]; then
+    # Bead F1: same per-class resolution as the selection branch above. This
+    # branch carried an identical copy of the broken flat pair, so ASR was a
+    # no-op for every orthogroup too. Re-resolving (rather than reusing the
+    # values from the selection branch) keeps the two independent: the
+    # selection branch is gated on HYPHY_AVAILABLE and taxa_count, so it may
+    # never have run.
+    if resolve_perog_paths "${base}"; then
         # Find nucleotide sequences
         nuc_align="${RESULTS_DIR}/selective_pressure/nucleotide/${base}_nuc.fa"
 

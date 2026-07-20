@@ -69,7 +69,13 @@ if [ "$USE_PYTHON_LSE" = true ]; then
         SYNTENY_ARG="--synteny-ids ${RESULTS_DIR}/synteny/synteny_ids.txt"
     fi
 
-    # Process each orthogroup
+    # Process each orthogroup.
+    # A failing orthogroup is skipped rather than aborting the stage (existing
+    # behaviour), but its stderr is kept -- it used to go to /dev/null, so a
+    # total classification wipe-out (missing taxonomy cache, unparseable id_map,
+    # import error) was indistinguishable from a clean run.
+    lse_refine_failures=0
+    lse_refine_attempts=0
     for og in "$OG_DIR"/OG*.fa; do
         [ -e "$og" ] || continue
         base=$(basename "$og" .fa)
@@ -88,8 +94,18 @@ if [ "$USE_PYTHON_LSE" = true ]; then
             ${GENE_TREE_ARG} \
             ${SYNTENY_ARG} \
             --output-dir "${RESULTS_DIR}/lse_classification" \
-            --exclude-refs 2>/dev/null || true
+            --exclude-refs 2>>"${LOGS_DIR}/lse_refine_${base}.log" || lse_refine_failures=$((lse_refine_failures + 1))
+        lse_refine_attempts=$((lse_refine_attempts + 1))
     done
+
+    if [ "${lse_refine_failures}" -gt 0 ]; then
+        log "Warning: lse_refine.py failed for ${lse_refine_failures}/${lse_refine_attempts} orthogroups (see ${LOGS_DIR}/lse_refine_*.log)"
+        if [ "${lse_refine_failures}" -eq "${lse_refine_attempts}" ]; then
+            log "Warning: NO orthogroup was classified - LSE results below are empty, not negative"
+        fi
+    else
+        log "lse_refine.py classified ${lse_refine_attempts}/${lse_refine_attempts} orthogroups (0 failures)"
+    fi
 
     # Count results
     for level_file in "${RESULTS_DIR}/lse_classification/lse_"*.txt; do

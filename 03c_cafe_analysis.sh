@@ -326,6 +326,37 @@ with open(summary_file, 'w') as f:
 print(f"Summary written to: {summary_file}")
 PYTHON_SCRIPT
 
+# --- Step 5: Interpret Expansions with Taxonomic Context ---
+# scripts/interpret_cafe.py is the sole producer of expansion_interpretation.csv,
+# which scripts/rank_candidates.py::load_cafe_expansion consumes for the
+# `expansion` ranking axis. Without this call CAFE5 runs in full and the result
+# is discarded (the axis contributes nothing).
+log "Step 5: Interpreting expansions with taxonomic context"
+
+EXPANSION_CSV="${CAFE_DIR}/expansion_interpretation.csv"
+
+# --allow-fail mirrors how this stage treats cafe5_analysis itself: a CAFE5
+# failure must not abort 03c. interpret_cafe.py degrades gracefully (it writes a
+# header-only CSV when no CAFE output is parseable), so a missing file here means
+# the interpreter itself failed and the expansion axis would go dormant — warn loudly.
+run_command "interpret_cafe" \
+    --inputs="${CAFE_OUTPUT},${ULTRAMETRIC_TREE}" \
+    --outputs="${EXPANSION_CSV}" \
+    --allow-fail \
+    python3 "${SCRIPTS_DIR}/interpret_cafe.py" \
+    --cafe-output "${CAFE_OUTPUT}" \
+    --species-tree "${ULTRAMETRIC_TREE}" \
+    --lse-levels "${LSE_LEVELS[*]}" \
+    --pvalue-threshold "${CAFE_PVALUE_THRESHOLD}" \
+    --berghia-id "${BERGHIA_FILE_PREFIX}" \
+    --output "${EXPANSION_CSV}"
+
+if [ ! -f "$EXPANSION_CSV" ]; then
+    log --level=WARN "interpret_cafe.py produced no ${EXPANSION_CSV}"
+    log --level=WARN "The 'expansion' ranking axis will contribute nothing in stage 07."
+    log --level=WARN "See ${LOGS_DIR}/interpret_cafe.err"
+fi
+
 # Mark step as completed
 create_checkpoint "cafe_analysis"
 
@@ -335,3 +366,4 @@ log "  Ultrametric tree: ${ULTRAMETRIC_TREE}"
 log "  Gene families input: ${CAFE_DIR}/gene_families.tsv"
 log "  CAFE5 results: ${CAFE_DIR}/cafe_results/"
 log "  Significant expansions: ${CAFE_DIR}/significant_expansions.tsv"
+log "  Expansion interpretation: ${EXPANSION_CSV}"

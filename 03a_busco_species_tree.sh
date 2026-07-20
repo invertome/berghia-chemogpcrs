@@ -172,7 +172,15 @@ for aln in "${trimmed_alns[@]}"; do
 done
 
 # --- Generate species tree with ASTRAL ---
-find "${RESULTS_DIR}/busco/gene_trees/" -name "*.treefile" > "${RESULTS_DIR}/busco/gene_trees_list.txt" || { log "Error: No gene trees found"; exit 1; }
+# `find` exits 0 when it matches nothing, so its status cannot detect "no gene
+# trees" -- the list has to be tested for content. Without this an EMPTY
+# gene_trees_list.txt flowed straight into ASTRAL (e.g. alignments existed, so
+# the degenerate-case branch above did not fire, but every IQ-TREE run failed).
+find "${RESULTS_DIR}/busco/gene_trees/" -name "*.treefile" > "${RESULTS_DIR}/busco/gene_trees_list.txt" || { log "Error: Could not search ${RESULTS_DIR}/busco/gene_trees/ for gene trees"; exit 1; }
+if [ ! -s "${RESULTS_DIR}/busco/gene_trees_list.txt" ]; then
+    log "Error: No gene trees found in ${RESULTS_DIR}/busco/gene_trees/ - cannot run ASTRAL"
+    exit 1
+fi
 run_command "astral_species_tree" ${ASTRAL} -i "${RESULTS_DIR}/busco/gene_trees_list.txt" -o "${SPECIES_TREE}"
 
 touch "${RESULTS_DIR}/step_completed_busco_species_tree.txt"

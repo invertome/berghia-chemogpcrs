@@ -45,7 +45,7 @@ check_file "${RESULTS_DIR}/step_completed_02a.txt"
 INPUT_FASTA=""
 for candidate_file in \
     "${RESULTS_DIR}/candidates/candidates_clustered.fa" \
-    "${RESULTS_DIR}/clustering/candidates_nr098.fa" \
+    "${RESULTS_DIR}/clustering/candidates_nr${CDHIT_IDENTITY/./}.fa" \
     "${RESULTS_DIR}/candidates/chemogpcr_candidates.fa"; do
     if [ -f "$candidate_file" ]; then
         INPUT_FASTA="$candidate_file"

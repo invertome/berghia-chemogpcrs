@@ -21,6 +21,7 @@ Key improvements over original:
 
 import pandas as pd
 import numpy as np
+import fnmatch
 import os
 import sys
 import json
@@ -1298,6 +1299,57 @@ def load_cafe_expansion(results_dir):
     return cafe_data
 
 
+def find_orthogroups_tsv(results_dir):
+    """Locate the OrthoFinder ``Orthogroups.tsv`` under ``results_dir``.
+
+    Single source of truth for OrthoFinder output discovery in this script.
+    ``load_gene_to_orthogroup`` and ``load_og_dnds_reliability`` previously
+    kept private probe lists, both of which guessed roots the pipeline never
+    writes (beads -mgci / F3, F4). One helper so they cannot drift again.
+
+    ``03_orthology_clustering.sh`` runs ``orthofinder -f
+    ${RESULTS_DIR}/orthogroups/input``, so output lands at::
+
+        orthogroups/input/OrthoFinder/Results_<stamp>/Orthogroups/Orthogroups.tsv
+
+    ``Results_<stamp>`` is assigned by OrthoFinder at runtime, which is why the
+    path cannot be hardcoded. This mirrors the recursive shell idiom already
+    used by stages 04, 06c and 07 (e.g. 07_candidate_ranking.sh:373)::
+
+        find "${RESULTS_DIR}/orthogroups" -name "Orthogroups.tsv" \\
+             -path "*/Orthogroups/*" 2>/dev/null | head -1
+
+    Same search root, same name filter, and the same ``-path`` filter (fnmatch's
+    ``*`` spans ``/`` exactly as find's ``-path`` glob does), so this selects
+    from the identical match set the shell sees.
+
+    Tie-break when several match: the shell's ``head -1`` takes find's readdir
+    order, which is not reproducible across machines. Here we take the
+    lexicographically LAST match, i.e. the ``sort -r | head -1`` rule
+    03_orthology_clustering.sh:108 already uses to choose among ``Results_*``
+    directories. A same-day OrthoFinder re-run appends ``_1``, ``_2``, ... so
+    the newest run sorts last.
+
+    Returns the path as ``str``, or ``None`` when stage 03 has not produced
+    output (callers must degrade to an empty mapping, never crash).
+    """
+    root = os.path.join(results_dir, 'orthogroups')
+    if not os.path.isdir(root):
+        return None
+
+    matches = []
+    for dirpath, _dirnames, filenames in os.walk(root):
+        if 'Orthogroups.tsv' not in filenames:
+            continue
+        path = os.path.join(dirpath, 'Orthogroups.tsv')
+        if fnmatch.fnmatch(path, '*/Orthogroups/*'):
+            matches.append(path)
+
+    if not matches:
+        return None
+    return sorted(matches)[-1]
+
+
 def load_og_dnds_reliability(results_dir):
     """Compute per-OG dN/dS-axis reliability weights in [0, 1].
 
@@ -1315,18 +1367,7 @@ def load_og_dnds_reliability(results_dir):
     """
     cds_path = os.path.join(results_dir, 'reference_sequences', 'cds',
                             'all_references_cds.fna')
-    og_tsv = None
-    for candidate in (
-            os.path.join(results_dir, 'orthogroups', 'OrthoFinder'),
-            os.path.join(results_dir, 'orthofinder')):
-        if not os.path.isdir(candidate):
-            continue
-        for root, _, files in os.walk(candidate):
-            if 'Orthogroups.tsv' in files and root.endswith('Orthogroups'):
-                og_tsv = os.path.join(root, 'Orthogroups.tsv')
-                break
-        if og_tsv:
-            break
+    og_tsv = find_orthogroups_tsv(results_dir)
 
     if not (os.path.exists(cds_path) and og_tsv):
         return {}
@@ -1359,11 +1400,14 @@ def load_gene_to_orthogroup(results_dir):
 
     Returns dict: gene_id -> orthogroup
     """
-    # Try multiple possible file locations
+    # Discover the OrthoFinder TSV the same way the shell stages do (see
+    # find_orthogroups_tsv). The legacy gene_orthogroups.csv path is kept as a
+    # fallback for hand-supplied mappings; nothing in the pipeline writes it.
     possible_files = [
-        os.path.join(results_dir, 'orthofinder', 'Orthogroups', 'Orthogroups.tsv'),
-        os.path.join(results_dir, 'orthofinder', 'Orthogroups.tsv'),
-        os.path.join(results_dir, 'orthology', 'gene_orthogroups.csv')
+        p for p in (
+            find_orthogroups_tsv(results_dir),
+            os.path.join(results_dir, 'orthology', 'gene_orthogroups.csv'),
+        ) if p
     ]
 
     gene_to_og = {}

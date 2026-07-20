@@ -35,6 +35,7 @@ declare -A PIPELINE_STEPS=(
     ["02"]="02_chemogpcrs_identification.sh:ChemoGPCR Identification:no"
     ["02a"]="02a_cluster_sequences.sh:Sequence Clustering:no"
     ["02b"]="02b_classify_gpcrs.sh:GPCR Classification:no"
+    ["02c"]="02c_genome_reconcile.sh:Genome-Track Reconciliation:no"
     ["03"]="03_orthology_clustering.sh:Orthology Clustering:no"
     ["03a"]="03a_busco_species_tree.sh:BUSCO Species Tree:no"
     ["03b"]="03b_lse_classification.sh:LSE Classification:no"
@@ -51,7 +52,12 @@ declare -A PIPELINE_STEPS=(
 )
 
 # Ordered list for sequential execution
-STEP_ORDER=("01" "02" "02a" "02b" "03" "03a" "03b" "03c" "03d" "04" "04b" "05" "06" "06c" "07" "08" "09")
+# 02c consumes stage 02's candidate FASTA + DeepTMHMM prediction and produces
+# reconciliation/reconciled_candidates.faa, which stage 03 picks up via
+# berghia_candidate_fasta() — hence between 02b and 03.
+# 03d is ordered AFTER 04 despite its number: it hard-requires
+# step_completed_04.txt (check_file exits) plus stage 04's gene trees.
+STEP_ORDER=("01" "02" "02a" "02b" "02c" "03" "03a" "03b" "03c" "04" "04b" "03d" "05" "06" "06c" "07" "08" "09")
 
 # --- Usage ---
 usage() {
@@ -65,15 +71,17 @@ STEPS:
   02        ChemoGPCR Identification
   02a       Sequence Clustering (CD-HIT)
   02b       GPCR Classification (InterProScan)
+  02c       Genome-Track Reconciliation
   03        Orthology Clustering (OrthoFinder)
   03a       BUSCO Species Tree
   03b       LSE Classification
   03c       CAFE5 Analysis
-  03d       NOTUNG Reconciliation
+  03d       NOTUNG Reconciliation (runs after 04 - it requires 04's gene trees)
   04        Phylogenetic Analysis (array job)
   04b       ECL Divergence Analysis
   05        Selective Pressure & ASR (array job)
   06        Synteny & Mapping
+  06c       Non-Chemoreceptor Classification
   07        Candidate Ranking
   08        Structural Analysis
   09        Report Generation

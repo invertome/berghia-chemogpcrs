@@ -155,7 +155,17 @@ for genome in "${GENOME_DIR}"/*.fasta; do
 
     # Look for protein predictions (from gene annotation)
     prot_file="${GENOME_DIR}/${taxid}.proteins.fa"
-    gff_file="${GENOME_DIR}/${taxid}.gff"
+    # The pipeline writes .gff3 (scripts/fetch_berghia_genome.sh:32, and the
+    # JCVI branch above reads .gff3); probing only the bare .gff meant this
+    # branch never found an annotation. .gff is kept as a second choice so a
+    # hand-staged file still works.
+    gff_file=""
+    for gff_candidate in "${GENOME_DIR}/${taxid}.gff3" "${GENOME_DIR}/${taxid}.gff"; do
+        if [ -f "$gff_candidate" ]; then
+            gff_file="$gff_candidate"
+            break
+        fi
+    done
 
     if [ -f "$prot_file" ]; then
         # Create BLAST database

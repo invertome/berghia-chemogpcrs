@@ -79,7 +79,14 @@ log "Using species tree: ${SPECIES_TREE_FILE}"
 
 # Find gene trees
 PHYLO_DIR="${RESULTS_DIR}/phylogenies"
-GENE_TREES=$(find "$PHYLO_DIR" -name "*.treefile" -o -name "*_tree.tre" 2>/dev/null | head -100)
+# Bead F6: `-name A -o -name B` is now explicitly grouped, and TreeShrink's
+# rollback copies are excluded. run_treeshrink.sh copies every tree it edits to
+# `<tree>.original.treefile`, which matches `*.treefile`; counting it as a
+# separate gene tree reconciles the same orthogroup twice and double-counts its
+# duplications. The Python fallback below applies the identical definition so
+# the two backends agree on what a gene tree is.
+GENE_TREES=$(find "$PHYLO_DIR" \( -name "*.treefile" -o -name "*_tree.tre" \) \
+    ! -name "*.original.treefile" 2>/dev/null | head -100)
 
 if [ -z "$GENE_TREES" ]; then
     log --level=WARN "No gene trees found in ${PHYLO_DIR}"
@@ -102,10 +109,27 @@ if [ "$RECONCILIATION_BACKEND" = "generax" ]; then
         for tree in $GENE_TREES; do
             base=$(basename "$tree" .treefile)
             base="${base%.tre}"
-            # Locate matching alignment + gene-species mapping
+            # Bead F6: locate the alignment relative to the TREE'S OWN
+            # directory. The previous lookup used the pre-refactor FLAT paths
+            # (phylogenies/protein/<base>_trimmed.fa), which nothing writes
+            # since stage 04's per-class refactor -- so `[ -z "$aln" ] &&
+            # continue` dropped EVERY family and families.txt was left as a
+            # bare [FAMILIES] header, i.e. GeneRax reconciled nothing.
+            #
+            # Anchoring on dirname covers all three layouts stage 04 emits,
+            # without stage 03d having to re-derive the orthogroup's class:
+            #   per-OG        class_<C>/<base>/<base>.treefile + <base>_trimmed.fa
+            #   per-class     class_<C>/class_<C>.treefile     + class_<C>_trimmed.fa
+            #   back-compat   protein/all_berghia_refs.treefile + ..._trimmed.fa
+            # The <base>/trimmed.fa candidates cover the LSE trees, whose
+            # IQ-TREE --prefix puts the treefile one level ABOVE its alignment
+            # directory (04:436, 04:452).
+            tree_dir=$(dirname "$tree")
             aln=""
-            for cand in "${RESULTS_DIR}/phylogenies/protein/${base}_trimmed.fa" \
-                        "${RESULTS_DIR}/phylogenies/protein/${base}_aligned.fa"; do
+            for cand in "${tree_dir}/${base}_trimmed.fa" \
+                        "${tree_dir}/${base}_aligned.fa" \
+                        "${tree_dir}/${base}/trimmed.fa" \
+                        "${tree_dir}/${base}/aligned.fa"; do
                 [ -f "$cand" ] && { aln="$cand"; break; }
             done
             [ -z "$aln" ] && continue
@@ -115,7 +139,21 @@ if [ "$RECONCILIATION_BACKEND" = "generax" ]; then
             echo "subst_model = LG+G"
         done
     } > "$FAMILIES_TXT"
-    log "Submitting GeneRax with $TREE_COUNT families"
+    # Bead F6: report the number of families ACTUALLY written, not the number
+    # of trees found. The old message reported $TREE_COUNT unconditionally, so
+    # it cheerfully announced "Submitting GeneRax with 100 families" while
+    # families.txt held nothing but its header -- which is how a reconciliation
+    # step that reconciled zero families went unnoticed.
+    FAMILY_COUNT=$(grep -c '^- ' "$FAMILIES_TXT" 2>/dev/null || true)
+    FAMILY_COUNT="${FAMILY_COUNT:-0}"
+    if [ "$FAMILY_COUNT" -eq 0 ]; then
+        log --level=ERROR "families.txt is empty: none of the ${TREE_COUNT} gene trees had a matching alignment beside them. GeneRax would reconcile nothing; falling back to Notung."
+        RECONCILIATION_BACKEND="notung"
+    else
+        log "Submitting GeneRax with ${FAMILY_COUNT} families (from ${TREE_COUNT} gene trees)"
+    fi
+fi
+if [ "$RECONCILIATION_BACKEND" = "generax" ]; then
     bash "${SCRIPTS_DIR}/hpc/run_generax.sh" "$FAMILIES_TXT" \
         2>> "${LOGS_DIR}/generax.err" \
         || { log --level=WARN "GeneRax failed; falling back to Notung."; \
@@ -208,8 +246,13 @@ species_names = set(leaf.name for leaf in species_tree)
 
 print(f"Species in tree: {len(species_names)}", file=sys.stderr)
 
-# Find gene trees
-gene_tree_files = list(Path(phylo_dir).glob("*.treefile")) + list(Path(phylo_dir).glob("*_tree.tre"))
+# Find gene trees.
+# Bead F6: this globbed NON-recursively while the bash `find` above recurses,
+# so after stage 04's per-class refactor moved every per-OG tree two levels
+# deeper the two reconciliation backends disagreed about what a gene tree is --
+# and this one always saw zero. rglob + the same .original.treefile exclusion
+# (TreeShrink rollback copies) keeps the definitions identical.
+gene_tree_files = [p for p in list(Path(phylo_dir).rglob("*.treefile")) + list(Path(phylo_dir).rglob("*_tree.tre")) if not p.name.endswith(".original.treefile")]
 
 results = []
 duplication_events = defaultdict(list)

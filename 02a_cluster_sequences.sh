@@ -46,12 +46,24 @@ check_file "${RESULTS_DIR}/step_completed_02.txt"
 INPUT_FASTA=""
 CANDIDATES_DIR="${RESULTS_DIR}/candidates"
 
-# Try different possible input locations
+# Try different possible input locations.
+# The first four are explicit-override / legacy paths (nothing in the pipeline
+# writes them; they exist so a hand-staged candidate set wins). The last is
+# stage 02's REAL output -- see 02_chemogpcrs_identification.sh:81.
+#
+# Berghia only, deliberately. Stage 02 also writes one
+# chemogpcrs_<taxid>.fa per reference sample, but those are stage 06's inputs
+# (06:181, 06:203), read straight out of results/chemogpcrs/. They must not be
+# pooled here: 02a emits a single canonical candidates_clustered.fa consumed by
+# 02b -> classification -> ranking, all Berghia-scoped, and CD-HIT at
+# ${CDHIT_IDENTITY} over a pooled multi-species set would collapse
+# cross-species orthologs onto one representative and silently drop species.
 for candidate_file in \
     "${CANDIDATES_DIR}/chemogpcr_candidates.fa" \
     "${CANDIDATES_DIR}/chemogpcr_candidates.fasta" \
     "${CANDIDATES_DIR}/all_candidates.fa" \
-    "${RESULTS_DIR}/chemogpcrs/candidates.fa"; do
+    "${RESULTS_DIR}/chemogpcrs/candidates.fa" \
+    "${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa"; do
     if [ -f "$candidate_file" ]; then
         INPUT_FASTA="$candidate_file"
         break
@@ -187,9 +199,13 @@ log "  Output clusters: ${OUTPUT_COUNT}"
 log "  Sequences removed: ${REDUCTION} (${REDUCTION_PCT}%)"
 
 # --- Create Symlink for Downstream Steps ---
-# This allows downstream scripts to use a consistent filename
+# This allows downstream scripts to use a consistent filename.
+# ${CANDIDATES_DIR} is not guaranteed to exist -- only clustering/ is created
+# at the top of this script -- and a failed `ln -sf` used to be reported as
+# success by the log line below.
+mkdir -p "${CANDIDATES_DIR}" || { log --level=ERROR "Cannot create ${CANDIDATES_DIR}"; exit 1; }
 CANONICAL_OUTPUT="${CANDIDATES_DIR}/candidates_clustered.fa"
-ln -sf "${OUTPUT_FASTA}" "${CANONICAL_OUTPUT}"
+ln -sf "${OUTPUT_FASTA}" "${CANONICAL_OUTPUT}" || { log --level=ERROR "Failed to create symlink ${CANONICAL_OUTPUT}"; exit 1; }
 log "Created symlink: ${CANONICAL_OUTPUT}"
 
 # --- Save Cluster Statistics ---
