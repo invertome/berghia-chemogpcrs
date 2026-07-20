@@ -171,8 +171,41 @@ validate_lse_levels() {
 
         print_check "LSE Level: $level_name"
 
-        # Check that each taxid in the level is also in TAXA
+        # LSE_LEVELS shipped with literal unsubstituted placeholders
+        # ("Aeolids:taxid_aeolid1,taxid_aeolid2"), which match nothing and made
+        # the legacy classification path a no-op. Catch that explicitly.
+        if [[ "$level_taxids" =~ taxid_[a-z]+[0-9]* ]]; then
+            print_error "LSE level '$level_name' still contains placeholder text: $level_taxids"
+            print_fix "Replace placeholders with real clade taxids in config.sh LSE_LEVELS"
+            continue
+        fi
+
         for taxid in $level_taxids; do
+            if ! [[ "$taxid" =~ ^[0-9]+$ ]]; then
+                print_error "LSE level '$level_name' has a non-numeric taxid: '$taxid'"
+                print_fix "LSE_LEVELS entries must be 'LevelName:taxid[,taxid...]'"
+                continue
+            fi
+
+            # A level's taxid is normally the CLADE taxid defining that level --
+            # an ancestor of Berghia, deliberately NOT a species in TAXA. Only
+            # entries that are not one of the three configured clade taxids are
+            # treated as member-species references and checked against TAXA.
+            local is_clade=false
+            for clade in "$LSE_AEOLID_TAXID" "$LSE_NUDIBRANCH_TAXID" "$LSE_GASTROPOD_TAXID"; do
+                if [ "$taxid" = "$clade" ]; then
+                    is_clade=true
+                    break
+                fi
+            done
+
+            if [ "$is_clade" = true ]; then
+                if [ "$VERBOSE" = true ]; then
+                    print_ok "Taxid $taxid is a configured LSE clade taxid"
+                fi
+                continue
+            fi
+
             local found=false
             for t in "${TAXA[@]}"; do
                 if [ "$t" = "$taxid" ]; then
@@ -186,8 +219,8 @@ validate_lse_levels() {
                     print_ok "Taxid $taxid is in TAXA array"
                 fi
             else
-                print_error "LSE level '$level_name' references taxid '$taxid' which is not in TAXA array"
-                print_fix "Add '$taxid' to TAXA array or remove from LSE_LEVELS"
+                print_error "LSE level '$level_name' references taxid '$taxid' which is neither a configured LSE clade taxid nor in the TAXA array"
+                print_fix "Add '$taxid' to TAXA array, or use one of the LSE_*_TAXID clade taxids"
             fi
         done
 
@@ -605,19 +638,75 @@ validate_lse_taxonomy() {
     print_header "Validating LSE Taxonomy Configuration"
 
     # Check if LSE taxonomy IDs are valid
+    local lse_vars=("LSE_AEOLID_TAXID" "LSE_NUDIBRANCH_TAXID" "LSE_GASTROPOD_TAXID")
     local lse_taxids=("$LSE_AEOLID_TAXID" "$LSE_NUDIBRANCH_TAXID" "$LSE_GASTROPOD_TAXID")
-    local lse_names=("Aeolidida" "Nudibranchia" "Gastropoda")
+    local lse_names=("Aeolidioidea" "Nudibranchia" "Gastropoda")
+    local shape_ok=true
 
     for i in "${!lse_taxids[@]}"; do
         local taxid="${lse_taxids[$i]}"
+        local var="${lse_vars[$i]}"
         local name="${lse_names[$i]}"
 
         if [ -n "$taxid" ] && [ "$taxid" -gt 0 ] 2>/dev/null; then
-            print_ok "LSE_${name^^}_TAXID = $taxid"
+            print_ok "$var = $taxid (expected $name)"
         else
-            print_warning "LSE_${name^^}_TAXID not set or invalid"
+            shape_ok=false
+            print_warning "$var not set or invalid"
         fi
     done
+
+    # A positive integer is NOT enough. Two of the three values that shipped here
+    # were bacteria (644 = Aeromonas hydrophila, 54397 = a Lamellibrachia
+    # endosymbiont) and a third did not resolve at all -- all three passed the
+    # "> 0" test above while making LSE classification silently classify nothing.
+    # verify_lse_taxids.py resolves each value against NCBI and confirms it is a
+    # genuine ancestor of Berghia stephanieae.
+    #
+    # Exit codes are three-valued on purpose, because compute nodes often have no
+    # outbound network and a connectivity problem must never be reported as a
+    # wrong taxid, nor block a run:
+    #   0 -> checked and correct
+    #   1 -> checked and WRONG        -> error (blocks)
+    #   2 -> could NOT be checked     -> warning (does not block)
+    if [ "$shape_ok" = false ]; then
+        print_warning "Skipping NCBI verification: fix the missing/invalid taxids first"
+    elif [ "${LSE_TAXID_CHECK:-1}" = "0" ]; then
+        print_warning "NCBI taxid verification skipped (LSE_TAXID_CHECK=0)"
+        print_fix "Unset LSE_TAXID_CHECK to verify LSE taxids against NCBI"
+    elif [ ! -f "${SCRIPTS_DIR}/verify_lse_taxids.py" ]; then
+        print_warning "scripts/verify_lse_taxids.py not found - LSE taxids unverified"
+    else
+        print_check "Resolving LSE taxids against NCBI taxonomy"
+        # This script runs under `set -e`, and the guard deliberately exits
+        # non-zero (1 = wrong, 2 = unchecked). A bare assignment would abort the
+        # whole validation run -- including the offline case, which must only
+        # warn. The `|| taxid_rc=$?` form keeps the non-zero status survivable.
+        local taxid_output="" taxid_rc=0
+        taxid_output=$(python3 "${SCRIPTS_DIR}/verify_lse_taxids.py" --quiet 2>&1) || taxid_rc=$?
+
+        case "$taxid_rc" in
+            0)
+                print_ok "All LSE taxids verified against NCBI (Berghia ancestors)"
+                ;;
+            1)
+                print_error "LSE taxid verification FAILED - a configured taxid is wrong"
+                [ -n "$taxid_output" ] && echo "$taxid_output"
+                print_fix "Correct the LSE_*_TAXID exports in config.sh AND the matching"
+                print_fix "os.getenv defaults in scripts/lse_refine.py, then re-run."
+                print_fix "Details: python3 ${SCRIPTS_DIR}/verify_lse_taxids.py"
+                ;;
+            2)
+                print_warning "LSE taxids could NOT be verified (NCBI unreachable)"
+                print_fix "Not an error: the values were not checked, not found wrong."
+                print_fix "Re-run this validation from a networked host to verify them."
+                ;;
+            *)
+                print_warning "LSE taxid verification returned unexpected status $taxid_rc"
+                [ -n "$taxid_output" ] && echo "$taxid_output"
+                ;;
+        esac
+    fi
 
     # Check if USE_PYTHON_LSE is set
     if [ "${USE_PYTHON_LSE:-true}" = true ]; then

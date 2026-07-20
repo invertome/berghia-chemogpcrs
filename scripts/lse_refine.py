@@ -42,11 +42,22 @@ def parse_args():
     return parser.parse_args()
 
 
-# Configurable taxonomy IDs from environment (with NCBI defaults)
-# These can be set in config.sh: export LSE_AEOLID_TAXID=54397
-LSE_AEOLID_TAXID = int(os.getenv('LSE_AEOLID_TAXID', 54397))      # Aeolidida
-LSE_NUDIBRANCH_TAXID = int(os.getenv('LSE_NUDIBRANCH_TAXID', 13843))  # Nudibranchia
-LSE_GASTROPOD_TAXID = int(os.getenv('LSE_GASTROPOD_TAXID', 644))   # Gastropoda
+# Configurable taxonomy IDs from environment (with NCBI defaults).
+# These can be set in config.sh: export LSE_AEOLID_TAXID=71481
+#
+# The defaults below are LIVE whenever the environment is not exported, so they
+# must stay in sync with config.sh. They previously held three wrong values, two
+# of which were bacteria (644 = Aeromonas hydrophila, 54397 = a Lamellibrachia
+# endosymbiont; 13843 did not resolve at all). classify_taxonomic_level() tests
+# `if LSE_AEOLID_TAXID in common_lineage`, and a bacterium's taxid can never
+# occur in a mollusc's lineage, so every orthogroup fell through every branch
+# and LSE classification silently produced nothing.
+#
+# Each value is an NCBI-verified ancestor of Berghia stephanieae (1287507).
+# Do NOT edit from memory -- run scripts/verify_lse_taxids.py to re-check.
+LSE_AEOLID_TAXID = int(os.getenv('LSE_AEOLID_TAXID', 71481))      # Aeolidioidea (superfamily)
+LSE_NUDIBRANCH_TAXID = int(os.getenv('LSE_NUDIBRANCH_TAXID', 70849))  # Nudibranchia (order)
+LSE_GASTROPOD_TAXID = int(os.getenv('LSE_GASTROPOD_TAXID', 6448))   # Gastropoda (class)
 
 # Use local taxonomy database if available (set via setup_databases.py)
 LOCAL_DB_DIR = os.getenv('LOCAL_DB_DIR', '')

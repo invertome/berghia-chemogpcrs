@@ -700,14 +700,32 @@ export GPCRDB_FAMILIES="all"
 # - taxids: Comma-separated list of taxonomy IDs belonging to this level
 # - Order: Most specific to most general (e.g., Aeolids -> Nudibranchs -> Gastropods)
 # - Used by: 03b_lse_classification.sh to classify orthogroups by taxonomic expansion level
-# Example with real taxids: "Aeolids:1514845,285658" "Nudibranchs:6524" "Gastropods:6448"
-export LSE_LEVELS=("Aeolids:taxid_aeolid1,taxid_aeolid2" "Nudibranchs:taxid_nudi1,taxid_nudi2" "Gastropods:taxid_gastro1,taxid_gastro2")
+# Each level carries the CLADE taxid that defines it -- the shared ancestor whose
+# presence in an orthogroup's common lineage means the expansion happened at or
+# below that level. These are ancestors of Berghia stephanieae (1287507), not
+# member species, and they must stay in sync with the three LSE_*_TAXID exports
+# below. Verify with: python3 scripts/verify_lse_taxids.py
+export LSE_LEVELS=("Aeolids:71481" "Nudibranchs:70849" "Gastropods:6448")
 
 # --- NCBI Taxonomy IDs for LSE Classification ---
-# These are used by lse_refine.py to determine taxonomic levels
-export LSE_AEOLID_TAXID=54397      # Aeolidida (aeolid nudibranchs)
-export LSE_NUDIBRANCH_TAXID=13843  # Nudibranchia (all nudibranchs)
-export LSE_GASTROPOD_TAXID=644     # Gastropoda (all gastropods)
+# Used by lse_refine.py to determine taxonomic levels. Every value below was
+# resolved against the NCBI taxonomy API and confirmed to be an ancestor of
+# Berghia stephanieae (1287507); do NOT edit them from memory. The lineage is
+# Mollusca 6447 -> Gastropoda 6448 -> Heterobranchia 216305 -> Euthyneura 216307
+# -> Nudipleura 680346 -> Nudibranchia 70849 -> Cladobranchia 1707744
+# -> Aeolidioidea 71481 -> Aeolidiidae 195871 -> Berghia 929455 -> B. stephanieae.
+#
+# These previously held three wrong values, two of which were BACTERIA. Because
+# lse_refine.py classifies via `if LSE_AEOLID_TAXID in common_lineage`, and a
+# bacterium can never occur in a mollusc's lineage, every orthogroup fell
+# through every branch and LSE classification silently produced nothing.
+# scripts/verify_lse_taxids.py (wired into validate_config.sh) now guards this.
+#
+# The matching os.getenv defaults in scripts/lse_refine.py:47-49 MUST agree with
+# these, or the wrong values go live whenever the env is not exported.
+export LSE_AEOLID_TAXID=71481      # Aeolidioidea (superfamily; aeolid nudibranchs)
+export LSE_NUDIBRANCH_TAXID=70849  # Nudibranchia (order; all nudibranchs)
+export LSE_GASTROPOD_TAXID=6448    # Gastropoda (class; all gastropods)
 
 # --- Species Tree ---
 export SPECIES_TREE="${RESULTS_DIR}/busco/busco_species_tree.tre"
