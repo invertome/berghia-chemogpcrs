@@ -572,6 +572,110 @@ assert_no_duplicate_fasta_ids() {
     return 0
 }
 
+# --- Assert a FASTA holds at least one record ---
+# Arguments: $1 - FASTA path
+#            $2 - human-readable label for the error message (default: the path)
+# Returns 0 when the file has >=1 '>' record; logs ERROR and returns 1 otherwise.
+#
+# Why (bead 444): `[ -f ]` alone is satisfied by a present-but-empty file. An
+# empty per-class pool then flows through cat/length-filter/MAFFT/ClipKit/
+# FastTree/IQ-TREE — all of which "succeed" on empty input — and the stage
+# emits a degenerate tree with no error. Fail at the boundary instead.
+assert_fasta_non_empty() {
+    local fasta="$1"
+    local label="${2:-$fasta}"
+    if [ ! -f "$fasta" ]; then
+        log --level=ERROR "${label}: FASTA not found: ${fasta}"
+        return 1
+    fi
+    local n
+    # `|| true`: grep -c exits 1 on a header-less file; we want the count, not
+    # the status (and must not trip a caller's `set -o pipefail`).
+    n=$(grep -c '^>' "$fasta") || true
+    if [ "${n:-0}" -eq 0 ]; then
+        log --level=ERROR "${label}: ${fasta} contains 0 FASTA records — refusing to continue"
+        return 1
+    fi
+    return 0
+}
+
+# --- Draw a per-class outgroup, excluding Berghia's own paralogs ---
+# Arguments: $1 - source FASTA (the SISTER class's P2 pool, per the outgroup
+#                 swap-map A<-C, B<-A, C<-A, F<-A; locked decision 2026-05-28)
+#            $2 - that same sister class's pool_members_class_<C>.tsv manifest
+#                 (columns: seq_id, taxid, source in {anchor, berghia, ref})
+#            $3 - number of records to draw
+#            $4 - output FASTA
+# Writes $4 (always created, possibly empty) and returns 0; returns 1 only when
+# the source FASTA is missing.
+#
+# Why (bead 444): stage 04 used to draw the outgroup as the first N records of
+# the sister pool. But build_per_class_reference_pools.py writes
+#   selected = berghia_pairs + anchor_pairs + selected_refs
+# so Berghia records come FIRST in every pool file, and the head-N draw took
+# exactly Berghia's own class-B/C/F candidates. Every per-class tree was
+# therefore rooted on unannotated Berghia paralogs whose class assignment came
+# from this pipeline's own classifier — circular (the classifier's output roots
+# the tree that tests it), single-species, and not the characterized reference
+# GPCRs the design intended. Anchors and refs are both valid outgroup material;
+# only `berghia` is excluded.
+#
+# Records absent from the manifest are treated as non-Berghia: the manifest and
+# the pool FASTA are co-written from the same `selected` list, so an absent id
+# means the two files are out of sync, not that provenance is Berghia.
+draw_outgroup_fasta() {
+    local source_fa="$1"
+    local members_tsv="$2"
+    local n="${3:-10}"
+    local out_fa="$4"
+
+    if [ ! -f "$source_fa" ]; then
+        log --level=ERROR "draw_outgroup_fasta: outgroup source FASTA not found: ${source_fa}"
+        return 1
+    fi
+
+    # `-s`, not `-f`: a zero-byte manifest carries no provenance either, and it
+    # would additionally break the NR==FNR two-pass idiom below (with an empty
+    # first file, NR==FNR stays true and the FASTA gets parsed as the manifest).
+    if [ ! -s "$members_tsv" ]; then
+        # Provenance is undeterminable without the manifest. Fall back to the
+        # previous unfiltered behaviour rather than hard-failing the stage, but
+        # say so plainly — the outgroup may be Berghia paralogs again.
+        log --level=WARN "draw_outgroup_fasta: pool-members manifest missing or empty: ${members_tsv} — cannot determine provenance; falling back to the first ${n} records UNFILTERED, so the outgroup MAY CONTAIN Berghia paralogs"
+        awk -v n="$n" '/^>/{c++} c>n{exit} {print}' "$source_fa" > "$out_fa"
+    else
+        # Pass 1 (NR==FNR): collect the Berghia ids from the manifest.
+        # Pass 2: stream the FASTA, copying complete records (header + the whole
+        # multi-line sequence block, via the sticky `emit` flag) for the first
+        # $n non-Berghia ids. The manifest id is the bare first header token, so
+        # any description after whitespace is stripped before the lookup.
+        awk -F'\t' -v n="$n" '
+            NR == FNR {
+                if (FNR == 1 && $1 == "seq_id") next
+                if ($3 == "berghia") berghia[$1] = 1
+                next
+            }
+            /^>/ {
+                id = substr($0, 2)
+                sub(/[ \t].*/, "", id)
+                if (kept >= n) exit
+                emit = (id in berghia) ? 0 : 1
+                if (emit) kept++
+            }
+            emit
+        ' "$members_tsv" "$source_fa" > "$out_fa"
+    fi
+
+    local drawn
+    # `|| true`: grep -c exits 1 on an empty draw; we want the count, not the
+    # status (and must not trip a caller's `set -o pipefail`).
+    drawn=$(grep -c '^>' "$out_fa") || true
+    if [ "${drawn:-0}" -eq 0 ]; then
+        log --level=WARN "draw_outgroup_fasta: 0 non-Berghia records drawn from ${source_fa} — the tree rooted with this outgroup will be effectively unrooted"
+    fi
+    return 0
+}
+
 # --- Check Directory ---
 # Arguments: $1+ - Directory paths
 check_dir() {
@@ -901,6 +1005,28 @@ get_taxids_from_fasta() {
 # Returns: Space-separated list of unique taxids (excluding references)
 get_non_ref_taxids_from_fasta() {
     get_taxids_from_fasta "$1" --exclude-refs
+}
+
+# --- Count exact occurrences of a taxid in a taxid list ---
+# Arguments: $1 - whitespace-separated taxid list (as emitted by
+#                 get_taxids_from_fasta)
+#            $2 - taxid to count
+# Returns: echoes exactly one integer line (0 when absent)
+#
+# Replaces the `echo "$list" | grep -c "$taxid" || echo 0` idiom, which had two
+# defects (bead 444):
+#   (a) `grep -c` prints "0" AND exits 1 on no match, so `|| echo 0` appended a
+#       SECOND "0". The captured value was the two-line string "0\n0", and
+#       `[ "$n" -gt 0 ]` then died with "integer expected" instead of comparing.
+#   (b) grep matched substrings, so BERGHIA_TAXID=1287507 was "found" inside an
+#       unrelated taxid such as 12875070 — a silent false positive.
+# -x (whole line) + -F (literal) after splitting on whitespace fixes both.
+count_taxid_occurrences() {
+    local taxid_list="$1"
+    local taxid="$2"
+    local n
+    n=$(printf '%s' "$taxid_list" | tr -s '[:space:]' '\n' | grep -c -x -F -- "$taxid") || true
+    echo "${n:-0}"
 }
 
 # --- Find nucleotide sequences for an orthogroup's protein alignment ---

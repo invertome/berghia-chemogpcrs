@@ -1,12 +1,15 @@
 """Tests for scripts/check_positive_controls.py.
 
 The script reads a ranked-candidates CSV and a controls CSV, finds each
-control's rank/percentile in the ranking, and emits a TSV with an `alert`
-flag for controls that aren't found or fall below the alert percentile.
-The TSV is consumed by stage 09 (positive-control sanity-check section).
+control's rank/percentile in the ranking, and emits a TSV carrying a `status`
+(found_healthy / found_below_percentile / not_found) plus an `alert` flag.
+Only a found-but-below-percentile control raises `alert`; absence is
+informational (bead 444). The TSV is consumed by stage 09 (positive-control
+sanity-check section).
 
-Tests cover the four match strategies, the alert semantics, and the missing-
-control case.
+Tests cover the four match strategies, the percentile arithmetic, and the
+missing-control case. The status/alert split itself is pinned in more detail
+by test_positive_controls_status.py.
 """
 from __future__ import annotations
 
@@ -80,9 +83,14 @@ def test_exact_id_match_top_ranked_no_alert(tmp_path: Path) -> None:
     assert r["alert"] == "False"
 
 
-def test_not_found_emits_alert(tmp_path: Path) -> None:
-    """Control absent from the ranking: alert=True, blank rank/percentile,
-    matched_strategy=none, stderr says WARN."""
+def test_not_found_is_reported_without_alert(tmp_path: Path) -> None:
+    """Control absent from the ranking: blank rank/percentile,
+    matched_strategy=none, status=not_found.
+
+    Absence is informational, NOT an alert (bead 444) — the shipped control
+    Ga_olf is a G-protein alpha subunit and can never appear in a class-A
+    ranked CSV, so alerting on it fired red every run.
+    """
     ranked = tmp_path / "r.csv"
     controls = tmp_path / "c.csv"
     out = tmp_path / "out.tsv"
@@ -91,7 +99,9 @@ def test_not_found_emits_alert(tmp_path: Path) -> None:
 
     rc = _run_cli(ranked, controls, out)
     assert rc.returncode == 0, f"stderr: {rc.stderr}"
-    assert "WARN:" in rc.stderr
+    # no rank regression -> quiet branch, but the absence is still reported
+    assert "OK:" in rc.stderr
+    assert "not_found=1" in rc.stderr
 
     rows = _read_tsv(out)
     assert len(rows) == 1
@@ -101,7 +111,8 @@ def test_not_found_emits_alert(tmp_path: Path) -> None:
     assert r["rank"] == ""
     assert r["percentile"] == ""
     assert r["matched_strategy"] == "none"
-    assert r["alert"] == "True"
+    assert r["status"] == "not_found"
+    assert r["alert"] == "False"
 
 
 def test_below_percentile_threshold_emits_alert(tmp_path: Path) -> None:
@@ -169,9 +180,12 @@ def test_multiple_controls_mixed_results(tmp_path: Path) -> None:
     by_name = {r["gene_name"]: r for r in rows}
     assert by_name["top_dog"]["alert"] == "False"
     assert by_name["tail_lurker"]["alert"] == "True"
-    assert by_name["ghost"]["alert"] == "True"
-    # 2 of 3 alerts -> summary mentions WARN
-    assert "WARN: 2/3" in rc.stderr
+    # absent control is reported but does not alert (bead 444)
+    assert by_name["ghost"]["alert"] == "False"
+    assert by_name["ghost"]["status"] == "not_found"
+    # only the genuine rank regression counts as an alert
+    assert "WARN: 1/3" in rc.stderr
+    assert "not_found=1" in rc.stderr
 
 
 def test_empty_controls_csv_is_valid_no_rows(tmp_path: Path) -> None:
@@ -204,5 +218,5 @@ def test_output_columns_are_exactly_the_documented_set(tmp_path: Path) -> None:
     with open(out) as fh:
         header = fh.readline().rstrip("\n").split("\t")
     expected = {"gene_name", "found", "candidate_id", "rank", "percentile",
-                "rank_score", "matched_strategy", "alert", "notes"}
+                "rank_score", "matched_strategy", "status", "alert", "notes"}
     assert set(header) == expected, header

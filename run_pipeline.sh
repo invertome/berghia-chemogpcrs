@@ -41,6 +41,7 @@ declare -A PIPELINE_STEPS=(
     ["03c"]="03c_cafe_analysis.sh:CAFE5 Analysis:no"
     ["03d"]="03d_notung_reconciliation.sh:NOTUNG Reconciliation:no"
     ["04"]="04_phylogenetic_analysis.sh:Phylogenetic Analysis:yes"
+    ["04b"]="04b_ecl_analysis.sh:ECL Divergence Analysis:no"
     ["05"]="05_selective_pressure_and_asr.sh:Selective Pressure & ASR:yes"
     ["06"]="06_synteny_and_mapping.sh:Synteny & Mapping:no"
     ["06c"]="06c_classify_non_chemoreceptors.sh:Non-Chemoreceptor Classification:no"
@@ -50,7 +51,7 @@ declare -A PIPELINE_STEPS=(
 )
 
 # Ordered list for sequential execution
-STEP_ORDER=("01" "02" "02a" "02b" "03" "03a" "03b" "03c" "03d" "04" "05" "06" "06c" "07" "08" "09")
+STEP_ORDER=("01" "02" "02a" "02b" "03" "03a" "03b" "03c" "03d" "04" "04b" "05" "06" "06c" "07" "08" "09")
 
 # --- Usage ---
 usage() {
@@ -70,6 +71,7 @@ STEPS:
   03c       CAFE5 Analysis
   03d       NOTUNG Reconciliation
   04        Phylogenetic Analysis (array job)
+  04b       ECL Divergence Analysis
   05        Selective Pressure & ASR (array job)
   06        Synteny & Mapping
   07        Candidate Ranking

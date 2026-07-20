@@ -307,7 +307,7 @@ fi
 
 # --- Berghia-specific LSEs with ASR ---
 # Check if this orthogroup contains Berghia sequences AND has multiple sequences (for meaningful ASR)
-berghia_count=$(echo "$taxids" | grep -c "${BERGHIA_TAXID}" || echo 0)
+berghia_count=$(count_taxid_occurrences "$taxids" "${BERGHIA_TAXID}")
 seq_count=$(grep -c "^>" "$og")
 
 if [ "$berghia_count" -gt 0 ] && [ "$seq_count" -gt 2 ]; then

@@ -76,17 +76,14 @@ else
     log "Note: No G-protein reference found at ${GPROTEIN_REF_FASTA}"
 fi
 
-# --- Phase 3: Analyze ECL divergence ---
-if [ -d "${RESULTS_DIR}/deeptmhmm" ] && [ -d "${RESULTS_DIR}/phylogenies" ]; then
-    log "Analyzing extracellular loop divergence..."
-    python3 "${SCRIPTS_DIR}/analyze_ecl.py" \
-        --alignments "${RESULTS_DIR}/phylogenies/protein/aligned_*.fasta" \
-        --deeptmhmm "${RESULTS_DIR}/deeptmhmm/" \
-        --min-ecl-length "${MIN_ECL_LENGTH}" \
-        --output "${RESULTS_DIR}/ecl_analysis/ecl_divergence.csv" \
-        || log "Warning: ECL divergence analysis failed"
-else
-    log "Note: DeepTMHMM or phylogeny results not found for ECL analysis"
+# --- Phase 3: ECL divergence is produced by stage 04b, consumed here ---
+# 04b_ecl_analysis.sh is the SOLE producer of ecl_analysis/ecl_divergence.csv:
+# it resolves the canonical (un-CLOAK-masked) class-A alignment and the real
+# stage-02 DeepTMHMM directory, neither of which this stage can see. Stage 07
+# is a pure CONSUMER — rank_candidates.py reads the CSV for the ecl_divergence
+# signal. If 04b hasn't run, the file is absent and that signal stays dormant.
+if [ ! -f "${RESULTS_DIR}/ecl_analysis/ecl_divergence.csv" ]; then
+    log "Note: ecl_divergence.csv not found (run step 04b) -- ECL signal stays dormant"
 fi
 
 # Extract all GPCR IDs

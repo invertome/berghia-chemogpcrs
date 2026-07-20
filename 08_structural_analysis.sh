@@ -23,6 +23,108 @@
 source config.sh
 source functions.sh
 
+# --- Collect stage 05's ancestral-sequence reconstructions ---
+# Arguments: $1 - ASR directory (${RESULTS_DIR}/asr), $2 - output FASTA
+# Always creates $2 (possibly empty) and returns 0: ASR is optional, so a
+# missing/empty results/asr/ must never fail the stage.
+#
+# Why not the bare `cat "${dir}"/*_asr.fa > out 2>/dev/null` idiom (bead 444):
+# with the default (nullglob off) an unmatched glob is passed through
+# literally, so `cat` fails on a nonexistent '*_asr.fa' path while the
+# redirection has already truncated the output. find keeps the no-match case
+# honest and empty.
+collect_asr_sequences() {
+    local asr_dir="$1"
+    local out="$2"
+    local -a asr_files=()
+
+    if [ -d "$asr_dir" ]; then
+        while IFS= read -r f; do
+            [ -n "$f" ] && asr_files+=("$f")
+        done < <(find "$asr_dir" -maxdepth 1 -type f -name '*_asr.fa' 2>/dev/null | sort)
+    fi
+
+    # Truncate unconditionally so a re-run cannot inherit a previous run's ASR.
+    : > "$out"
+    if [ "${#asr_files[@]}" -eq 0 ]; then
+        return 0
+    fi
+    cat "${asr_files[@]}" >> "$out"
+    return 0
+}
+
+# --- Build the sequence source that seqtk subseq extracts from ---
+# Arguments: $1 - extant candidate FASTA, $2 - ASR FASTA, $3 - output FASTA
+# Returns 0 on success; logs ERROR and returns 1 on empty input or duplicate ids.
+#
+# Why (bead 444): top_ids.txt mixes extant candidate ids with ancestral node
+# ids, but the extraction previously read only the extant candidate FASTA.
+# Ancestral reconstructions are by definition absent from it, so seqtk subseq
+# silently dropped every ASR id, the per-candidate `grep -A1` produced a
+# zero-byte input and hit `continue`, and nothing ancestral was ever folded.
+# Concatenating both sources makes ids from both resolve. A duplicate id here
+# would be silent corruption (seqtk emits both records; the per-candidate grep
+# folds whichever comes first), hence the fail-loud guard.
+build_structural_seq_source() {
+    local extant="$1"
+    local asr="$2"
+    local out="$3"
+
+    # Inline rather than via assert_fasta_non_empty: that helper is in-flight
+    # work in functions.sh, and this stage should not depend on it landing.
+    if [ ! -f "$extant" ]; then
+        log --level=ERROR "extant candidate FASTA not found: ${extant}"
+        return 1
+    fi
+    local n_extant
+    n_extant=$(grep -c '^>' "$extant") || true
+    if [ "${n_extant:-0}" -eq 0 ]; then
+        log --level=ERROR "extant candidate FASTA ${extant} contains 0 FASTA records - refusing to continue"
+        return 1
+    fi
+
+    cat "$extant" > "$out"
+    # A candidate FASTA with no trailing newline would otherwise fuse its last
+    # sequence line onto the first ASR header, corrupting both records.
+    if [ -n "$(tail -c 1 "$out")" ]; then
+        printf '\n' >> "$out"
+    fi
+
+    # ASR is optional. Require an actual record, not just a non-empty file.
+    if [ -s "$asr" ] && grep -q '^>' "$asr"; then
+        local n_asr
+        n_asr=$(grep -c '^>' "$asr") || true
+        cat "$asr" >> "$out"
+        log "Added ${n_asr} ancestral (ASR) sequence(s) to the structural extraction source"
+    else
+        log "No ASR sequences available - folding extant candidates only"
+    fi
+
+    assert_no_duplicate_fasta_ids "$out" "structural extraction source" || return 1
+    return 0
+}
+
+# --- Count what will ACTUALLY be folded ---
+# Arguments: $1 - extracted FASTA (top_seqs.fa), $2 - requested id list
+# Sets FOLDABLE_COUNT / REQUESTED_COUNT; warns when ids failed to resolve.
+# Reporting the id-list length as the candidate count was how the dropped ASR
+# ids stayed invisible: they inflated the total while never being folded.
+count_foldable_sequences() {
+    local top_seqs="$1"
+    local top_ids="$2"
+    local requested folded
+
+    requested=$(grep -c '[^[:space:]]' "$top_ids" 2>/dev/null) || true
+    folded=$(grep -c '^>' "$top_seqs" 2>/dev/null) || true
+    REQUESTED_COUNT=${requested:-0}
+    FOLDABLE_COUNT=${folded:-0}
+
+    if [ "${FOLDABLE_COUNT}" -lt "${REQUESTED_COUNT}" ]; then
+        log --level=WARN "Only ${FOLDABLE_COUNT} of ${REQUESTED_COUNT} requested id(s) resolved in the extraction source - the rest cannot be folded"
+    fi
+    return 0
+}
+
 # Create output directories
 mkdir -p "${RESULTS_DIR}/structural_analysis/alphafold" "${RESULTS_DIR}/structural_analysis/references" "${RESULTS_DIR}/structural_analysis/all_pdb" "${LOGS_DIR}" || { log "Error: Cannot create directories"; exit 1; }
 
@@ -56,19 +158,41 @@ cp "${RESULTS_DIR}/structural_analysis/candidates_for_alphafold.txt" \
    "${RESULTS_DIR}/structural_analysis/top_ids.txt"
 
 # --- Include ASR sequences ---
-cat "${RESULTS_DIR}/asr/"*_asr.fa > "${RESULTS_DIR}/structural_analysis/asr_seqs.fa" 2>/dev/null
-grep "^>" "${RESULTS_DIR}/structural_analysis/asr_seqs.fa" | sed 's/>//' >> "${RESULTS_DIR}/structural_analysis/top_ids.txt" 2>/dev/null
+# Ancestral reconstructions are folded alongside the extant candidates so the
+# structural phylogeny can be compared ancestor-vs-extant. Stage 05 may not
+# have run, so this is best-effort and never fatal.
+ASR_SEQS="${RESULTS_DIR}/structural_analysis/asr_seqs.fa"
+collect_asr_sequences "${RESULTS_DIR}/asr" "${ASR_SEQS}"
+if [ -s "${ASR_SEQS}" ]; then
+    # Bare id only (header up to the first whitespace), matching how
+    # assert_no_duplicate_fasta_ids and the per-candidate `grep -A1 "^>id$"`
+    # below identify records.
+    grep "^>" "${ASR_SEQS}" | sed 's/^>//; s/[[:space:]].*//' \
+        >> "${RESULTS_DIR}/structural_analysis/top_ids.txt"
+fi
 
 # --- Deduplicate IDs ---
 sort -u "${RESULTS_DIR}/structural_analysis/top_ids.txt" > "${RESULTS_DIR}/structural_analysis/top_ids_unique.txt"
 mv "${RESULTS_DIR}/structural_analysis/top_ids_unique.txt" "${RESULTS_DIR}/structural_analysis/top_ids.txt"
 
-# Count final candidates
-final_count=$(wc -l < "${RESULTS_DIR}/structural_analysis/top_ids.txt")
-log "Total candidates for structural prediction: ${final_count}"
+# --- Build the extraction source: extant candidates + ASR reconstructions ---
+# top_ids.txt now mixes both id namespaces, so the source seqtk reads must
+# cover both or the ASR ids resolve to nothing (bead 444).
+SEQ_SOURCE="${RESULTS_DIR}/structural_analysis/extraction_source.fa"
+build_structural_seq_source \
+    "${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa" \
+    "${ASR_SEQS}" \
+    "${SEQ_SOURCE}" \
+    || { log --level=ERROR "Could not build the structural extraction source"; exit 1; }
 
 # --- Extract sequences for AlphaFold ---
-run_command "seqtk_top" --stdout="${RESULTS_DIR}/structural_analysis/top_seqs.fa" ${SEQTK} subseq "${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa" "${RESULTS_DIR}/structural_analysis/top_ids.txt"
+run_command "seqtk_top" --stdout="${RESULTS_DIR}/structural_analysis/top_seqs.fa" ${SEQTK} subseq "${SEQ_SOURCE}" "${RESULTS_DIR}/structural_analysis/top_ids.txt"
+
+# Count what will actually be folded (not merely what was requested)
+count_foldable_sequences "${RESULTS_DIR}/structural_analysis/top_seqs.fa" \
+                         "${RESULTS_DIR}/structural_analysis/top_ids.txt"
+final_count=${FOLDABLE_COUNT}
+log "Total candidates for structural prediction: ${final_count}"
 
 # --- Predict structures with AlphaFold 3 (only if not already done) ---
 # AF3 emits mmCIF (*_model.cif). foldseek (and therefore FoldTree) ingests

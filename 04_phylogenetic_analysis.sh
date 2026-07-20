@@ -205,6 +205,20 @@ for CLASS in ${GPCR_CLASSES:-A B C F}; do
         log "ERROR: missing P2 pool ${REFS_FA} — run P2 (per-class pool build) first"
         exit 1
     fi
+    # `[ -f ]` passes on a zero-record pool, which would flow silently through
+    # the aligner and produce a degenerate tree (bead 444).
+    #
+    # An empty pool must NOT abort the stage: build_per_class_reference_pools.py
+    # writes refs_class_<C>.fa for EVERY class unconditionally, so a legitimately
+    # empty class (e.g. no class-F members in this dataset) would otherwise cost
+    # the class-A tree, which is the scientific point of this pipeline. Skip the
+    # class loudly and carry on (user decision, bead 444). assert_fasta_non_empty
+    # already logs the reason at ERROR level; the marker below makes the skip
+    # itself unmistakable and greppable.
+    if ! assert_fasta_non_empty "${REFS_FA}" "class ${CLASS} P2 pool"; then
+        log --level=ERROR "SKIPPING CLASS ${CLASS}: empty or missing P2 pool — NO TREE will be produced for class ${CLASS}; continuing with the remaining classes"
+        continue
+    fi
 
     # Berghia sequences for this class are ALREADY embedded in the P2 pool:
     # build_per_class_reference_pools.py writes refs_class_${CLASS}.fa as
@@ -213,19 +227,26 @@ for CLASS in ${GPCR_CLASSES:-A B C F}; do
     # names (bead berghia-chemogpcrs-3sd). The dedup assert below enforces the
     # invariant; the per-class Berghia count is reported from pool_members.
 
-    # Outgroup: first ${OUTGROUP_BUDGET_PER_CLASS} sequences from the
-    # swap-map source class's ref pool (locked decision 2026-05-28).
+    # Outgroup: first ${OUTGROUP_BUDGET_PER_CLASS} NON-Berghia sequences from
+    # the swap-map source class's ref pool (locked decision 2026-05-28).
+    # The Berghia exclusion matters: the pool file lists Berghia FIRST, so the
+    # former head-N draw rooted every tree on the pipeline's own unannotated
+    # Berghia paralogs (bead 444). Provenance comes from the SOURCE class's
+    # pool-members manifest, not the current class's.
     OUTGROUP_SOURCE_VAR="OUTGROUP_SOURCE_CLASS_${CLASS}"
     OUTGROUP_SOURCE_CLASS="${!OUTGROUP_SOURCE_VAR}"
     OUTGROUP_SOURCE_FA="${PER_CLASS_POOL_DIR}/refs_class_${OUTGROUP_SOURCE_CLASS}.fa"
+    OUTGROUP_SOURCE_MEMBERS="${PER_CLASS_POOL_DIR}/pool_members_class_${OUTGROUP_SOURCE_CLASS}.tsv"
     OUTGROUP_FA="${CLASS_DIR}/outgroup_class_${CLASS}.fa"
     if [ -f "${OUTGROUP_SOURCE_FA}" ]; then
-        # Take the first N complete FASTA records (header + sequence block)
-        awk -v n="${OUTGROUP_BUDGET_PER_CLASS:-10}" \
-            '/^>/{c++} c>n{exit} {print}' \
-            "${OUTGROUP_SOURCE_FA}" > "${OUTGROUP_FA}"
-        OG_COUNT=$(grep -c '^>' "${OUTGROUP_FA}" 2>/dev/null || echo 0)
-        log "Class ${CLASS}: outgroup from class ${OUTGROUP_SOURCE_CLASS} = ${OG_COUNT} seqs"
+        draw_outgroup_fasta "${OUTGROUP_SOURCE_FA}" "${OUTGROUP_SOURCE_MEMBERS}" \
+            "${OUTGROUP_BUDGET_PER_CLASS:-10}" "${OUTGROUP_FA}"
+        # `|| true`, not `|| echo 0`: grep -c prints "0" AND exits 1 on an empty
+        # draw, so `|| echo 0` would make OG_COUNT the two-line string "0\n0"
+        # (the bead-444 idiom defect). Empty draws are reachable now that
+        # all-Berghia sources are filtered out.
+        OG_COUNT=$(grep -c '^>' "${OUTGROUP_FA}" 2>/dev/null || true)
+        log "Class ${CLASS}: outgroup from class ${OUTGROUP_SOURCE_CLASS} = ${OG_COUNT:-0} seqs (Berghia excluded)"
     else
         log "WARN: no outgroup source ${OUTGROUP_SOURCE_FA} for class ${CLASS}; tree will be unrooted"
         : > "${OUTGROUP_FA}"
