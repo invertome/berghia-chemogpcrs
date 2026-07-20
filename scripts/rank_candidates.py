@@ -2021,6 +2021,52 @@ if 'dnds_reliability_weight' in df.columns:
 # For candidates missing synteny or expression data, we normalize by available weights
 # This prevents penalizing candidates from species without genome assemblies
 
+# Single source of truth for the composite-score axis weights. EVERY consumer
+# (the per-candidate scorer, the confidence-tier denominator, the Monte-Carlo
+# sensitivity analysis) reads this dict rather than re-listing the weights.
+# Adding a scoring axis means adding it HERE and to the `scores` dict below --
+# nothing else has to be kept in sync by hand.
+#
+# Why this is a constant and not three literals: the tier denominator used to
+# be a hand-written sum of the same weight constants, and it silently drifted
+# -- TANDEM_CLUSTER_WEIGHT (2.5, the field's signature chemoreceptor signal)
+# reached the score numerator but was never added to that sum. See
+# tests/unit/test_tier_normalization_denominator.py for the anti-drift guards.
+SCORING_WEIGHTS = {
+    'phylo': PHYLO_WEIGHT,
+    'purifying': PURIFYING_WEIGHT,
+    'positive': POSITIVE_WEIGHT,
+    'lse_depth': LSE_DEPTH_WEIGHT,
+    'synteny': SYNTENY_WEIGHT,
+    'expression': EXPR_WEIGHT,
+    'chemosensory_expr': CHEMOSENSORY_EXPR_WEIGHT,
+    'gprotein_coexpr': GPROTEIN_COEXPR_WEIGHT,
+    'ecl_divergence': ECL_DIVERGENCE_WEIGHT,
+    'expansion': EXPANSION_WEIGHT,
+    'og_confidence': OG_CONFIDENCE_WEIGHT,
+    'tandem_cluster': TANDEM_CLUSTER_WEIGHT,
+}
+
+# Floor for the evidence-completeness multiplier, shared by the scorer and the
+# denominator derivation so the two cannot disagree.
+COMPLETENESS_FLOOR = 0.4
+
+# Largest rank_score an all-axes-perfect candidate can attain, obtained by
+# ASKING THE SCORER rather than re-deriving it. Since bead -ce4 the scorer
+# returns (weighted_sum / avail_weight) * completeness -- a weighted MEAN in
+# [0, 1] -- so this is 1.0, NOT the sum of the weights. The previous tier code
+# divided by the weight sum (17.0 at production defaults), a leftover from the
+# pre--ce4 numerator scale, which capped score_pct at 1/17 = 0.059 and made the
+# High gate (>= 0.5) and the Medium score clause (>= 0.3) unreachable.
+# Deriving it this way keeps the denominator correct if either the weight list
+# OR the scorer's scale changes again.
+MAX_POSSIBLE_RANK_SCORE = _calculate_fair_rank_score_corrected(
+    {axis: 1.0 for axis in SCORING_WEIGHTS},
+    SCORING_WEIGHTS,
+    completeness_floor=COMPLETENESS_FLOOR,
+    dnds_reliability=1.0,
+)
+
 
 def calculate_fair_rank_score(row):
     """
@@ -2058,27 +2104,14 @@ def calculate_fair_rank_score(row):
         # Bead -ar8: tandem-cluster score (intra-genome paralog clustering)
         'tandem_cluster': row.get('tandem_cluster_score_norm') if row.get('has_tandem_cluster_data') else None,
     }
-    weights = {
-        'phylo': PHYLO_WEIGHT,
-        'purifying': PURIFYING_WEIGHT,
-        'positive': POSITIVE_WEIGHT,
-        'lse_depth': LSE_DEPTH_WEIGHT,
-        'synteny': SYNTENY_WEIGHT,
-        'expression': EXPR_WEIGHT,
-        'chemosensory_expr': CHEMOSENSORY_EXPR_WEIGHT,
-        'gprotein_coexpr': GPROTEIN_COEXPR_WEIGHT,
-        'ecl_divergence': ECL_DIVERGENCE_WEIGHT,
-        'expansion': EXPANSION_WEIGHT,
-        'og_confidence': OG_CONFIDENCE_WEIGHT,
-        'tandem_cluster': TANDEM_CLUSTER_WEIGHT,
-    }
+    weights = SCORING_WEIGHTS
     # Bead -8st + Task 1: the per-OG dN/dS reliability weight is now applied ONCE
     # upstream, by shrinking positive_score_norm/purifying_score_norm toward the
     # cohort median (see the reliability_shrink block after normalization). It is
     # therefore already baked into the scores dict here, so pass
     # dnds_reliability=1.0 to avoid double-counting it.
     return _calculate_fair_rank_score_corrected(
-        scores, weights, completeness_floor=0.4, dnds_reliability=1.0)
+        scores, weights, completeness_floor=COMPLETENESS_FLOOR, dnds_reliability=1.0)
 
 
 df['rank_score'] = df.apply(calculate_fair_rank_score, axis=1, result_type='reduce')
@@ -2096,13 +2129,11 @@ def assign_confidence_tier(row):
     completeness = row['evidence_completeness']
     score = row['rank_score']
 
-    # Normalize rank score for tier assignment (updated with new weights)
-    max_possible = (
-        PHYLO_WEIGHT + PURIFYING_WEIGHT + POSITIVE_WEIGHT + SYNTENY_WEIGHT +
-        EXPR_WEIGHT + LSE_DEPTH_WEIGHT + CHEMOSENSORY_EXPR_WEIGHT +
-        GPROTEIN_COEXPR_WEIGHT + ECL_DIVERGENCE_WEIGHT + EXPANSION_WEIGHT +
-        OG_CONFIDENCE_WEIGHT
-    )
+    # Normalize rank score for tier assignment. The denominator is derived from
+    # the shared SCORING_WEIGHTS via the scorer itself (see
+    # MAX_POSSIBLE_RANK_SCORE), so it can neither omit an axis nor fall out of
+    # step with the scorer's scale -- both of which had happened here.
+    max_possible = MAX_POSSIBLE_RANK_SCORE
     score_pct = score / max_possible if max_possible > 0 else 0
 
     if completeness >= 0.6 and score_pct >= 0.5:
@@ -2202,21 +2233,12 @@ if RUN_SENSITIVITY:
     print(f"\nRunning sensitivity analysis ({SENSITIVITY_ITERATIONS} iterations)...", file=sys.stderr)
 
     # Bead -j6f: complete weight dict (previously omitted half the
-    # contributing axes from sensitivity analysis).
-    base_weights = {
-        'phylo': PHYLO_WEIGHT,
-        'purifying': PURIFYING_WEIGHT,
-        'positive': POSITIVE_WEIGHT,
-        'synteny': SYNTENY_WEIGHT,
-        'expression': EXPR_WEIGHT,
-        'lse_depth': LSE_DEPTH_WEIGHT,
-        'chemosensory_expr': CHEMOSENSORY_EXPR_WEIGHT,
-        'gprotein_coexpr': GPROTEIN_COEXPR_WEIGHT,
-        'ecl_divergence': ECL_DIVERGENCE_WEIGHT,
-        'expansion': EXPANSION_WEIGHT,
-        'og_confidence': OG_CONFIDENCE_WEIGHT,
-        'tandem_cluster': TANDEM_CLUSTER_WEIGHT,
-    }
+    # contributing axes from sensitivity analysis). Reuses the shared
+    # SCORING_WEIGHTS so it cannot drift from the production scorer. Copied
+    # defensively: run_sensitivity_analysis builds fresh perturbed dicts today,
+    # so this is not required for correctness, but it keeps the production
+    # weights immune to a future in-place perturbation.
+    base_weights = dict(SCORING_WEIGHTS)
 
     sensitivity_results = run_sensitivity_analysis(
         df, base_weights,

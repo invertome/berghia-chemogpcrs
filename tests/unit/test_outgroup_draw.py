@@ -300,3 +300,113 @@ def test_stage04_still_parses():
 def test_functions_sh_still_parses():
     result = subprocess.run(["bash", "-n", str(FUNCTIONS_SH)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+# --- Fail-loud on FASTA/manifest disagreement (user decision 2026-07-19) -----
+#
+# The pool FASTA and its members manifest are written back-to-back from the same
+# `selected` list in the same loop of build_per_class_reference_pools.py, so
+# under normal operation they cannot disagree. A record present in the FASTA but
+# carrying no manifest row therefore means the two files are OUT OF SYNC (a run
+# interrupted between the two writes, or a stale manifest left beside a freshly
+# written FASTA).
+#
+# That case must NOT be guessed at. Assuming an unmapped record is non-Berghia
+# (fail-open) silently readmits the exact circular-rooting bug this helper
+# exists to prevent; quietly dropping it (fail-closed) silently shrinks the
+# outgroup. Both failure modes are invisible. So the helper refuses: it reports
+# the disagreement and returns non-zero, and stage 04 skips that class.
+
+
+def _write_desynced_pool(tmp_path: Path, fasta_records, manifest_rows):
+    """Write a pool FASTA and manifest that deliberately disagree."""
+    fa = tmp_path / "refs_class_C.fa"
+    fa.write_text("".join(f">{sid}\n{seq}\n" for sid, seq in fasta_records))
+    tsv = tmp_path / "pool_members_class_C.tsv"
+    lines = ["seq_id\ttaxid\tsource"]
+    lines += [f"{sid}\t9999\t{src}" for sid, src in manifest_rows]
+    tsv.write_text("\n".join(lines) + "\n")
+    return fa, tsv
+
+
+def test_id_present_in_fasta_but_absent_from_manifest_is_an_error(tmp_path):
+    fa, tsv = _write_desynced_pool(
+        tmp_path,
+        fasta_records=[("ref_1", "AAAA"), ("ghost_2", "CCCC"), ("ref_3", "GGGG")],
+        manifest_rows=[("ref_1", "ref"), ("ref_3", "ref")],  # ghost_2 missing
+    )
+    out = tmp_path / "outgroup.fa"
+    res = _draw(tmp_path, fa, tsv, 2, out)
+    assert res.returncode != 0, (
+        "an unmapped pool record means the FASTA and manifest are out of sync; "
+        "the draw must refuse rather than guess its provenance"
+    )
+
+
+def test_manifest_mismatch_error_names_the_offending_id(tmp_path):
+    fa, tsv = _write_desynced_pool(
+        tmp_path,
+        fasta_records=[("ref_1", "AAAA"), ("ghost_2", "CCCC")],
+        manifest_rows=[("ref_1", "ref")],
+    )
+    out = tmp_path / "outgroup.fa"
+    res = _draw(tmp_path, fa, tsv, 2, out)
+    combined = res.stdout + res.stderr
+    assert "ghost_2" in combined, (
+        "the operator has to be able to see WHICH record is unmapped; "
+        f"got: {combined!r}"
+    )
+
+
+def test_manifest_mismatch_does_not_leave_a_usable_outgroup(tmp_path):
+    fa, tsv = _write_desynced_pool(
+        tmp_path,
+        fasta_records=[("ref_1", "AAAA"), ("ghost_2", "CCCC")],
+        manifest_rows=[("ref_1", "ref")],
+    )
+    out = tmp_path / "outgroup.fa"
+    _draw(tmp_path, fa, tsv, 2, out)
+    assert _ids(out) == [], (
+        "a refused draw must not leave a partially-filtered outgroup behind for "
+        "a caller that ignores the return code"
+    )
+
+
+def test_berghia_only_missing_from_manifest_is_still_an_error(tmp_path):
+    """The dangerous case: the unmapped record IS Berghia. Fail-open would root
+    the tree on it silently. Named explicitly so the intent cannot be lost."""
+    fa, tsv = _write_desynced_pool(
+        tmp_path,
+        fasta_records=[("berghia_x", "AAAA"), ("ref_1", "CCCC")],
+        manifest_rows=[("ref_1", "ref")],  # the Berghia record has no row
+    )
+    out = tmp_path / "outgroup.fa"
+    res = _draw(tmp_path, fa, tsv, 1, out)
+    assert res.returncode != 0
+    assert "berghia_x" in (res.stdout + res.stderr)
+
+
+def test_fully_consistent_manifest_still_succeeds(tmp_path):
+    """Regression guard: the strict check must not break the normal path."""
+    fa, tsv = _write_pool(
+        tmp_path,
+        [("berghia_1", "berghia", "AAAA"),
+         ("ANCHOR_1", "anchor", "CCCC"),
+         ("ref_1", "ref", "GGGG")],
+    )
+    out = tmp_path / "outgroup.fa"
+    res = _draw(tmp_path, fa, tsv, 2, out)
+    assert res.returncode == 0, res.stderr
+    assert _ids(out) == ["ANCHOR_1", "ref_1"]
+
+
+def test_stage04_skips_the_class_when_the_draw_refuses(tmp_path):
+    """Consistent with the empty-pool decision: skip the class, don't kill the
+    stage, so one desynced sister pool cannot cost the class-A tree."""
+    src = STAGE04.read_text()
+    assert "draw_outgroup_fasta" in src
+    idx = src.index("draw_outgroup_fasta")
+    window = src[idx:idx + 700]
+    assert "continue" in window, (
+        "stage 04 must skip the class when draw_outgroup_fasta returns non-zero"
+    )

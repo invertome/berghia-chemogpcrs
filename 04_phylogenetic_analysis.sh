@@ -239,8 +239,16 @@ for CLASS in ${GPCR_CLASSES:-A B C F}; do
     OUTGROUP_SOURCE_MEMBERS="${PER_CLASS_POOL_DIR}/pool_members_class_${OUTGROUP_SOURCE_CLASS}.tsv"
     OUTGROUP_FA="${CLASS_DIR}/outgroup_class_${CLASS}.fa"
     if [ -f "${OUTGROUP_SOURCE_FA}" ]; then
-        draw_outgroup_fasta "${OUTGROUP_SOURCE_FA}" "${OUTGROUP_SOURCE_MEMBERS}" \
-            "${OUTGROUP_BUDGET_PER_CLASS:-10}" "${OUTGROUP_FA}"
+        # A refused draw means the sister pool's FASTA and manifest disagree, so
+        # provenance cannot be trusted. Skip the class rather than root its tree
+        # on records that might be Berghia paralogs (user decision, bead 444).
+        # `continue`, not `exit 1`, for the same reason as the empty-pool guard:
+        # one desynced sister pool must not cost the class-A tree.
+        if ! draw_outgroup_fasta "${OUTGROUP_SOURCE_FA}" "${OUTGROUP_SOURCE_MEMBERS}" \
+            "${OUTGROUP_BUDGET_PER_CLASS:-10}" "${OUTGROUP_FA}"; then
+            log --level=ERROR "SKIPPING CLASS ${CLASS}: outgroup provenance is untrustworthy (see above) — NO TREE will be produced for class ${CLASS}; continuing with the remaining classes"
+            continue
+        fi
         # `|| true`, not `|| echo 0`: grep -c prints "0" AND exits 1 on an empty
         # draw, so `|| echo 0` would make OG_COUNT the two-line string "0\n0"
         # (the bead-444 idiom defect). Empty draws are reachable now that

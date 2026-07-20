@@ -644,6 +644,36 @@ draw_outgroup_fasta() {
         log --level=WARN "draw_outgroup_fasta: pool-members manifest missing or empty: ${members_tsv} — cannot determine provenance; falling back to the first ${n} records UNFILTERED, so the outgroup MAY CONTAIN Berghia paralogs"
         awk -v n="$n" '/^>/{c++} c>n{exit} {print}' "$source_fa" > "$out_fa"
     else
+        # Strict consistency gate (user decision, bead 444). The pool FASTA and
+        # its manifest are written back-to-back from the same `selected` list in
+        # one loop of build_per_class_reference_pools.py, so a record with no
+        # manifest row means the two files are OUT OF SYNC (a run interrupted
+        # between the writes, or a stale manifest beside a fresh FASTA).
+        #
+        # Do not guess. Assuming such a record is non-Berghia readmits the exact
+        # circular-rooting bug this helper exists to prevent; dropping it quietly
+        # shrinks the outgroup instead. Both are SILENT. Refuse and let the
+        # caller skip the class, which is the only outcome that is visible.
+        local unmapped n_unmapped
+        unmapped=$(awk -F'\t' '
+            NR == FNR {
+                if (FNR == 1 && $1 == "seq_id") next
+                known[$1] = 1
+                next
+            }
+            /^>/ {
+                id = substr($0, 2)
+                sub(/[ \t].*/, "", id)
+                if (!(id in known)) print id
+            }
+        ' "$members_tsv" "$source_fa")
+        if [ -n "$unmapped" ]; then
+            n_unmapped=$(printf '%s\n' "$unmapped" | wc -l | tr -d ' ')
+            log --level=ERROR "draw_outgroup_fasta: ${source_fa} and ${members_tsv} are OUT OF SYNC — ${n_unmapped} pool record(s) have no provenance row, e.g. $(printf '%s' "$unmapped" | head -5 | tr '\n' ' '). Refusing to draw an outgroup rather than guess whether they are Berghia."
+            : > "$out_fa"
+            return 2
+        fi
+
         # Pass 1 (NR==FNR): collect the Berghia ids from the manifest.
         # Pass 2: stream the FASTA, copying complete records (header + the whole
         # multi-line sequence block, via the sticky `emit` flag) for the first

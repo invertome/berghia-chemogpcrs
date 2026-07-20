@@ -132,6 +132,10 @@ fi
 cat > "${RESULTS_DIR}/report/report.tex" <<'LATEX_HEADER'
 \documentclass[11pt]{article}
 \usepackage{graphicx}
+% amsmath supplies \text{}, used by the math-mode subscripts in the prose
+% (e.g. G$\alpha_{\text{olf}}$). Without it pdflatex aborts with a cascading
+% "Undefined control sequence" and produces no PDF at all.
+\usepackage{amsmath}
 \usepackage{booktabs}
 \usepackage{longtable}
 \usepackage{geometry}
@@ -146,6 +150,10 @@ cat > "${RESULTS_DIR}/report/report.tex" <<'LATEX_HEADER'
 \definecolor{highconf}{RGB}{46, 160, 67}
 \definecolor{medconf}{RGB}{255, 127, 14}
 \definecolor{lowconf}{RGB}{214, 39, 40}
+% Neutral grey for informational states that are neither a pass nor a failure
+% (e.g. a positive control absent from the ranked CSV). Deliberately NOT
+% medconf: orange reads as a warning, and absence is not one.
+\definecolor{neutral}{RGB}{110, 118, 129}
 
 \title{GPCR Chemoreceptor Analysis in \textit{Berghia stephanieae}\\
 \large Comprehensive Pipeline Report}
@@ -513,7 +521,15 @@ if [ -f "$POSCTRL_TSV" ]; then
 
 \subsection{Positive-Control Sanity Check}
 
-HCR-validated chemoreceptor controls (e.g.\ G$\alpha_{\text{olf}}$) are scored by the same pipeline. A control falling below the 50\textsuperscript{th} percentile is a red flag for the ranking weights, not the control. \textcolor{lowconf}{ALERT} rows indicate either a missing control or one below the alert percentile.
+HCR-validated chemoreceptor controls (e.g.\ G$\alpha_{\text{olf}}$) are scored by the same pipeline. Each control lands in exactly one of three states:
+
+\begin{itemize}
+    \item \textcolor{highconf}{OK} --- the control was found in the ranked candidates at or above the 50\textsuperscript{th} percentile. Expected outcome.
+    \item \textcolor{lowconf}{ALERT} --- the control was found but ranked \emph{below} the alert percentile. This is the genuine drift signal: a known marker sinking in the ranking is a red flag for the ranking weights, not for the control.
+    \item \textcolor{neutral}{ABSENT} --- the control does not appear in the ranked CSV at all.
+\end{itemize}
+
+Absence is informational and is deliberately \emph{not} an alert. A control that is not a class-A GPCR --- G$\alpha_{\text{olf}}$, a G-protein alpha subunit, is the only control shipped today --- can never appear in a class-A chemoreceptor ranking, so flagging it red would fire on every run and train the reader to ignore the check. Only a control that was actually scored can drift, so only a scored control can raise an alert. (A row shown as \textcolor{neutral}{UNKNOWN} means the check's output predates this three-state reporting and should be regenerated; it is not a result.)
 
 \begin{table}[H]
 \centering
@@ -549,9 +565,25 @@ with open(sys.argv[1], newline="") as fh:
             pct = f"{float(pct_raw):.1f}" if pct_raw not in ("", None) else "-"
         except ValueError:
             pct = "-"
-        alert = truthy(row.get("alert"))
-        status = (r"\textcolor{lowconf}{ALERT}" if alert
-                  else r"\textcolor{highconf}{OK}")
+        # Derive the badge from `status`, NOT from `alert`. Since bead 444 an
+        # absent control carries alert=False, so keying on `alert` painted it
+        # green OK beside Found=N -- a pass badge on a control that was never
+        # scored. The three states are mutually exclusive and each gets its
+        # own colour: green pass / red drift / grey informational.
+        status_val = (row.get("status") or "").strip()
+        if status_val == "found_healthy":
+            status = r"\textcolor{highconf}{OK}"
+        elif status_val == "found_below_percentile":
+            status = r"\textcolor{lowconf}{ALERT}"
+        elif status_val == "not_found":
+            status = r"\textcolor{neutral}{ABSENT}"
+        else:
+            # Unknown/absent `status` (an older TSV, or a value added upstream
+            # without updating this stage). Fall back to `alert` so a genuine
+            # drift signal still surfaces, but never claim a pass we cannot
+            # substantiate -- an unrecognised state renders as UNKNOWN.
+            status = (r"\textcolor{lowconf}{ALERT}" if truthy(row.get("alert"))
+                      else r"\textcolor{neutral}{UNKNOWN}")
         print(rf"{name} & {found} & {rank} & {pct} & {status} \\")
 PY
     cat >> "${RESULTS_DIR}/report/report.tex" <<'EOF'
