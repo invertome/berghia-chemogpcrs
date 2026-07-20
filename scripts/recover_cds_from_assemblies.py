@@ -133,6 +133,82 @@ AMBIGUOUS_SPECIES_CODES = {
     "phau": ("Physella_acuta", "Phoronis_australis"),
 }
 
+
+class SpeciesCodeCollisionError(RuntimeError):
+    """A species code is claimed by >1 species; CDS recovery refuses to run.
+
+    Distinct from ``species_code_lookup.AmbiguousSpeciesCodeError`` (which
+    guards leaf-name -> species lookups) because this module cannot import
+    that one: ``species_code_lookup`` imports ``SPECIES_MAP`` from here.
+    Both express the same rule at different seams.
+    """
+
+
+def assert_species_code_unambiguous(prefix, ambiguous=None, species_map=None):
+    """Refuse `prefix` if it is a DECLARED multi-species header code.
+
+    ``get_missing_proteins`` collects every sequence whose id starts with
+    ``<prefix>_``, and ``SPECIES_MAP`` resolves ``prefix`` to exactly ONE
+    assembly. For a code carried by two species that combination silently
+    aligns one species' proteins against the other species' genome: miniprot
+    returns worse hits rather than no hits, so nothing in the run fails and
+    the wrong-species CDS propagates into the dN/dS axis.
+
+    Reads :data:`AMBIGUOUS_SPECIES_CODES` rather than testing any literal
+    code, so a collision is refused the first time it is declared.
+
+    Raises :class:`SpeciesCodeCollisionError`; returns None when clean.
+    """
+    amb = AMBIGUOUS_SPECIES_CODES if ambiguous is None else ambiguous
+    if prefix not in amb:
+        return
+    smap = SPECIES_MAP if species_map is None else species_map
+    species = sorted(amb[prefix])
+    entry = smap.get(prefix)
+    if entry:
+        resolved = (f"assembly {entry[2]} ({entry[1]}, taxid {entry[0]})")
+    else:
+        resolved = "no assembly (the code is not in SPECIES_MAP)"
+    raise SpeciesCodeCollisionError(
+        f"species code {prefix!r} is claimed by {len(species)} species "
+        f"({', '.join(species)}), but SPECIES_MAP resolves it to a single "
+        f"{resolved}.\n"
+        f"Every sequence with a {prefix!r} header prefix would be aligned "
+        f"against that one genome, so the other species' proteins would have "
+        f"their CDS recovered from the WRONG species' genome. miniprot returns "
+        f"degraded hits rather than no hits, so this corruption is silent: no "
+        f"stage fails, and the bad CDS flows on into the codon alignments and "
+        f"the dN/dS axis. No CDS recovered under this code can be trusted.\n"
+        f"REFUSING to run. Fix the DATA -- give one species a distinct header "
+        f"prefix -- then update AMBIGUOUS_SPECIES_CODES and SPECIES_MAP. "
+        f"Identifiers here are write-once, so that rename needs explicit "
+        f"sign-off; it is tracked separately and must NOT be applied as a "
+        f"side effect of this run.")
+
+
+def assert_species_list_unambiguous(prefixes, ambiguous=None, species_map=None):
+    """Pre-flight a whole run: refuse if ANY requested code is ambiguous.
+
+    Reports every offending code at once so a data problem is fixed in one
+    pass, and fires before the first download so a multi-hour run does not
+    abort halfway through.
+    """
+    amb = AMBIGUOUS_SPECIES_CODES if ambiguous is None else ambiguous
+    offenders = [p for p in prefixes if p in amb]
+    if not offenders:
+        return
+    if len(offenders) == 1:
+        assert_species_code_unambiguous(offenders[0], amb, species_map)
+    raise SpeciesCodeCollisionError(
+        f"{len(offenders)} requested species code(s) are claimed by more than "
+        f"one species: "
+        + '; '.join(f"{p} ({', '.join(sorted(amb[p]))})" for p in offenders)
+        + ".\nSPECIES_MAP resolves each to ONE genome, so every one of these "
+          "would recover CDS for at least one species from the wrong species' "
+          "assembly -- silently. REFUSING to run. Fix the header prefixes in "
+          "the data (write-once identifiers: needs explicit sign-off), then "
+          "update AMBIGUOUS_SPECIES_CODES.")
+
 CODON_TABLE = {
     'TTT': 'F', 'TTC': 'F', 'TTA': 'L', 'TTG': 'L',
     'CTT': 'L', 'CTC': 'L', 'CTA': 'L', 'CTG': 'L',
@@ -313,7 +389,14 @@ def get_missing_proteins(og_dir, cds_file, species_prefix):
     ``one_to_one_ortholog/OG*.faa``). We recurse through ``og_dir`` and
     accept the common protein-FASTA extensions ``.faa`` / ``.fa`` /
     ``.fasta``.
+
+    Refuses a ``species_prefix`` declared in :data:`AMBIGUOUS_SPECIES_CODES`:
+    the prefix match below is exactly where two species' sequences get fused
+    into one query batch. This function is importable and callable on its own,
+    so it carries its own refusal rather than relying on ``process_species``.
     """
+    assert_species_code_unambiguous(species_prefix)
+
     # Load existing CDS IDs
     cds_ids = set()
     if os.path.exists(cds_file):
@@ -744,7 +827,17 @@ def process_species(prefix, og_dir, cds_file, output_dir, genome_dir,
     extract_cds_from_gff. Used to apply tightened paralog-discrimination
     thresholds (bead -8st) to a previously-recovered set without paying
     the multi-hour miniprot cost again.
+
+    Raises :class:`SpeciesCodeCollisionError` for a code declared in
+    :data:`AMBIGUOUS_SPECIES_CODES`. This is a hard refusal, NOT a skip:
+    every other early exit here returns 0, which a caller cannot distinguish
+    from "this species had no missing proteins" -- a refused species that
+    looks like a completed one is the same silent-corruption defect wearing a
+    different costume. Both the miniprot and the ``--reextract-only`` branch
+    resolve the code to a genome, so the guard sits above both.
     """
+    assert_species_code_unambiguous(prefix)
+
     if prefix not in SPECIES_MAP:
         print(f'  SKIP {prefix}: not in species map')
         return 0
@@ -887,6 +980,11 @@ def main():
     else:
         species_list = sorted(SPECIES_MAP.keys())
 
+    # Pre-flight the whole requested set before the first download, so an
+    # ambiguous code aborts at second 0 rather than after hours of miniprot on
+    # the species that happened to sort earlier.
+    assert_species_list_unambiguous(species_list)
+
     print(f'CDS Recovery Pipeline')
     print(f'  Species: {len(species_list)}')
     print(f'  Threads: {args.threads}')
@@ -971,4 +1069,7 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    # main() returns 1 when --validate-species-map fails its audit. Calling it
+    # bare discarded that, so the audit reported a drifted map and still exited
+    # 0 -- a guard that cannot fail the caller is not a guard.
+    sys.exit(main())
