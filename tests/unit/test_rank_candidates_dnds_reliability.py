@@ -76,7 +76,7 @@ def _row(positive: float = 0.0, purifying: float = 0.0,
         'phylo_score_norm': phylo,
         'purifying_score_norm': purifying,
         'positive_score_norm': positive,
-        'lse_depth_score_norm': lse,
+        'lse_divergence_score_norm': lse,
         'dnds_reliability_weight': dnds_rw,
         'has_synteny_data': False,
         'has_expression_data': False,
@@ -93,7 +93,7 @@ def _row(positive: float = 0.0, purifying: float = 0.0,
 # key rather than the one production uses, which is precisely why the drift
 # guard below could not see the defect (see that test's docstring).
 WEIGHTS = {
-    'phylo': 2.0, 'purifying': 1.0, 'positive': 1.0, 'lse_depth': 1.0,
+    'phylo': 2.0, 'purifying': 1.0, 'positive': 1.0, 'lse_divergence': 1.0,
     'synteny': 3.0, 'expression': 1.0, 'chemosensory_expr': 3.0,
     'gprotein_coexpr': 2.0, 'ecl_divergence': 2.0, 'expansion': 1.0,
     'og_confidence': 1.0,
@@ -107,7 +107,7 @@ def test_full_reliability_matches_baseline(calc) -> None:
 
     Bead 0rg unification: the sensitivity scorer now mirrors the production
     completeness-based formula. In ``_row`` there is no ``has_phylo_data``, so
-    phylo/lse_depth are o98-gated OUT and only purifying+positive are present.
+    phylo/lse_divergence are o98-gated OUT and only purifying+positive are present.
     total_weight = ALL weights (missing axes penalize completeness); avail =
     purifying+positive; completeness = max(0.4, avail/total).
     """
@@ -123,7 +123,7 @@ def test_full_reliability_matches_baseline(calc) -> None:
 # ---- Bead 0rg: sensitivity scorer unified with the production formula --------
 
 def test_phylo_lse_gated_out_without_phylo_data(calc) -> None:
-    """o98 gate: phylo/lse_depth are class-A-tree signals, so a candidate NOT in
+    """o98 gate: phylo/lse_divergence are class-A-tree signals, so a candidate NOT in
     that tree (has_phylo_data absent/False) must have them EXCLUDED — supplying
     phylo/lse values must not change its score. Previously the sensitivity scorer
     counted them at full weight (present-zero), unlike the production scorer."""
@@ -137,7 +137,7 @@ def test_phylo_counted_when_has_phylo_data(calc) -> None:
     a real switch (not a no-op)."""
     row = _row(positive=0.8, phylo=0.9, lse=0.9)
     row['has_phylo_data'] = True
-    row['has_lse_depth_data'] = True  # hf3u: lse_depth has its own gate
+    row['has_lse_divergence_data'] = True  # hf3u: lse_divergence has its own gate
     s_gated_in = calc(pd.DataFrame([row]), WEIGHTS).iloc[0]
     s_gated_out = calc(pd.DataFrame([_row(positive=0.8, phylo=0.9, lse=0.9)]), WEIGHTS).iloc[0]
     assert s_gated_in != pytest.approx(s_gated_out)
@@ -150,7 +150,7 @@ def test_completeness_penalizes_sparse_candidate(calc) -> None:
     sparse = _row(positive=0.8, purifying=0.8)               # 2 axes present
     full = _row(positive=0.8, purifying=0.8, phylo=0.8, lse=0.8)
     full['has_phylo_data'] = True
-    full['has_lse_depth_data'] = True  # hf3u: lse_depth has its own gate
+    full['has_lse_divergence_data'] = True  # hf3u: lse_divergence has its own gate
     for flag, col in [('has_synteny_data', 'synteny_score_norm'),
                       ('has_expression_data', 'expression_score_norm'),
                       ('has_chemosensory_expr_data', 'chemosensory_expr_score_norm'),
@@ -181,18 +181,18 @@ def test_sensitivity_matches_production_lib_formula(calc) -> None:
 
     row = _row(positive=0.7, purifying=0.6, phylo=0.5, lse=0.4)
     row['has_phylo_data'] = True
-    row['has_lse_depth_data'] = True  # hf3u: lse_depth has its own gate
+    row['has_lse_divergence_data'] = True  # hf3u: lse_divergence has its own gate
     row['has_synteny_data'] = True
     row['synteny_score_norm'] = 0.9
     row['has_expression_data'] = True
     row['expression_score_norm'] = 0.8
     s_sens = calc(pd.DataFrame([row]), WEIGHTS).iloc[0]
 
-    scores = {'phylo': 0.5, 'lse_depth': 0.4, 'purifying': 0.6, 'positive': 0.7,
+    scores = {'phylo': 0.5, 'lse_divergence': 0.4, 'purifying': 0.6, 'positive': 0.7,
               'synteny': 0.9, 'expression': 0.8, 'chemosensory_expr': None,
               'gprotein_coexpr': None, 'ecl_divergence': None, 'expansion': None,
               'og_confidence': None, 'tandem_cluster': None}
-    weights = {'phylo': 2.0, 'lse_depth': 1.0, 'purifying': 1.0, 'positive': 1.0,
+    weights = {'phylo': 2.0, 'lse_divergence': 1.0, 'purifying': 1.0, 'positive': 1.0,
                'synteny': 3.0, 'expression': 1.0, 'chemosensory_expr': 3.0,
                'gprotein_coexpr': 2.0, 'ecl_divergence': 2.0, 'expansion': 1.0,
                'og_confidence': 1.0, 'tandem_cluster': 0.0}

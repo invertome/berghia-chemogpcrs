@@ -86,6 +86,12 @@ def _module_namespace() -> dict:
     ns: dict = {
         "os": os,
         "_calculate_fair_rank_score_corrected": lib.calculate_fair_rank_score,
+        # The renamed lse_divergence weight/percentile are read through
+        # getenv_renamed (it honours the pre-rename LSE_DEPTH_* names). Without
+        # it here the constant raises NameError, is swallowed by the except
+        # below, and SCORING_WEIGHTS never binds -- so every guard in this file
+        # would fail for a reason that has nothing to do with what it guards.
+        "getenv_renamed": lib.getenv_renamed,
     }
     wanted = {"SCORING_WEIGHTS", "MAX_POSSIBLE_RANK_SCORE", "COMPLETENESS_FLOOR"}
     for node in _module_tree().body:

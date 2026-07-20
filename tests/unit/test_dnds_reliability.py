@@ -42,7 +42,7 @@ def test_production_ranklist_reads_shrunk_signal():
         "positive_score_norm": [0.1, 0.5, 0.9],      # median 0.5
         "purifying_score_norm": [0.0, 0.0, 0.0],
         "phylo_score_norm": [0.5, 0.5, 0.5],
-        "lse_depth_score_norm": [0.0, 0.0, 0.0],
+        "lse_divergence_score_norm": [0.0, 0.0, 0.0],
         "dnds_reliability_weight": [0.0, 1.0, 1.0],   # 'poor' is underpowered
     })
     # Exactly what rank_candidates.py's upstream block does to the selection cols.

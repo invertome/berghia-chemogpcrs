@@ -2,7 +2,7 @@
 """calibrate_depth_threshold.py — Null-calibrated branch-distance threshold.
 
 Bead -m6k. The previous pipeline used within-dataset percentiles (75th for
-LSE depth, 90th for ASR deep nodes) as thresholds. By construction such
+LSE divergence, 90th for ASR deep nodes) as thresholds. By construction such
 percentiles always flag the same proportion of nodes regardless of biological
 signal — they are descriptive cuts, not statistical tests.
 

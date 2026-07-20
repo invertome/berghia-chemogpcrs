@@ -39,7 +39,7 @@ def _row(**kw):
         "tandem_cluster_score_norm": "0.0",
         "positive_score_norm": "0.0",
         "emb_novelty": "0.0",
-        "lse_depth_score": "0.0",
+        "lse_divergence_score": "0.0",
     }
     base.update({k: str(v) for k, v in kw.items()})
     return base
@@ -180,13 +180,13 @@ def test_discovery_sorted_by_discovery_score_desc():
     df = _df(
         _row(id="low_disc", og_dnds_reliability="low",
              tandem_cluster_score_norm="0.1", positive_score_norm="0.1",
-             emb_novelty="0.1", lse_depth_score="0.1"),
+             emb_novelty="0.1", lse_divergence_score="0.1"),
         _row(id="high_disc", og_dnds_reliability="low",
              tandem_cluster_score_norm="0.9", positive_score_norm="0.9",
-             emb_novelty="0.9", lse_depth_score="0.9"),
+             emb_novelty="0.9", lse_divergence_score="0.9"),
         _row(id="mid_disc", og_dnds_reliability="low",
              tandem_cluster_score_norm="0.5", positive_score_norm="0.5",
-             emb_novelty="0.5", lse_depth_score="0.5"),
+             emb_novelty="0.5", lse_divergence_score="0.5"),
     )
     out = erv.build_discovery_view(df)
     assert list(out["id"]) == ["high_disc", "mid_disc", "low_disc"]
@@ -198,27 +198,27 @@ def test_discovery_sorted_by_discovery_score_desc():
 
 def test_discovery_score_is_rra_over_ranklists():
     # The discovery view is ordered by a WEIGHT-FREE Robust Rank Aggregation over
-    # {tandem, positive, novelty, lse_depth}, with discovery_score = -log10(rho).
+    # {tandem, positive, novelty, lse_divergence}, with discovery_score = -log10(rho).
     # Each candidate's score must equal -log10 of rank_aggregation.rra_score over
     # exactly those four signals -- proving all four participate and no weight
-    # enters. rho is computed WITH lse_depth, so an impl that dropped lse_depth
+    # enters. rho is computed WITH lse_divergence, so an impl that dropped lse_divergence
     # (as the old weighted mean did) could not reproduce these values.
     import numpy as np
     from rank_aggregation import rra_score
     df = _df(
         _row(id="a", og_dnds_reliability="low", tandem_cluster_score_norm="0.9",
-             positive_score_norm="0.8", emb_novelty="0.7", lse_depth_score="0.9"),
+             positive_score_norm="0.8", emb_novelty="0.7", lse_divergence_score="0.9"),
         _row(id="b", og_dnds_reliability="low", tandem_cluster_score_norm="0.5",
-             positive_score_norm="0.5", emb_novelty="0.5", lse_depth_score="0.5"),
+             positive_score_norm="0.5", emb_novelty="0.5", lse_divergence_score="0.5"),
         _row(id="c", og_dnds_reliability="low", tandem_cluster_score_norm="0.1",
-             positive_score_norm="0.2", emb_novelty="0.3", lse_depth_score="0.1"),
+             positive_score_norm="0.2", emb_novelty="0.3", lse_divergence_score="0.1"),
     )
     out = erv.build_discovery_view(df)
     per_signal = {
         "tandem":    {"a": 0.9, "b": 0.5, "c": 0.1},
         "positive":  {"a": 0.8, "b": 0.5, "c": 0.2},
         "novelty":   {"a": 0.7, "b": 0.5, "c": 0.3},
-        "lse_depth": {"a": 0.9, "b": 0.5, "c": 0.1},
+        "lse_divergence": {"a": 0.9, "b": 0.5, "c": 0.1},
     }
     rho = rra_score(per_signal)
     got = dict(zip(out["id"], out["discovery_score"].astype(float)))
@@ -237,19 +237,19 @@ def test_discovery_score_includes_novelty_signal():
         _row(id="hi_nov", og_dnds_reliability="low", emb_novelty="9.0"),
         _row(id="mid_nov", og_dnds_reliability="low", emb_novelty="5.0"),
     ).drop(columns=["tandem_cluster_score_norm", "positive_score_norm",
-                    "lse_depth_score"])
+                    "lse_divergence_score"])
     out = erv.build_discovery_view(df)
     assert list(out["id"]) == ["hi_nov", "mid_nov", "lo_nov"]
 
 
-def test_discovery_score_includes_lse_depth_signal():
-    # lse_depth participates in the RRA -- it was EXCLUDED from the old weighted
-    # mean (the gap Task 2 closes). With lse_depth the only varying signal, the
+def test_discovery_score_includes_lse_divergence_signal():
+    # lse_divergence participates in the RRA -- it was EXCLUDED from the old weighted
+    # mean (the gap Task 2 closes). With lse_divergence the only varying signal, the
     # discovery order follows it. Scrambled input order proves it is real sorting.
     df = _df(
-        _row(id="shallow", og_dnds_reliability="low", lse_depth_score="0.1"),
-        _row(id="deep", og_dnds_reliability="low", lse_depth_score="0.9"),
-        _row(id="mid", og_dnds_reliability="low", lse_depth_score="0.5"),
+        _row(id="shallow", og_dnds_reliability="low", lse_divergence_score="0.1"),
+        _row(id="deep", og_dnds_reliability="low", lse_divergence_score="0.9"),
+        _row(id="mid", og_dnds_reliability="low", lse_divergence_score="0.5"),
     ).drop(columns=["tandem_cluster_score_norm", "positive_score_norm",
                     "emb_novelty"])
     out = erv.build_discovery_view(df)
@@ -258,12 +258,12 @@ def test_discovery_score_includes_lse_depth_signal():
 
 def test_discovery_score_handles_absent_novelty_column():
     # No emb_novelty column -> RRA runs over the remaining signals (tandem,
-    # positive, lse_depth); graceful, ordered, finite scores.
+    # positive, lse_divergence); graceful, ordered, finite scores.
     df = _df(
         _row(id="hi", og_dnds_reliability="low", tandem_cluster_score_norm="0.9",
-             positive_score_norm="0.9", lse_depth_score="0.9"),
+             positive_score_norm="0.9", lse_divergence_score="0.9"),
         _row(id="lo", og_dnds_reliability="low", tandem_cluster_score_norm="0.1",
-             positive_score_norm="0.1", lse_depth_score="0.1"),
+             positive_score_norm="0.1", lse_divergence_score="0.1"),
     ).drop(columns=["emb_novelty"])
     out = erv.build_discovery_view(df)
     assert list(out["id"]) == ["hi", "lo"]
@@ -276,9 +276,9 @@ def test_discovery_score_all_blank_novelty_column():
     # dilution of the order.
     df = _df(
         _row(id="hi", og_dnds_reliability="low", tandem_cluster_score_norm="0.9",
-             positive_score_norm="0.9", lse_depth_score="0.9", emb_novelty=""),
+             positive_score_norm="0.9", lse_divergence_score="0.9", emb_novelty=""),
         _row(id="lo", og_dnds_reliability="low", tandem_cluster_score_norm="0.1",
-             positive_score_norm="0.1", lse_depth_score="0.1", emb_novelty=""),
+             positive_score_norm="0.1", lse_divergence_score="0.1", emb_novelty=""),
     )
     out = erv.build_discovery_view(df)
     assert list(out["id"]) == ["hi", "lo"]
@@ -290,10 +290,10 @@ def test_discovery_blank_novelty_row_does_not_crash():
     df = _df(
         _row(id="hasnov", og_dnds_reliability="low",
              tandem_cluster_score_norm="0.5", positive_score_norm="0.5",
-             lse_depth_score="0.5", emb_novelty="9.0"),
+             lse_divergence_score="0.5", emb_novelty="9.0"),
         _row(id="blank", og_dnds_reliability="low",
              tandem_cluster_score_norm="0.5", positive_score_norm="0.5",
-             lse_depth_score="0.5", emb_novelty=""),
+             lse_divergence_score="0.5", emb_novelty=""),
     )
     out = erv.build_discovery_view(df)
     assert set(out["id"]) == {"hasnov", "blank"}
@@ -318,9 +318,9 @@ def test_discovery_order_ignores_weight_env(tmp_path: Path, monkeypatch):
     ranked = tmp_path / "ranked.csv"
     _df(
         _row(id="a", og_dnds_reliability="low", tandem_cluster_score_norm="0.9",
-             positive_score_norm="0.1", emb_novelty="0.1", lse_depth_score="0.1"),
+             positive_score_norm="0.1", emb_novelty="0.1", lse_divergence_score="0.1"),
         _row(id="b", og_dnds_reliability="low", tandem_cluster_score_norm="0.1",
-             positive_score_norm="0.9", emb_novelty="0.9", lse_depth_score="0.9"),
+             positive_score_norm="0.9", emb_novelty="0.9", lse_divergence_score="0.9"),
     ).to_csv(ranked, index=False)
 
     def run():
@@ -354,7 +354,7 @@ def test_missing_classification_column_does_not_crash():
 
 
 def test_missing_positive_norm_column_discovery_no_crash():
-    # positive_score_norm / emb_novelty / lse_depth all absent -> RRA runs over
+    # positive_score_norm / emb_novelty / lse_divergence all absent -> RRA runs over
     # the single present signal (tandem); no crash, the row is retained with a
     # finite discovery_score.
     df = pd.DataFrame([{

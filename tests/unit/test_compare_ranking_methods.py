@@ -30,7 +30,7 @@ def _toy_df(n=8):
             "phylo_score_norm": np.linspace(1.0, 0.0, n),
             "purifying_score_norm": np.linspace(0.0, 1.0, n),
             "positive_score_norm": np.linspace(1.0, 0.0, n),
-            "lse_depth_score_norm": np.linspace(1.0, 0.0, n),
+            "lse_divergence_score_norm": np.linspace(1.0, 0.0, n),
             "synteny_score_norm": np.linspace(0.5, 0.5, n),
             "has_synteny_data": [True] * n,
         }
@@ -196,7 +196,7 @@ def test_rerank_output_rankagg_actually_reorders():
             "phylo_score_norm": [0.0, 0.0, 1.0],    # rankagg favors c
             "purifying_score_norm": [0.0, 0.0, 1.0],
             "positive_score_norm": [0.0, 0.0, 1.0],
-            "lse_depth_score_norm": [0.0, 0.0, 1.0],
+            "lse_divergence_score_norm": [0.0, 0.0, 1.0],
         }
     )
     weighted = df.sort_values("rank_score", ascending=False)["id"].tolist()

@@ -1,4 +1,4 @@
-"""``lse_depth``'s threshold must be a percentile of the WHOLE candidate set.
+"""``lse_divergence``'s threshold must be a percentile of the WHOLE candidate set.
 
 Bead hf3u. ``collect_candidate_depths`` walked each candidate's path to the
 root and ``break``-ed at the first node below ``BOOTSTRAP_THRESHOLD`` (70),
@@ -13,7 +13,7 @@ on 2026-07-20:
     candidates admitted                  0 of 439
 
 P(all 27 nodes pass) ~ 0.824**27 ~ 0.5%, so the population was empty on every
-run, ``np.percentile`` was never reached, and ``LSE_DEPTH_PERCENTILE`` was
+run, ``np.percentile`` was never reached, and ``LSE_DIVERGENCE_PERCENTILE`` was
 dead config. The hardcoded ``lse_threshold = 0.5`` that stood in for it is
 not a neutral default -- it is INVERTED: 98.6% of candidates sit above 0.5,
 where the design intent (75th percentile) is 25%. A weight-1 axis was
@@ -94,7 +94,7 @@ def collect():
 
 @pytest.fixture(scope="module")
 def depth_score():
-    return _exec_function("get_lse_depth_score")
+    return _exec_function("get_lse_divergence_score")
 
 
 def _caterpillar(n_leaves: int, weak_from: int = 0, weak_support: float = 10.0):
@@ -147,7 +147,7 @@ def test_every_candidate_in_the_tree_enters_the_population(collect):
 
 
 def test_percentile_leaves_the_intended_quarter_above_threshold(collect):
-    """The design intent: LSE_DEPTH_PERCENTILE=75 => ~25% above threshold.
+    """The design intent: LSE_DIVERGENCE_PERCENTILE=75 => ~25% above threshold.
 
     Guards the end-to-end property the hardcoded 0.5 inverted (98.6% above).
     """
@@ -217,16 +217,16 @@ def test_axis_reports_itself_unavailable_when_threshold_underivable():
     """There must be an availability flag distinct from tree membership.
 
     ``has_lse_data`` was aliased to ``has_phylo`` (tree membership), so a
-    candidate in the tree claimed lse_depth evidence even when no threshold
+    candidate in the tree claimed lse_divergence evidence even when no threshold
     could be derived at all.
     """
     src = RANK.read_text()
-    assert "LSE_DEPTH_AVAILABLE" in src, (
-        "no flag records whether an lse_depth threshold could be derived"
+    assert "LSE_DIVERGENCE_AVAILABLE" in src, (
+        "no flag records whether an lse_divergence threshold could be derived"
     )
-    assert "has_lse_depth_data" in src, (
-        "lse_depth availability is still aliased to has_phylo_data"
+    assert "has_lse_divergence_data" in src, (
+        "lse_divergence availability is still aliased to has_phylo_data"
     )
-    assert re.search(r"'lse_depth',\s*'lse_depth_score_norm',\s*'has_lse_depth_data'", src), (
-        "the composite's lse_depth axis still gates on has_phylo_data"
+    assert re.search(r"'lse_divergence',\s*'lse_divergence_score_norm',\s*'has_lse_divergence_data'", src), (
+        "the composite's lse_divergence axis still gates on has_phylo_data"
     )

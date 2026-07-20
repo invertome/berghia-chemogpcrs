@@ -42,8 +42,8 @@ def test_production_wrapper_forwards_dnds_reliability() -> None:
     assert "dnds_reliability=" in body, "wrapper does not pass dnds_reliability to the scorer"
 
 
-def test_phylo_and_lse_depth_gated_by_tree_membership() -> None:
-    """o98: phylo/lse_depth are class-A chemoreceptor-tree signals, so they must
+def test_phylo_and_lse_divergence_gated_by_tree_membership() -> None:
+    """o98: phylo/lse_divergence are class-A chemoreceptor-tree signals, so they must
     be dropped (None) for candidates not in that tree (class B/C/F, unclassified,
     or too divergent to be pooled) — those candidates then fall out of
     fair-scoring instead of carrying a full-weight present-zero that drags their
@@ -59,8 +59,8 @@ def test_phylo_and_lse_depth_gated_by_tree_membership() -> None:
     end = src.find("\n\ndef ", start + 1)
     body = src[start:end] if end != -1 else src[start:]
     assert "'phylo': row.get('phylo_score_norm') if row.get('has_phylo_data') else None" in body
-    # Bead hf3u: lse_depth is gated by a STRICTER flag than tree membership.
-    # It also needs a derivable percentile threshold (LSE_DEPTH_AVAILABLE);
+    # Bead hf3u: lse_divergence is gated by a STRICTER flag than tree membership.
+    # It also needs a derivable percentile threshold (LSE_DIVERGENCE_AVAILABLE);
     # with no threshold there is no measurement for anyone, and the axis must
     # drop out rather than score against a substituted constant.
-    assert "'lse_depth': row.get('lse_depth_score_norm') if row.get('has_lse_depth_data') else None" in body
+    assert "'lse_divergence': row.get('lse_divergence_score_norm') if row.get('has_lse_divergence_data') else None" in body

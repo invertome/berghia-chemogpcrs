@@ -72,6 +72,24 @@ check_dir "$HMM_DIR"                 || { log "Error: HMM library missing — bu
     log --level=WARN "Orthogroups.tsv not found; OG-vote will be skipped (all candidates 'unclassified-og')"
     ORTHOGROUPS_TSV=""
 }
+# Orthology quarantine (ORTHOLOGY_SOURCE_TRUSTED, see config.sh). The OG-vote
+# classifier is entirely Nath-fed: it votes within Nath-built orthogroups over
+# Nath references annotated by step 1b below. Under the quarantine it must not
+# vote at all, so reuse the existing, tested "no Orthogroups.tsv" branch rather
+# than adding a second way to be absent.
+#
+# CONSEQUENCE, stated plainly because it is significant: classify_consensus.py
+# reaches 'non-chemoreceptor' only on 3-of-3 agreement and
+# 'likely-non-chemoreceptor' only when HMM *and* OG agree — placement is
+# explicitly barred from substituting for either. With the OG source dark,
+# NEITHER demotion tier is reachable, so every candidate stays
+# 'chemoreceptor-candidate'. The classifier is conservative-by-default, which is
+# the safe direction (it cannot demote a real chemoreceptor), but it means the
+# non-chemoreceptor filter provides NO suppression until orthology is rebuilt.
+if [ "${ORTHOLOGY_SOURCE_TRUSTED:-0}" != "1" ] && [ -n "$ORTHOGROUPS_TSV" ]; then
+    log --level=WARN "Quarantine: OG-vote classifier disabled (orthogroups are Nath-derived and not trusted). Consensus falls to HMM + placement, which cannot reach either demotion tier -- every candidate will stay 'chemoreceptor-candidate'."
+    ORTHOGROUPS_TSV=""
+fi
 
 N_CANDIDATES=$(grep -c '^>' "$CANDIDATE_FASTA")
 log "Candidates: $N_CANDIDATES sequences in $CANDIDATE_FASTA"

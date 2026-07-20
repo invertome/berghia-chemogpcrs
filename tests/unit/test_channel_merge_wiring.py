@@ -82,7 +82,7 @@ def _regression_fixture_df() -> pd.DataFrame:
             "phylo_score_norm": [0.9, 0.7, 0.5, 0.3, 0.1],
             "purifying_score_norm": [0.2, 0.8, 0.4, 0.6, 0.1],
             "positive_score_norm": [0.5, 0.5, 0.9, 0.1, 0.3],
-            "lse_depth_score_norm": [0.4, 0.4, 0.4, 0.9, 0.1],
+            "lse_divergence_score_norm": [0.4, 0.4, 0.4, 0.9, 0.1],
             "synteny_score_norm": [0.8, 0.2, 0.5, 0.6, 0.3],
             "has_synteny_data": [True, True, False, True, True],
             "og_confidence_score_norm": [0.3, 0.6, 0.9, 0.2, 0.5],
@@ -254,7 +254,7 @@ def test_struct_nonchemo_corrob_present_lowers_rank_realistic_multisignal(tmp_pa
             "phylo_score_norm": [0.6, 0.6],
             "purifying_score_norm": [0.4, 0.4],
             "positive_score_norm": [0.5, 0.5],
-            "lse_depth_score_norm": [0.3, 0.3],
+            "lse_divergence_score_norm": [0.3, 0.3],
         }
     )
     merged = merge_fn(df, str(channels_dir))

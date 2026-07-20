@@ -8,10 +8,10 @@ its eleven sources:
     purifying_score > 0 or positive_score > 0
     lse_score > 0
 
-The `lse_depth` case is structural, not incidental. `lse_threshold` is
-``np.percentile(all_depths, LSE_DEPTH_PERCENTILE)`` with the percentile at
-75, and get_lse_depth_score() returns 0.0 for any candidate at or below that
-threshold. So ~75% of candidates can NEVER score > 0 on lse_depth BY
+The `lse_divergence` case is structural, not incidental. `lse_threshold` is
+``np.percentile(all_depths, LSE_DIVERGENCE_PERCENTILE)`` with the percentile at
+75, and get_lse_divergence_score() returns 0.0 for any candidate at or below that
+threshold. So ~75% of candidates can NEVER score > 0 on lse_divergence BY
 CONSTRUCTION, yet each is recorded as missing that evidence -- their depth
 was measured, it just wasn't extreme.
 
@@ -85,7 +85,7 @@ def test_measured_but_subthreshold_depth_counts_as_present(completeness) -> None
     """The reproduction: 7 genuine sources + a measured subthreshold depth.
 
     Because lse_threshold is the 75th percentile of all depths, a candidate
-    scoring 0.0 on lse_depth is the COMMON case, not the missing-data case.
+    scoring 0.0 on lse_divergence is the COMMON case, not the missing-data case.
     Counting it as absent understates completeness by 1/11 and crosses the
     0.7 CONFIDENCE_MIN_COMPLETENESS gate.
     """

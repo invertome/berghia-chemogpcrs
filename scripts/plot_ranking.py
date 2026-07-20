@@ -27,7 +27,7 @@ SCORE_COLORS = {
     'positive_score': '#d62728',    # Red - positive selection
     'synteny_score': '#9467bd',     # Purple - synteny
     'expression_score': '#ff7f0e',  # Orange - expression
-    'lse_depth_score': '#8c564b'    # Brown - LSE depth
+    'lse_divergence_score': '#8c564b'    # Brown - LSE divergence
 }
 
 # Rank-confidence tiers from scripts/rank_confidence.py: the signal bootstrap's
@@ -59,8 +59,17 @@ def rank_tier_series(frame):
 ranking_file = sys.argv[1]
 output_file = sys.argv[2]
 
-# Load ranked data
+# Load ranked data. Accept the pre-rename `lse_depth_*` schema under its
+# canonical `lse_divergence_*` names, announced on stderr -- otherwise plotting
+# a ranked CSV written before the rename would silently drop the divergence
+# component out of the stacked bar and the violin panel, which reads as "this
+# axis contributed nothing" rather than "this file predates the rename".
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _rank_candidates_lib import (apply_legacy_column_aliases,  # noqa: E402
+                                  getenv_renamed)
+
 df = pd.read_csv(ranking_file)
+df = apply_legacy_column_aliases(df, source=f"ranked CSV {ranking_file}")
 
 # Check if we have the enhanced columns
 has_components = 'phylo_score' in df.columns
@@ -87,13 +96,15 @@ if has_components:
         'positive_score': float(os.getenv('POSITIVE_WEIGHT', 1)),
         'synteny_score': float(os.getenv('SYNTENY_WEIGHT', 3)),
         'expression_score': float(os.getenv('EXPR_WEIGHT', 1)),
-        'lse_depth_score': float(os.getenv('LSE_DEPTH_WEIGHT', 1))
+        # Honours the pre-rename LSE_DEPTH_WEIGHT (announced) so a legacy
+        # environment still labels the panel with the weight actually in force.
+        'lse_divergence_score': getenv_renamed('LSE_DIVERGENCE_WEIGHT', 1)
     }
 
     # Normalize scores for stacking (use normalized versions if available)
     score_cols = []
     for col in ['phylo_score', 'purifying_score', 'positive_score',
-                'synteny_score', 'expression_score', 'lse_depth_score']:
+                'synteny_score', 'expression_score', 'lse_divergence_score']:
         norm_col = f'{col}_norm'
         if norm_col in df.columns:
             score_cols.append(norm_col)
@@ -110,13 +121,13 @@ if has_components:
         'positive_score_norm': f'Positive sel. (w={weights["positive_score"]})',
         'synteny_score_norm': f'Synteny (w={weights["synteny_score"]})',
         'expression_score_norm': f'Expression (w={weights["expression_score"]})',
-        'lse_depth_score_norm': f'LSE depth (w={weights["lse_depth_score"]})',
+        'lse_divergence_score_norm': f'LSE divergence (w={weights["lse_divergence_score"]})',
         'phylo_score': 'Phylogenetic',
         'purifying_score': 'Purifying sel.',
         'positive_score': 'Positive sel.',
         'synteny_score': 'Synteny',
         'expression_score': 'Expression',
-        'lse_depth_score': 'LSE depth'
+        'lse_divergence_score': 'LSE divergence'
     }
 
     for col in score_cols:
@@ -156,7 +167,7 @@ if has_components:
     # Melt data for violin plot
     score_data = []
     for col in ['phylo_score', 'purifying_score', 'positive_score',
-                'synteny_score', 'expression_score', 'lse_depth_score']:
+                'synteny_score', 'expression_score', 'lse_divergence_score']:
         if col in df.columns:
             for val in df[col].values:
                 score_data.append({'Component': col.replace('_score', '').replace('_', ' ').title(),

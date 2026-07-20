@@ -72,7 +72,7 @@ def _row(expression: float = 0.9) -> dict[str, Any]:
     return {
         "id": "cand_1",
         "phylo_score_norm": 0.0,
-        "lse_depth_score_norm": 0.0,
+        "lse_divergence_score_norm": 0.0,
         "purifying_score_norm": 0.0,
         "positive_score_norm": 0.0,
         "synteny_score_norm": 0.0,
@@ -98,7 +98,7 @@ def _row(expression: float = 0.9) -> dict[str, Any]:
 
 # The production weight dict, verbatim in shape.
 PROD_WEIGHTS = {
-    "phylo": 2.0, "purifying": 0.0, "positive": 2.0, "lse_depth": 1.0,
+    "phylo": 2.0, "purifying": 0.0, "positive": 2.0, "lse_divergence": 1.0,
     "synteny": 1.0, "expression": 1.0, "chemosensory_expr": 3.0,
     "gprotein_coexpr": 2.0, "ecl_divergence": 2.0, "expansion": 1.0,
     "og_confidence": 1.0, "tandem_cluster": 2.5,

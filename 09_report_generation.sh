@@ -335,7 +335,7 @@ Candidates are scored using a weighted combination of:
     \item \textbf{Purifying selection}: \emph{disabled by default} (\texttt{PURIFYING\_WEIGHT=0} in \texttt{config.sh}) --- chemoreceptor identification rewards diversifying, not housekeeping conservation.
     \item \textbf{Synteny}: JCVI per-gene anchor count (replaces the broken ID-count input).
     \item \textbf{Tandem cluster}: sibling-paralog clustering signal (chemoreceptor-defining).
-    \item \textbf{LSE depth}: position in lineage-specific expansion clades (75\textsuperscript{th}-percentile threshold).
+    \item \textbf{LSE divergence}: position in lineage-specific expansion clades (75\textsuperscript{th}-percentile threshold).
     \item \textbf{Chemosensory expression}: tissue-specific signal where available.
     \item \textbf{G-protein coexpression}: G$\alpha$ family coexpression with the candidate (orthogroup-level).
     \item \textbf{ECL divergence}: extracellular-loop sequence divergence vs.\ paralogs.
@@ -798,7 +798,7 @@ Positive selection & 1.0 & POSITIVE\_WEIGHT \\
 Purifying selection & 0.0 & PURIFYING\_WEIGHT \\
 Synteny conservation & 3.0 & SYNTENY\_WEIGHT \\
 Tandem cluster & 2.5 & TANDEM\_CLUSTER\_WEIGHT \\
-LSE depth & 1.0 & LSE\_DEPTH\_WEIGHT \\
+LSE divergence & 1.0 & LSE\_DIVERGENCE\_WEIGHT \\
 Chemosensory expression & 3.0 & CHEMOSENSORY\_EXPR\_WEIGHT \\
 G-protein coexpression & 2.0 & GPROTEIN\_COEXPR\_WEIGHT \\
 ECL divergence & 1.5 & ECL\_DIVERGENCE\_WEIGHT \\

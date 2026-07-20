@@ -86,7 +86,7 @@ declare -a WEIGHTS_TO_ABLATE=(
     "SYNTENY_WEIGHT"
     "TANDEM_CLUSTER_WEIGHT"
     "EXPR_WEIGHT"
-    "LSE_DEPTH_WEIGHT"
+    "LSE_DIVERGENCE_WEIGHT"
 )
 
 declare -a CSV_ARGS=("--csv" "default=$BASELINE_CSV")

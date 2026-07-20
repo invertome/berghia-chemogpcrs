@@ -37,7 +37,7 @@ def _pivotal_df():
         "phylo":      base({"A": 1, "B": 2, "Z": 3, "Y": 4}),
         "purifying":  base({"B": 1, "A": 2, "Z": 3, "Y": 4}),
         "positive":   base({"Y": 1, "Z": 2, "A": 3, "B": 4}),
-        "lse_depth":  base({"A": 1, "B": 2, "Z": 3, "Y": 4}),
+        "lse_divergence":  base({"A": 1, "B": 2, "Z": 3, "Y": 4}),
         # Y strong on novelty; fillers middling; A/B/Z weak on novelty
         "emb_novelty": {"Y": 1, "F1": 2, "F2": 3, "F3": 4, "F4": 5,
                         "F5": 6, "F6": 7, "Z": 8, "A": 9, "B": 10},
@@ -60,7 +60,7 @@ def _base_only_df():
         "phylo_score": lin,
         "purifying_score": lin,
         "positive_score": lin,
-        "lse_depth_score": lin,
+        "lse_divergence_score": lin,
     })
 
 

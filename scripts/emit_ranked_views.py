@@ -38,10 +38,10 @@ DISCOVERY SCORE (documented, exact — cw-lkhu Task 2):
 
   where rho is the Robust Rank Aggregation (Kolde et al. 2012) score from
   scripts/rank_aggregation.py's rra_score() over the discovery signals
-      {tandem, positive, novelty, lse_depth}
+      {tandem, positive, novelty, lse_divergence, lse_nesting_depth}
   read from the ranked CSV as tandem_cluster_score_norm / positive_score_norm /
-  emb_novelty / lse_depth_score (each falling back to its raw <signal>_score
-  column). RRA ranks each candidate within every signal it has data for and
+  emb_novelty / lse_divergence_score_norm / lse_nesting_depth_score_norm (each
+  falling back to its raw <signal>_score column). RRA ranks each candidate within every signal it has data for and
   takes the most extreme order statistic across signals, so the score is
   WEIGHT-FREE: no DISCOVERY_*_WEIGHT knob enters, and rank aggregation is
   invariant to each signal's monotone normalization. rho is LOWER = better, so
@@ -51,8 +51,11 @@ DISCOVERY SCORE (documented, exact — cw-lkhu Task 2):
   The signal set deliberately excludes phylogeny, synteny, expression and
   evidence_completeness — a divergent LSE paralog is reference-poor and
   evidence-poor by nature, so those axes penalize exactly the candidates this
-  view exists to surface. lse_depth IS included (a positive divergence signal
-  the earlier hand-weighted mean omitted). A candidate votes in a signal only
+  view exists to surface. BOTH LSE depth axes are included -- lse_divergence
+  (cumulative branch length) and lse_nesting_depth (duplication depth); each is
+  a positive divergence signal, they measure different things inside the top
+  quartile that shapes the order, and the earlier hand-weighted mean omitted
+  both. A candidate votes in a signal only
   where it has data: a missing signal column, or a blank value, simply drops
   that candidate's vote for that signal (RRA over whatever remains); if NO
   discovery signal column is present, discovery_score is 0 for every row.
@@ -165,7 +168,8 @@ def build_discovery_view(df: pd.DataFrame,
     """The divergent-LSE view: chemoreceptor candidates that trip at least one
     divergence flag (reference-poor OG / manual-review / high tandem signal),
     sorted by a WEIGHT-FREE discovery score = -log10 of the Robust Rank
-    Aggregation rho over {tandem, positive, novelty, lse_depth}. See the module
+    Aggregation rho over {tandem, positive, novelty, lse_divergence,
+    lse_nesting_depth}. See the module
     header for the exact formula. Every filter and signal column is optional.
 
     The consensus embedding-novelty signal (``emb_novelty``, cw3.6) enters the
@@ -216,14 +220,27 @@ def build_discovery_view(df: pd.DataFrame,
     # mean. RRA ranks each candidate within every signal it has data for and
     # scores the most extreme order statistic across signals; a candidate
     # consistently top-ranked (or extreme on a signal with few competitors)
-    # rises. lse_depth is included (the weighted mean omitted it).
+    # rises. lse_divergence is included (the weighted mean omitted it).
     from rank_aggregation import rra_score
     import numpy as _np
     _signal_cols = {
         "tandem": ("tandem_cluster_score_norm", "tandem_cluster_score"),
         "positive": ("positive_score_norm", "positive_score"),
         "novelty": ("emb_novelty", None),
-        "lse_depth": ("lse_depth_score_norm", "lse_depth_score"),
+        "lse_divergence": ("lse_divergence_score_norm", "lse_divergence_score"),
+        # Bead hf3u: the TOPOLOGICAL companion to lse_divergence. This view is
+        # explicitly about divergent LSE paralogs, and duplication depth (how
+        # many nodes deep inside the expansion a candidate sits) is a divergence
+        # signal in its own right -- it was simply missing here while the
+        # patristic axis was included. The two measure different things: on this
+        # repo's real trees they agree population-wide (spearman +0.897/+0.604)
+        # but barely inside the top quartile that actually shapes an order
+        # (+0.078/+0.034), so listing only one of them silently picked a
+        # different scored set. RRA is weight-free, so adding a voter changes
+        # no weighting decision; a candidate with no nesting measurement simply
+        # does not vote in this signal.
+        "lse_nesting_depth": ("lse_nesting_depth_score_norm",
+                              "lse_nesting_depth_score"),
     }
     per_signal = {}
     for name, (primary, fallback) in _signal_cols.items():
@@ -266,6 +283,13 @@ def main(argv=None) -> int:
         return 1
 
     df = pd.read_csv(args.ranked_csv, dtype=str, keep_default_na=False)
+    # Accept the pre-rename `lse_depth_*` schema under its canonical
+    # `lse_divergence_*` names (announced, never silent). Without this a ranked
+    # CSV written before the rename would drop the divergence signal out of the
+    # discovery RRA entirely -- indistinguishable, at the call site, from a
+    # candidate that genuinely has no divergence measurement.
+    from _rank_candidates_lib import apply_legacy_column_aliases
+    df = apply_legacy_column_aliases(df, source=f"ranked CSV {args.ranked_csv}")
 
     conf = build_confidence_view(df, min_completeness=min_completeness)
     disc = build_discovery_view(df, tandem_high=tandem_high)

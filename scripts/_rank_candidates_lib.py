@@ -13,10 +13,129 @@ docs/plans/2026-05-01-pipeline-review-fixes.md). Bead refs in docstrings.
 from __future__ import annotations
 
 import math
+import os
 import re
+import sys
 from typing import Iterable, Mapping, Optional, Sequence
 
 import numpy as np
+
+
+# -----------------------------------------------------------------------------
+# `lse_depth` -> `lse_divergence` rename (2026-07-20) — persisted-schema compat
+# -----------------------------------------------------------------------------
+#
+# The axis was named for nesting depth but measures CUMULATIVE BRANCH LENGTH
+# (divergence = rate x time). Its companion `lse_nesting_depth` measures the
+# topological quantity. The old name therefore denoted the wrong thing and was
+# renamed; `lse_nesting_depth` is deliberately NOT touched.
+#
+# The rename crosses a persisted schema (written CSV columns) and a public
+# configuration surface (env vars), so the compatibility policy is explicit:
+#
+#   READ  legacy names are still accepted, via the two resolvers below, and
+#         every acceptance prints a one-time DEPRECATION line naming the file
+#         or variable. A legacy read is therefore never SILENT -- which is the
+#         whole hazard the rename would otherwise introduce, since a ranked CSV
+#         written before the rename would otherwise present no `lse_divergence`
+#         column at all and the axis would quietly vanish from the ranking.
+#   WRITE only the canonical names are ever emitted. Nothing writes `lse_depth_*`
+#         again, so the legacy surface is strictly shrinking.
+#
+# Stale files are NOT rejected: the legacy column holds exactly the same
+# measurement under a wrong label, so refusing it would discard good data and
+# break the signal-independence audit's read of the PRIOR run's ranked CSV
+# (07_candidate_ranking.sh) on the first post-rename run. Absence of BOTH names
+# remains "unavailable" -- never zero.
+LEGACY_COLUMN_ALIASES = {
+    "lse_divergence_score": "lse_depth_score",
+    "lse_divergence_score_norm": "lse_depth_score_norm",
+    "has_lse_divergence_data": "has_lse_depth_data",
+}
+
+LEGACY_ENV_ALIASES = {
+    "LSE_DIVERGENCE_WEIGHT": "LSE_DEPTH_WEIGHT",
+    "LSE_DIVERGENCE_PERCENTILE": "LSE_DEPTH_PERCENTILE",
+}
+
+_LEGACY_WARNED: set = set()
+
+
+def _warn_once(key, message) -> None:
+    """Emit ``message`` to stderr the first time ``key`` is seen this process."""
+    if key in _LEGACY_WARNED:
+        return
+    _LEGACY_WARNED.add(key)
+    print(message, file=sys.stderr)
+
+
+def apply_legacy_column_aliases(df, source="ranked CSV"):
+    """Rename any pre-rename `lse_depth_*` columns in ``df`` to their canonical
+    `lse_divergence_*` names, announcing each one.
+
+    Call this ONCE immediately after reading a ranked CSV, rather than
+    threading a fallback through every per-signal lookup: a single
+    normalization point cannot miss a consumer, and it makes the canonical
+    name the only thing any downstream code has to know about.
+
+    A canonical column already present WINS -- the legacy column is then left
+    untouched rather than overwriting it, so a hand-merged file carrying both
+    cannot silently substitute the stale copy.
+
+    Returns ``df`` (renamed in place via ``DataFrame.rename``; the caller must
+    use the return value).
+    """
+    if df is None or not hasattr(df, "columns"):
+        return df
+    present = set(df.columns)
+    mapping = {
+        legacy: canonical
+        for canonical, legacy in LEGACY_COLUMN_ALIASES.items()
+        if legacy in present and canonical not in present
+    }
+    if not mapping:
+        return df
+    for legacy, canonical in sorted(mapping.items()):
+        _warn_once(
+            ("column", source, legacy),
+            f"DEPRECATION: {source} carries the pre-rename column '{legacy}'; "
+            f"reading it as '{canonical}'. The lse_depth axis was renamed to "
+            f"lse_divergence (it measures cumulative branch length, not nesting "
+            f"depth). Re-run stage 07 to emit the canonical schema.",
+        )
+    return df.rename(columns=mapping)
+
+
+def getenv_renamed(name, default, *, cast=float):
+    """Read env var ``name``, falling back to its pre-rename alias.
+
+    Precedence is canonical-first: if both are set the canonical name wins and
+    the legacy one is reported as ignored, so a half-migrated environment can
+    never silently apply the value the operator did NOT intend. A legacy-only
+    read is honoured and announced. Neither set -> ``default``.
+    """
+    legacy_name = LEGACY_ENV_ALIASES.get(name)
+    canonical = os.getenv(name)
+    legacy = os.getenv(legacy_name) if legacy_name else None
+
+    if canonical is not None:
+        if legacy is not None and legacy != canonical:
+            _warn_once(
+                ("env-both", name),
+                f"DEPRECATION: both {name}={canonical} and the pre-rename "
+                f"{legacy_name}={legacy} are set; using {name}. Unset "
+                f"{legacy_name}.",
+            )
+        return cast(canonical)
+    if legacy is not None:
+        _warn_once(
+            ("env", legacy_name),
+            f"DEPRECATION: {legacy_name} is the pre-rename name of {name} and "
+            f"is still honoured, but will not be read forever. Rename it to "
+            f"{name}.",
+        )
+        return cast(legacy)
+    return cast(default)
 
 
 # -----------------------------------------------------------------------------

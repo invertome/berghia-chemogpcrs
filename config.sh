@@ -490,6 +490,34 @@ export SCAN_DERIVED_CANDIDATES_DIR="${SCAN_DERIVED_CANDIDATES_DIR:-${RESULTS_DIR
 # Retained here for back-compatibility (env var read by old resume jobs).
 export ORTHOFINDER_REF_GROUPS="${ORTHOFINDER_REF_GROUPS:-all}"
 
+# --- QUARANTINE: is the OrthoFinder orthogroup set trustworthy? -------------
+# Default 0 (NOT trusted). While this is 0, every orthogroup-derived signal
+# reports itself UNAVAILABLE (has_*_data = False) instead of voting, and drops
+# out of both the numerator and the denominator of every score it feeds.
+#
+# WHY (measured 2026-07-20): 426 of the 427 FASTAs fed to the stage-03
+# OrthoFinder run are Nath et al. reference data (239 from one_to_one_ortholog/,
+# 187 from lse/ — verified by identical sequence counts and accessions against
+# references/nath_et_al/). The only non-Nath input is the Berghia file. That run
+# predates, by 13 days, the 2026-05-28 decision that Nath references are not
+# consumed by stage 03 or 04 and that references/nath_et_al/ is inactive in the
+# main flow, and it was never redone — its replacement is a scan over all ~557
+# proteomes, which needs Phase 1f (still running). So every orthogroup, and
+# therefore every signal derived from one, currently encodes a dataset the
+# project has decided does not exist.
+#
+# FLIP THIS TO 1 WHEN, AND ONLY WHEN, ALL of these hold:
+#   1. Phase 1f has drained and the full-scan candidate set exists.
+#   2. Stage 03 OrthoFinder has been RE-RUN on scan-derived candidates
+#      (SCAN_DERIVED_CANDIDATES_DIR), with NO input drawn from
+#      references/nath_et_al/.
+#   3. The resulting Orthogroups.tsv has been spot-audited to confirm no
+#      ref_lse_* / ref_one_to_one_ortholog_* (Nath-derived) members remain.
+# Flipping it is a one-line change here; nothing else has to be edited, and no
+# code path was deleted — this is a quarantine pending replacement data, not a
+# removal.
+export ORTHOLOGY_SOURCE_TRUSTED="${ORTHOLOGY_SOURCE_TRUSTED:-0}"
+
 # --- Orthogroup Confidence Score ---
 export OG_CONFIDENCE_WEIGHT=1
 
@@ -661,7 +689,21 @@ export TANDEM_CLUSTERS_PLOT_PREFIX="${TANDEM_CLUSTERS_PLOT_PREFIX:-${TANDEM_CLUS
 # artifact, e.g. Galpha_olf absent in seq but expressed by HCR in fed slugs).
 # Treat expression as a SOFT signal only; never as a hard gate.
 export EXPR_WEIGHT=1            # Weight for expression data (tissue-specific enrichment) — soft signal
-export LSE_DEPTH_WEIGHT=1       # Weight for lineage-specific expansion depth
+# Renamed from LSE_DEPTH_WEIGHT (2026-07-20). This axis scores CUMULATIVE
+# BRANCH LENGTH inside a lineage-specific expansion — divergence (rate x time),
+# NOT nesting depth. LSE_NESTING_DEPTH_WEIGHT below is the topological measure.
+# rank_candidates.py still honours the old name and says so on stderr.
+export LSE_DIVERGENCE_WEIGHT=1        # Weight for LSE divergence (cumulative branch length)
+# Bead hf3u: the topological companion axis (root-to-tip NODE COUNT = duplication
+# depth), previously read only from the environment and never exported here, so
+# it silently ran at its getenv default.
+#
+# MUST STAY NON-ZERO. rank_aggregation.excluded_signals_from_weights reads a
+# weight of EXACTLY 0 as an explicit EXCLUSION, not as a small weight, so
+# setting this to 0 does not merely down-weight the axis — it removes it from
+# the vote entirely under the production RANK_METHOD=rankagg default, silently.
+# To retire the axis, do it explicitly via RANKAGG_EXCLUDED_SIGNALS.
+export LSE_NESTING_DEPTH_WEIGHT=1     # Weight for LSE nesting depth (node count) — never set to 0
 
 # --- Two ranked views (bead 1nr) ---
 # scripts/emit_ranked_views.py re-projects the single composite-sorted ranked
@@ -671,11 +713,13 @@ export LSE_DEPTH_WEIGHT=1       # Weight for lineage-specific expansion depth
 #   * DISCOVERY view  — high-novelty divergent-LSE candidates a single
 #     completeness-rewarding composite would bury, sorted by a weight-free
 #     discovery score = -log10 of the Robust Rank Aggregation over the tandem,
-#     positive-selection, embedding-novelty (cw3.6) and lse_depth signals.
+#     positive-selection, embedding-novelty (cw3.6), lse_divergence and
+#     lse_nesting_depth signals.
 export CONFIDENCE_MIN_COMPLETENESS="${CONFIDENCE_MIN_COMPLETENESS:-0.7}"  # confidence-view evidence_completeness floor
 export DISCOVERY_TANDEM_HIGH="${DISCOVERY_TANDEM_HIGH:-0.5}"              # tandem_cluster_score_norm "high" cutoff for discovery membership (~cluster size >=4)
 # DEPRECATED (cw-lkhu Task 2): the discovery view is now ordered by a weight-free
-# Robust Rank Aggregation over {tandem, positive, novelty, lse_depth}, so these
+# Robust Rank Aggregation over {tandem, positive, novelty, lse_divergence,
+# lse_nesting_depth}, so these
 # hand-picked discovery-score weights no longer have any effect. Left commented
 # for provenance; emit_ranked_views.py no longer reads them.
 #   DISCOVERY_TANDEM_WEIGHT    (was 2.0)  discovery-score weight on the tandem signal
@@ -697,7 +741,7 @@ export OTHER_GPCR_REF_WEIGHT=1.0      # Weight for other GPCR references
 # --- Statistical Thresholds ---
 export ABSREL_FDR_THRESHOLD=0.05      # FDR threshold for significant selection
 export BOOTSTRAP_THRESHOLD=70         # Minimum bootstrap support for confident nodes
-export LSE_DEPTH_PERCENTILE=75        # Percentile for "deep" LSE classification
+export LSE_DIVERGENCE_PERCENTILE=75        # Percentile for "deep" LSE classification
 
 # Whole-pipeline permutation null (scripts/permutation_null.py): empirical p-value
 # that the ranking's top-k separation beats a candidate<->signal-shuffled null.

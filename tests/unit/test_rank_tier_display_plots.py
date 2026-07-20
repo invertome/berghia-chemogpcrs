@@ -29,7 +29,7 @@ TIERS = ("high", "plausible", "tail")
 # Component columns gate plot_ranking's multi-panel path (has_components).
 COMPONENT_COLUMNS = [
     "phylo_score", "purifying_score", "positive_score",
-    "synteny_score", "expression_score", "lse_depth_score",
+    "synteny_score", "expression_score", "lse_divergence_score",
 ]
 RANKED_COLUMNS = (
     ["id", "rank_score", "confidence_tier", "rank_tier", "p_top_k",

@@ -14,7 +14,7 @@ from scipy.stats import spearmanr
 
 SIGNAL_COLUMNS = [
     "phylo_score", "purifying_score", "positive_score", "synteny_score",
-    "expression_score", "lse_depth_score",
+    "expression_score", "lse_divergence_score",
     # Bead hf3u: the two depth axes must BOTH reach this matrix -- deciding
     # whether they are redundant is this audit's job, and it can only make that
     # call if it sees both. Flag suffix-swaps correctly
@@ -47,6 +47,10 @@ FLAG_OVERRIDES = {
 
 def load_signal_matrix(csv_path):
     df = pd.read_csv(csv_path)
+    # 07_candidate_ranking.sh feeds this the PRIOR run's ranked CSV, so it is
+    # the reader most likely to meet the pre-rename `lse_depth_*` schema.
+    from _rank_candidates_lib import apply_legacy_column_aliases
+    df = apply_legacy_column_aliases(df, source=f"signal-independence input {csv_path}")
     cols = [c for c in SIGNAL_COLUMNS if c in df.columns]
     for c in SIGNAL_COLUMNS:
         if c not in df.columns:

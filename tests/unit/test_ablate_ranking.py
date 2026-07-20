@@ -32,14 +32,14 @@ import ablate_ranking as ar
 # The full production weight set (rank_candidates.py's *_WEIGHT env
 # defaults). NOTE the fair scorer's key is 'expression' (fed by EXPR_WEIGHT),
 # not 'expr', and includes tandem_cluster (2.5). Bead hf3u added
-# lse_nesting_depth (1.0), the topological companion to lse_depth, taking the
+# lse_nesting_depth (1.0), the topological companion to lse_divergence, taking the
 # sum from 20.5 to 21.5. Passed explicitly wherever a test needs exact,
 # hand-computable numbers.
 DEFAULT_WEIGHTS = {
     "phylo": 2.0,
     "purifying": 1.0,
     "positive": 1.0,
-    "lse_depth": 1.0,
+    "lse_divergence": 1.0,
     "lse_nesting_depth": 1.0,
     "synteny": 3.0,
     "expression": 1.0,
@@ -54,7 +54,7 @@ TOTAL_WEIGHT = 21.5
 
 WEIGHT_ENV_VARS = [
     "PHYLO_WEIGHT", "PURIFYING_WEIGHT", "POSITIVE_WEIGHT", "SYNTENY_WEIGHT",
-    "EXPR_WEIGHT", "LSE_DEPTH_WEIGHT", "CHEMOSENSORY_EXPR_WEIGHT",
+    "EXPR_WEIGHT", "LSE_DIVERGENCE_WEIGHT", "CHEMOSENSORY_EXPR_WEIGHT",
     "GPROTEIN_COEXPR_WEIGHT", "ECL_DIVERGENCE_WEIGHT", "EXPANSION_WEIGHT",
     "OG_CONFIDENCE_WEIGHT", "TANDEM_CLUSTER_WEIGHT",
     "LSE_NESTING_DEPTH_WEIGHT",
@@ -74,7 +74,7 @@ def _full_row(id_, **overrides):
         "phylo_score_norm": 0.0,
         "purifying_score_norm": 0.0,
         "positive_score_norm": 0.0,
-        "lse_depth_score_norm": 0.0,
+        "lse_divergence_score_norm": 0.0,
         # hf3u: the topological depth axis is GATED (it must report itself
         # unavailable where it could not be measured), so it defaults to
         # "no data" like the other gated axes rather than to a present zero.
@@ -112,7 +112,7 @@ def _direct_fair_score(row, weights):
         "phylo": row.get("phylo_score_norm"),
         "purifying": row.get("purifying_score_norm"),
         "positive": row.get("positive_score_norm"),
-        "lse_depth": row.get("lse_depth_score_norm"),
+        "lse_divergence": row.get("lse_divergence_score_norm"),
         "lse_nesting_depth": (row.get("lse_nesting_depth_score_norm")
                               if row.get("has_lse_nesting_depth_data") else None),
         "synteny": row.get("synteny_score_norm") if row.get("has_synteny_data") else None,
@@ -367,9 +367,9 @@ def test_ablate_uses_production_defaults_when_weights_not_given(sparse_vs_dense_
 def test_ablate_drop_signals_applies_on_top_of_custom_weights():
     df = pd.DataFrame([
         _full_row("g1", phylo_score_norm=1.0),
-        _full_row("g2", lse_depth_score_norm=1.0),
+        _full_row("g2", lse_divergence_score_norm=1.0),
     ])
-    custom_weights = {"phylo": 5.0, "lse_depth": 1.0}
+    custom_weights = {"phylo": 5.0, "lse_divergence": 1.0}
     # g1 wins on phylo under custom weights...
     assert ar.ablate(df, weights=custom_weights) == ["g1", "g2"]
     # ...but dropping 'phylo' flips it to g2.

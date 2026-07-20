@@ -32,7 +32,7 @@ import rank_aggregation as ra
 
 # Was 12; bead hf3u added `lse_nesting_depth` as a 13th core signal --
 # topological nesting depth (root-to-tip node count) alongside the existing
-# `lse_depth` (cumulative branch length). They are deliberately NOT fused: on
+# `lse_divergence` (cumulative branch length). They are deliberately NOT fused: on
 # this repo's real trees they correlate +0.897/+0.604 population-wide but only
 # +0.078/+0.034 within the scored top quartile, and there is no positive
 # control that could arbitrate them, so both vote and the independence audit

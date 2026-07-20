@@ -185,7 +185,7 @@ def _extract_results_append_dict() -> dict:
         'has_expression': False,
         'lse_score': 0.0,
         'raw_depth': 0.0,
-        'has_lse_depth': False,   # hf3u: lse_depth availability flag
+        'has_lse_divergence': False,   # hf3u: lse_divergence availability flag
         # hf3u: the topological nesting-depth axis, emitted alongside the
         # patristic one (see tests/unit/test_hf3u_nesting_depth_axis.py).
         'lse_nesting_score': 0.0,
@@ -207,6 +207,11 @@ def _extract_results_append_dict() -> dict:
         'has_tandem': False,
         'cds_source': 'native',
         'og_dnds_reliability': {},
+        # The orthology quarantine (ORTHOLOGY_SOURCE_TRUSTED) decides whether
+        # dnds_reliability_weight is a real number or NaN, so the result-dict
+        # literal now references it. Bound True here because this test is about
+        # the 'orthogroup' KEY existing, not about the quarantine.
+        'ORTHOLOGY_SOURCE_TRUSTED': True,
         'cand_og': 'OG_TEST',
         'evidence_completeness': 0.0,
         '__builtins__': __builtins__,

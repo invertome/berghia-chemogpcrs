@@ -447,7 +447,7 @@ validate_parameter_ranges() {
     fi
 
     # Check ranking weights sum to something reasonable
-    local weight_sum=$((PHYLO_WEIGHT + PURIFYING_WEIGHT + POSITIVE_WEIGHT + SYNTENY_WEIGHT + EXPR_WEIGHT + LSE_DEPTH_WEIGHT))
+    local weight_sum=$((PHYLO_WEIGHT + PURIFYING_WEIGHT + POSITIVE_WEIGHT + SYNTENY_WEIGHT + EXPR_WEIGHT + LSE_DIVERGENCE_WEIGHT))
     if [ "$weight_sum" -gt 0 ]; then
         print_ok "Ranking weights sum to $weight_sum"
     else

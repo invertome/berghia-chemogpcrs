@@ -61,16 +61,22 @@ from _rank_candidates_lib import calculate_fair_rank_score  # noqa: E402
 # score is None = "missing", which the fair scorer excludes from the
 # available-weight numerator but still counts in the total-weight
 # denominator — that is the missingness penalty). The four base axes
-# (phylo/purifying/positive/lse_depth) are always contributed. NOTE the
+# (phylo/purifying/positive/lse_divergence) are always contributed. NOTE the
 # 'expression' weight key is fed by the EXPR_WEIGHT env var, and
 # tandem_cluster (the field's signature chemoreceptor signal) is the 12th.
 _SIGNAL_SPEC = [
     # (weight_key, score_norm_column, has_flag_column_or_None, env_var, default)
     ("phylo", "phylo_score_norm", None, "PHYLO_WEIGHT", 2.0),
-    ("purifying", "purifying_score_norm", None, "PURIFYING_WEIGHT", 1.0),
-    ("positive", "positive_score_norm", None, "POSITIVE_WEIGHT", 1.0),
-    ("lse_depth", "lse_depth_score_norm", None, "LSE_DEPTH_WEIGHT", 1.0),
-    # Bead hf3u: the topological companion to lse_depth (node count vs
+    # Gated on has_dnds_data, mirroring rank_candidates.py's production scorer.
+    # These were ungated, so a candidate aBSREL never reported on contributed a
+    # full-weight present 0.0 to the ablation. That matters most under the
+    # orthology quarantine (ORTHOLOGY_SOURCE_TRUSTED=0), where the flag is False
+    # for every candidate: ungated, the ablation would keep "measuring" the
+    # contribution of an axis that is not voting in production at all.
+    ("purifying", "purifying_score_norm", "has_dnds_data", "PURIFYING_WEIGHT", 1.0),
+    ("positive", "positive_score_norm", "has_dnds_data", "POSITIVE_WEIGHT", 1.0),
+    ("lse_divergence", "lse_divergence_score_norm", None, "LSE_DIVERGENCE_WEIGHT", 1.0),
+    # Bead hf3u: the topological companion to lse_divergence (node count vs
     # cumulative branch length). Unlike the four base axes it is GATED on its
     # own has_*_data flag, matching how rank_candidates.py's production scorer
     # contributes it -- the axis must drop out where it could not be measured
@@ -128,7 +134,11 @@ def _production_weights() -> Dict[str, float]:
     (fed by EXPR_WEIGHT), not 'expr', and the tandem_cluster axis is
     included with default 2.5.
     """
-    return {key: float(os.getenv(env, default)) for key, _, _, env, default in _SIGNAL_SPEC}
+    # getenv_renamed honours the pre-rename LSE_DEPTH_WEIGHT (announced) for
+    # keys that were renamed, and behaves exactly like os.getenv for the rest.
+    from _rank_candidates_lib import getenv_renamed
+    return {key: getenv_renamed(env, default, cast=float)
+            for key, _, _, env, default in _SIGNAL_SPEC}
 
 
 def _row_scores(row: Mapping[str, Any]) -> Dict[str, Optional[float]]:

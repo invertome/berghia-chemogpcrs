@@ -179,7 +179,7 @@ def aggregate(per_signal_ranklists, method="rra", groups=None):
 #     outputs get joined onto the ranking df in the first place.
 # The four formerly-ungated base signals now name their availability flag, so
 # bead o98's phylo-absence rule (a candidate outside the class-A tree has no
-# meaningful phylo/lse_depth signal, and is judged on its other axes rather
+# meaningful phylo/lse_divergence signal, and is judged on its other axes rather
 # than scored a present 0.0) applies on BOTH ranking paths instead of only the
 # weighted one, and dN/dS gates on whether aBSREL actually reported. Their
 # flags are OPTIONAL: unlike the evidence channels, a df with no flag column
@@ -189,8 +189,8 @@ SIGNAL_SPEC = [
     ("phylo", "has_phylo_data"),
     ("purifying", "has_dnds_data"),
     ("positive", "has_dnds_data"),
-    ("lse_depth", "has_phylo_data"),
-    # Bead hf3u: TWO depth axes, deliberately not fused. `lse_depth` scores
+    ("lse_divergence", "has_phylo_data"),
+    # Bead hf3u: TWO depth axes, deliberately not fused. `lse_divergence` scores
     # cumulative branch length (divergence = rate x time); `lse_nesting_depth`
     # scores root-to-tip node count (duplication depth). Measured on this
     # repo's real trees they agree population-wide (spearman +0.897 / +0.604)
@@ -200,7 +200,7 @@ SIGNAL_SPEC = [
     # pipeline is subtractive -- so both vote and
     # audit_signal_ranking_independence.py decides empirically, via the group
     # map rank_candidates._load_signal_groups feeds back in here, whether they
-    # are redundant enough to count as one. Unlike lse_depth it gates on its
+    # are redundant enough to count as one. Unlike lse_divergence it gates on its
     # OWN flag: it is measured from its own population against its own
     # threshold, and is NOT in _OPTIONAL_FLAG_SIGNALS, so a CSV predating the
     # axis skips it rather than voting blind.
@@ -235,7 +235,7 @@ SIGNAL_SPEC = [
 # whose absence means "this CSV predates the flag", not "no data". Keeping the
 # fallback is what stops a legacy ranked CSV from producing an EMPTY ranklist
 # set (a gated signal with no flag column is skipped entirely).
-_OPTIONAL_FLAG_SIGNALS = frozenset({"phylo", "purifying", "positive", "lse_depth"})
+_OPTIONAL_FLAG_SIGNALS = frozenset({"phylo", "purifying", "positive", "lse_divergence"})
 
 
 def excluded_signals_from_weights(weights, env_var="RANKAGG_EXCLUDED_SIGNALS"):
@@ -293,6 +293,17 @@ def build_ranklists_from_df(df, id_col="id", excluded=None):
     omitting it reproduces the previous behaviour exactly.
     """
     excluded = set(excluded or ())
+    # Normalize the pre-rename `lse_depth_*` schema to `lse_divergence_*`
+    # BEFORE any column lookup. This is the shared aggregation entry point
+    # (rankagg, rank_confidence, compare_ranking_methods, shortlist_impact all
+    # arrive here), so doing it once here is what stops a ranked CSV written
+    # before the rename from quietly contributing NO lse_divergence ranklist --
+    # which would read as "this candidate has no divergence signal" rather than
+    # as the stale-schema problem it actually is. Announced, never silent; see
+    # _rank_candidates_lib.apply_legacy_column_aliases.
+    from _rank_candidates_lib import apply_legacy_column_aliases
+    df = apply_legacy_column_aliases(df, source="rank-aggregation input")
+
     ids = list(df[id_col])
     ranklists = {}
     for spec in SIGNAL_SPEC:

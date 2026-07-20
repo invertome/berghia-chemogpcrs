@@ -19,7 +19,7 @@ weights as RRA inputs: zero-weight signals are named, the exclusion is
 visible in the emitted provenance, and RANKAGG_EXCLUDED_SIGNALS can override
 it in either direction.
 
-Same shape, second half: `phylo` and `lse_depth` are ungated (flag None) in
+Same shape, second half: `phylo` and `lse_divergence` are ungated (flag None) in
 SIGNAL_SPEC but gate on `has_phylo_data` in the weighted scorer
 (rank_candidates.py:1513-1514), so bead o98's phylo-absence fix is live on
 only one of the two ranking paths.
@@ -86,7 +86,7 @@ def _df():
             "phylo_score_norm": 1.0 - i / N,
             "purifying_score_norm": i / N,
             "positive_score_norm": 1.0 - i / N,
-            "lse_depth_score_norm": 1.0 - i / N,
+            "lse_divergence_score_norm": 1.0 - i / N,
             "has_phylo_data": True,
             "has_dnds_data": True,
         })
@@ -95,7 +95,7 @@ def _df():
         "phylo_score_norm": 0.35,
         "purifying_score_norm": 5.0,   # best on the zero-weight axis
         "positive_score_norm": 0.35,
-        "lse_depth_score_norm": 0.35,
+        "lse_divergence_score_norm": 0.35,
         "has_phylo_data": True,
         "has_dnds_data": True,
     })
@@ -135,16 +135,16 @@ def test_rerank_output_honours_the_exclusion(monkeypatch) -> None:
 
 
 # --------------------------------------------------------------------------
-# phylo / lse_depth must gate on has_phylo_data on BOTH paths (bead o98)
+# phylo / lse_divergence must gate on has_phylo_data on BOTH paths (bead o98)
 # --------------------------------------------------------------------------
 
-def test_phylo_and_lse_depth_gate_on_has_phylo_data() -> None:
+def test_phylo_and_lse_divergence_gate_on_has_phylo_data() -> None:
     spec = {entry[0]: entry[1] for entry in ra.SIGNAL_SPEC}
     assert spec["phylo"] == "has_phylo_data", (
         "phylo votes unconditionally under rankagg while the weighted scorer "
         "gates it on has_phylo_data (bead o98)"
     )
-    assert spec["lse_depth"] == "has_phylo_data"
+    assert spec["lse_divergence"] == "has_phylo_data"
 
 
 def test_selection_axes_gate_on_has_dnds_data() -> None:
@@ -156,15 +156,15 @@ def test_selection_axes_gate_on_has_dnds_data() -> None:
 def test_candidate_outside_the_tree_casts_no_phylo_vote() -> None:
     df = pd.DataFrame([
         {"id": "in_tree", "phylo_score_norm": 0.9,
-         "lse_depth_score_norm": 0.9, "has_phylo_data": True},
+         "lse_divergence_score_norm": 0.9, "has_phylo_data": True},
         {"id": "off_tree", "phylo_score_norm": 0.0,
-         "lse_depth_score_norm": 0.0, "has_phylo_data": False},
+         "lse_divergence_score_norm": 0.0, "has_phylo_data": False},
     ])
     lists = ra.build_ranklists_from_df(df)
     assert "off_tree" not in lists.get("phylo", {}), (
         "an off-tree candidate must have no phylo signal, not a present 0.0"
     )
-    assert "off_tree" not in lists.get("lse_depth", {})
+    assert "off_tree" not in lists.get("lse_divergence", {})
     assert "in_tree" in lists["phylo"]
 
 
@@ -172,7 +172,7 @@ def test_missing_flag_column_keeps_the_base_signals_voting() -> None:
     """Legacy CSVs with no has_phylo_data column must not lose every signal.
 
     Gated signals whose flag column is absent are skipped entirely, so making
-    phylo/lse_depth/purifying/positive gated would silently empty the whole
+    phylo/lse_divergence/purifying/positive gated would silently empty the whole
     ranklist for any pre-flag CSV. They must fall back to voting.
     """
     df = pd.DataFrame([

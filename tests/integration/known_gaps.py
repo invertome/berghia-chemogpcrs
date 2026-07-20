@@ -105,11 +105,14 @@ KNOWN_GAPS: dict[tuple[str, str], tuple[str, str]] = {
         "Third alternative of the same fallback chain (gene-count table at "
         "the Results_* root rather than under Orthogroups/).",
     ),
-    ("scripts/rank_candidates.py", "${RESULTS}/orthogroups/input/OrthoFinder/Results_*/Resolved_Gene_Trees"): (
+    ("scripts/rank_candidates.py", "${RESULTS}/orthogroups/input/OrthoFinder/Results_*/Gene_Trees"): (
         EXTERNAL_TOOL,
-        "OrthoFinder writes Resolved_Gene_Trees itself. The ROOT is correct "
-        "here -- this is the post-fix path; the pre-fix probe used "
-        "results/orthofinder/ and is what the canary catches.",
+        "OrthoFinder writes Gene_Trees itself. The ROOT is correct here -- this "
+        "is the post-fix path; the pre-fix probe used results/orthofinder/ and "
+        "is what the canary catches. Bead g416 repointed this from "
+        "Resolved_Gene_Trees/ (internal labels are node names 'n1','n2',... so "
+        "the og_confidence axis could never find a support value) to "
+        "Gene_Trees/ (368 of 430 carry real support, 897 distinct values).",
     ),
     ("06_synteny_and_mapping.sh", "${RESULTS}/synteny/jcvi/berghia_vs_*/berghia.*.lifted.anchors"): (
         EXTERNAL_TOOL,

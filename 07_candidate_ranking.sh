@@ -408,6 +408,19 @@ fi
 # on dN/dS estimates from sparse reference CDS.
 COV_REF_CDS="${RESULTS_DIR}/reference_sequences/cds/all_references_cds.fna"
 COV_OG_TSV=$(resolve_orthogroups_tsv "${RESULTS_DIR}/orthogroups" || true)
+# Orthology quarantine: these columns are computed from Orthogroups.tsv, so
+# under ORTHOLOGY_SOURCE_TRUSTED=0 they must not be produced at all. Note this
+# is NOT merely cosmetic — og_dnds_reliability=='low' is a MEMBERSHIP disjunct
+# for the discovery view (emit_ranked_views.py). Running the augmenter with an
+# untrusted/absent OG mapping makes it assign 'low' to every candidate, which
+# would sweep the entire cohort into the discovery shortlist on no evidence.
+# Omitting the columns entirely is what makes emit_ranked_views take its
+# documented "column absent -> disjunct skipped" path, i.e. unavailable rather
+# than a fabricated value.
+if [ "${ORTHOLOGY_SOURCE_TRUSTED:-0}" != "1" ]; then
+    COV_OG_TSV=""
+    log "Quarantine: skipping OG-coverage columns (og_n_ref_cds/og_n_total/og_dnds_reliability) -- orthogroups are Nath-derived and not trusted"
+fi
 if [ -f "$HCR_AUG_INPUT" ] && [ -f "$COV_REF_CDS" ] && [ -n "$COV_OG_TSV" ]; then
     python3 "${SCRIPTS_DIR}/add_og_coverage_columns.py" \
         --ranked-csv "$HCR_AUG_INPUT" \

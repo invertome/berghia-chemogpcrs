@@ -114,7 +114,7 @@ def test_build_ranklists_base_always_present_gated_by_flag():
             "phylo_score_norm": [0.9, 0.5, 0.1],
             "purifying_score_norm": [0.1, 0.5, 0.9],
             "positive_score_norm": [0.2, 0.4, 0.6],
-            "lse_depth_score_norm": [0.3, 0.3, 0.3],
+            "lse_divergence_score_norm": [0.3, 0.3, 0.3],
             "synteny_score_norm": [0.8, 0.2, 0.5],
             "has_synteny_data": [True, False, True],   # y gated OUT of synteny
             "gprotein_coexpr_score_norm": [0.7, 0.6, 0.5],
@@ -123,7 +123,7 @@ def test_build_ranklists_base_always_present_gated_by_flag():
     )
     rl = ra.build_ranklists_from_df(df)
     # 4 base signals always present for every id
-    for base in ("phylo", "purifying", "positive", "lse_depth"):
+    for base in ("phylo", "purifying", "positive", "lse_divergence"):
         assert set(rl[base]) == {"x", "y", "z"}
     # gated signal: only ids whose has_*_data is True
     assert set(rl["synteny"]) == {"x", "z"}
@@ -142,7 +142,7 @@ def test_build_ranklists_falls_back_to_raw_score_columns():
             "phylo_score": [0.9, 0.1],
             "purifying_score": [0.1, 0.9],
             "positive_score": [0.5, 0.5],
-            "lse_depth_score": [0.2, 0.8],
+            "lse_divergence_score": [0.2, 0.8],
         }
     )
     rl = ra.build_ranklists_from_df(df)
@@ -156,7 +156,7 @@ def test_build_ranklists_uses_flag_overrides_for_gprotein_and_ecl():
             "phylo_score_norm": [0.9, 0.1],
             "purifying_score_norm": [0.1, 0.9],
             "positive_score_norm": [0.5, 0.5],
-            "lse_depth_score_norm": [0.2, 0.8],
+            "lse_divergence_score_norm": [0.2, 0.8],
             "ecl_divergence_score_norm": [0.4, 0.6],
             "has_ecl_data": [True, True],            # NOT has_ecl_divergence_data
             "gprotein_coexpr_score_norm": [0.3, 0.7],

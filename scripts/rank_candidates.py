@@ -38,6 +38,7 @@ from _rank_candidates_lib import (
     extract_branch_omega,
     get_selection_scores as _get_selection_scores_corrected,
     calculate_fair_rank_score as _calculate_fair_rank_score_corrected,
+    getenv_renamed,
     load_meme_concordance,
     normalize_synteny_counts,
     parse_support_label,
@@ -122,6 +123,61 @@ ref_categories_file = sys.argv[7] if len(sys.argv) > 7 else None
 # (non-disruptive compare mode wired by 07_candidate_ranking.sh).
 RANK_METHOD = os.getenv('RANK_METHOD', 'weighted')
 
+# --- QUARANTINE: is the OrthoFinder orthogroup set trustworthy? --------------
+# See config.sh's ORTHOLOGY_SOURCE_TRUSTED block for the measurement (426 of 427
+# stage-03 OrthoFinder inputs are Nath et al. data) and for the exact conditions
+# that make it trustworthy again. Default OFF.
+#
+# While OFF, every orthogroup-derived signal must report itself UNAVAILABLE, not
+# zero. That distinction is the whole point: a present 0.0 is a MEASUREMENT that
+# drags a candidate's weighted mean down and counts toward its evidence
+# completeness, whereas an unavailable axis drops out of the numerator AND the
+# denominator and leaves the candidate to be judged on its remaining axes. This
+# module already has the machinery for that (the has_*_data flags), so the
+# quarantine is implemented by starving the LOADERS -- every downstream
+# has_*_data then goes False through the existing, tested path rather than
+# through a second parallel set of conditionals.
+ORTHOLOGY_SOURCE_TRUSTED = os.getenv(
+    'ORTHOLOGY_SOURCE_TRUSTED', '0').strip().lower() in ('1', 'true', 'yes', 'on')
+
+# The scoring axes that are derived from the OrthoFinder orthogroups, and so are
+# quarantined together. Determined by tracing what actually reads an OrthoFinder
+# artifact, NOT by assumption:
+#   og_confidence  <- Gene_Trees/ + Orthogroups.tsv
+#   expansion      <- CAFE, which is computed per-orthogroup AND joined by
+#                     Orthogroups.tsv
+#   purifying,     <- aBSREL/BUSTED/MEME. Stage 05 is a SLURM array over
+#   positive          Orthogroup_Sequences/, so every omega is estimated on a
+#                     codon alignment whose membership IS an orthogroup; and
+#                     absrel_results_lse.csv additionally comes from the 03b LSE
+#                     sets, which are concatenations of per-OG FASTAs. The dN/dS
+#                     axis is therefore orthogroup-derived in full, not merely
+#                     reliability-weighted by one.
+# NOT quarantined (verified independent of OrthoFinder): phylo, lse_divergence
+# and lse_nesting_depth (the class-A tree, built from the per-class pool),
+# synteny (JCVI/minimap2 on genome coordinates), expression, chemosensory_expr,
+# gprotein_coexpr, ecl_divergence (the class-A alignment), tandem_cluster
+# (genome coordinates), and the structural/embedding/microswitch channels.
+QUARANTINED_AXES = frozenset() if ORTHOLOGY_SOURCE_TRUSTED else frozenset({
+    'purifying', 'positive', 'expansion', 'og_confidence',
+})
+
+if not ORTHOLOGY_SOURCE_TRUSTED:
+    print(
+        "=" * 78 + "\n"
+        "ORTHOLOGY QUARANTINE ACTIVE (ORTHOLOGY_SOURCE_TRUSTED=0).\n"
+        "The stage-03 OrthoFinder run was built almost entirely from Nath et al.\n"
+        "data, which this project has decided does not exist. Every\n"
+        "orthogroup-derived axis therefore reports itself UNAVAILABLE rather\n"
+        "than voting: " + ", ".join(sorted(QUARANTINED_AXES)) + ".\n"
+        "These axes are dropped from BOTH the score numerator and the\n"
+        "evidence-completeness denominator, so candidates are ranked on their\n"
+        "remaining axes and are NOT penalized for the missing ones.\n"
+        "No code path was removed. Set ORTHOLOGY_SOURCE_TRUSTED=1 once stage 03\n"
+        "has been re-run on non-Nath input (see config.sh for the conditions).\n"
+        + "=" * 78,
+        file=sys.stderr)
+
 # Ranking weights
 PHYLO_WEIGHT = float(os.getenv('PHYLO_WEIGHT', 2))
 PURIFYING_WEIGHT = float(os.getenv('PURIFYING_WEIGHT', 0))  # adopted default 0 (matches config.sh + _rank_candidates_lib); chemoreceptor ID rewards positive selection, not whole-gene purifying
@@ -145,8 +201,11 @@ POSITIVE_WEIGHT = float(os.getenv('POSITIVE_WEIGHT', 1))    # New: separate from
 DNDS_RELIABILITY_FULL = float(os.getenv('DNDS_RELIABILITY_FULL', 5))
 SYNTENY_WEIGHT = float(os.getenv('SYNTENY_WEIGHT', 3))
 EXPR_WEIGHT = float(os.getenv('EXPR_WEIGHT', 1))
-LSE_DEPTH_WEIGHT = float(os.getenv('LSE_DEPTH_WEIGHT', 1))
-# Bead hf3u: the TOPOLOGICAL companion to LSE_DEPTH_WEIGHT. `lse_depth` scores
+# Renamed from LSE_DEPTH_WEIGHT 2026-07-20: this axis scores CUMULATIVE BRANCH
+# LENGTH (divergence), not nesting depth -- `lse_nesting_depth` is the
+# topological measure. getenv_renamed still honours the old name and says so.
+LSE_DIVERGENCE_WEIGHT = getenv_renamed('LSE_DIVERGENCE_WEIGHT', 1)
+# Bead hf3u: the TOPOLOGICAL companion to LSE_DIVERGENCE_WEIGHT. `lse_divergence` scores
 # cumulative branch length (divergence); `lse_nesting_depth` scores node count
 # (duplication depth). They are separate axes on purpose -- see
 # collect_candidate_nesting_depths for the measurement that separates them.
@@ -190,13 +249,13 @@ ABSREL_FDR_THRESHOLD = float(os.getenv('ABSREL_FDR_THRESHOLD', 0.05))  # New: fo
 BOOTSTRAP_THRESHOLD = float(os.getenv('BOOTSTRAP_THRESHOLD', 70))       # New: minimum support
 
 # LSE threshold percentile
-LSE_DEPTH_PERCENTILE = float(os.getenv('LSE_DEPTH_PERCENTILE', 75))
+LSE_DIVERGENCE_PERCENTILE = getenv_renamed('LSE_DIVERGENCE_PERCENTILE', 75)
 # Same percentile, applied to the topological measure. Kept as its own knob so
-# the two axes can be tuned apart, but defaulted to LSE_DEPTH_PERCENTILE so
+# the two axes can be tuned apart, but defaulted to LSE_DIVERGENCE_PERCENTILE so
 # they select the same-sized tail unless deliberately separated. A percentile
 # (not a constant) is what makes this transfer to another species' tree.
 LSE_NESTING_DEPTH_PERCENTILE = float(
-    os.getenv('LSE_NESTING_DEPTH_PERCENTILE', LSE_DEPTH_PERCENTILE))
+    os.getenv('LSE_NESTING_DEPTH_PERCENTILE', LSE_DIVERGENCE_PERCENTILE))
 
 # Local database directory (for reference categories)
 LOCAL_DB_DIR = os.getenv('LOCAL_DB_DIR', '')
@@ -338,7 +397,7 @@ def annotate_tree_support(tree, source='tree', newick_format=1, quiet=False):
 def collect_candidate_depths(tree, candidate_ids):
     """Root-to-tip depths of every candidate present in the tree.
 
-    This is the POPULATION the ``lse_depth`` threshold is a percentile of, so
+    This is the POPULATION the ``lse_divergence`` threshold is a percentile of, so
     it must be the whole candidate set. Membership is the only criterion: a
     candidate is either a leaf of this tree (measured) or it is not (absent,
     never zero).
@@ -349,7 +408,7 @@ def collect_candidate_depths(tree, candidate_ids):
     tree: 437/437 internal nodes carry parsed support, the per-node pass rate
     at >= 70 is 0.8238, and the median path is 27 nodes, so P(all pass) is
     ~0.5% and the function returned 0 of 439. ``np.percentile`` was therefore
-    never reached, ``LSE_DEPTH_PERCENTILE`` was dead config, and the caller's
+    never reached, ``LSE_DIVERGENCE_PERCENTILE`` was dead config, and the caller's
     hardcoded ``lse_threshold = 0.5`` stood in for it -- putting 98.6% of
     candidates above threshold where the intent is 25%.
 
@@ -636,7 +695,15 @@ def benjamini_hochberg(pvalues):
     return _bh_corrected(pvalues)
 
 
-dnds_data = load_absrel_with_fdr(selective_dir)
+# Quarantine: aBSREL runs per-orthogroup (stage 05 is an array over
+# Orthogroup_Sequences/), so an untrusted orthogroup set makes every omega an
+# estimate over a gene set that should not exist. Starving the dict here is what
+# makes `has_dnds = cand_id in dnds_data` False for every candidate, which is
+# how the axis reports itself unavailable rather than scoring a present 0.0.
+dnds_data = load_absrel_with_fdr(selective_dir) if ORTHOLOGY_SOURCE_TRUSTED else {}
+if not ORTHOLOGY_SOURCE_TRUSTED:
+    print("Quarantine: skipped loading aBSREL results (orthogroup-derived); "
+          "has_dnds_data will be False for every candidate", file=sys.stderr)
 
 
 # --- Load BUSTED-S / BUSTED-MH / MEME OG-level signals (bead -urk) ---
@@ -714,7 +781,13 @@ def load_busted_signals(selective_dir):
     return out
 
 
-busted_meme_signals = load_busted_signals(selective_dir)
+# Quarantine: BUSTED/MEME are per-OG products of the same stage-05 array, and
+# they are joined to a candidate BY its orthogroup. They also silently mutate a
+# ranked axis (up to a 1.43x multiplicative boost on positive_score) with no
+# availability flag of their own, so an untrusted OG join here would move the
+# ranking with nothing recording that it had.
+busted_meme_signals = (load_busted_signals(selective_dir)
+                       if ORTHOLOGY_SOURCE_TRUSTED else {})
 
 
 # --- Load CDS provenance manifest (bead -325) ---
@@ -1166,8 +1239,8 @@ def get_expression_score(candidate_id, expr_data):
     return 0.0, False
 
 
-def get_lse_depth_score(candidate_id, tree, threshold):
-    """Calculate LSE depth score based on tree position.
+def get_lse_divergence_score(candidate_id, tree, threshold):
+    """Calculate LSE divergence score based on tree position.
 
     The SCORE is gated at ``threshold`` (only the deep tail scores), but the
     RAW depth is reported whenever it could be measured. Bead hf3u: this used
@@ -1192,7 +1265,7 @@ def get_lse_depth_score(candidate_id, tree, threshold):
 def get_lse_nesting_depth_score(candidate_id, tree, threshold):
     """Topological nesting depth score: node count, gated at ``threshold``.
 
-    The exact counterpart of ``get_lse_depth_score`` over
+    The exact counterpart of ``get_lse_divergence_score`` over
     ``len(get_ancestors())`` instead of ``get_distance()`` -- see
     ``collect_candidate_nesting_depths`` for why both quantities are carried.
 
@@ -1220,7 +1293,39 @@ OG_CONFIDENCE_WEIGHT = float(os.getenv('OG_CONFIDENCE_WEIGHT', 1))
 
 
 def load_og_trees(results_dir):
-    """Load OrthoFinder resolved gene trees.
+    """Load the OrthoFinder gene trees that carry branch support.
+
+    Bead g416 (2026-07-20). This used to glob ``Resolved_Gene_Trees/``, whose
+    internal labels are OrthoFinder NODE NAMES ('n1', 'n10', ...) carrying no
+    support at all -- so ``get_og_confidence_score`` found no supports and the
+    axis reported itself unavailable for essentially every candidate. Measured
+    on Unity: ``Gene_Trees/`` carries real support in 368 of 430 trees, with 897
+    distinct values (1, 0.999, 0.998, ...). ``Gene_Trees/`` is therefore the
+    only directory of the two that can answer the question this axis asks.
+
+    Two things this repoint MUST get right, both handled here:
+
+    1. SCALE. Those values are PROPORTIONS (0-1) while ``BOOTSTRAP_THRESHOLD``
+       is 70 on the 0-100 percent scale. Comparing 0.999 >= 70 fails at every
+       node, which would produce a constant 0.0 -- the exact inverse of the bug
+       being fixed, and just as silent. ``annotate_tree_support`` resolves the
+       scale ONCE PER TREE via ``resolve_support_scale`` (a tree whose bare
+       values all sit at or below 1.0 is proportion-scaled and multiplied by
+       100), which is precisely what that helper exists for. Resolution must be
+       per tree, not global: a single value is genuinely ambiguous, and these
+       trees come from a different producer than the IQ-TREE ones.
+
+    2. TREES WITH NO SUPPORT. The ~62 trees that carry none must make their
+       candidates report ``has_og_confidence_data = False``, never 0.0 -- an
+       unlabelled tree is an absence of evidence, not evidence of weak support.
+       ``parse_support_label`` returns None for such labels, so ``_parsed_support``
+       stays None and ``get_og_confidence_score`` finds no supports and returns
+       ``(0.0, False)``.
+
+    NB this axis is ORTHOGROUP-DERIVED, so while ORTHOLOGY_SOURCE_TRUSTED is
+    off (the Nath quarantine) it stays dormant regardless of anything here:
+    ``og_trees`` is never even loaded. This repoint makes the axis CORRECT for
+    when non-Nath orthology arrives and the quarantine is lifted.
 
     Returns dict: og_name -> ete3.Tree
     """
@@ -1230,7 +1335,7 @@ def load_og_trees(results_dir):
     og_trees = {}
     n_without_support = 0
     og_tree_dirs = list(Path(results_dir).glob(
-        'orthogroups/input/OrthoFinder/Results_*/Resolved_Gene_Trees'
+        'orthogroups/input/OrthoFinder/Results_*/Gene_Trees'
     ))
 
     for tree_dir in og_tree_dirs:
@@ -1238,10 +1343,7 @@ def load_og_trees(results_dir):
             og_name = tree_file.stem.replace('_tree', '')
             # Bead -i3w9: annotate with the format the tree was actually loaded
             # with -- format=1 keeps support in the label, format=0 in
-            # node.support. NB OrthoFinder's Resolved_Gene_Trees label internal
-            # nodes 'n1', 'n2', ... (node names, measured over 150 real files),
-            # so these trees usually carry no support at all and the
-            # og_confidence axis correctly reports itself unavailable.
+            # node.support.
             try:
                 tree_obj = Tree(str(tree_file), format=1)
                 _, n_sup, _ = annotate_tree_support(
@@ -1257,12 +1359,28 @@ def load_og_trees(results_dir):
             if n_sup == 0:
                 n_without_support += 1
 
-    if og_trees and n_without_support:
+    if not og_trees:
+        return og_trees
+
+    # Report the resolved scale, not just the counts: the whole hazard of this
+    # repoint is a silently mis-scaled comparison against BOOTSTRAP_THRESHOLD,
+    # and a reviewer can only see it went right if the post-resolution range is
+    # in the log. Values here are already on the 0-100 scale.
+    _resolved = [s for tree in og_trees.values()
+                 for n in tree.traverse() if not n.is_leaf()
+                 for s in (getattr(n, '_parsed_support', None),) if s is not None]
+    if _resolved:
+        print(f"OG gene trees: {len(og_trees) - n_without_support}/{len(og_trees)} "
+              f"carry branch support; after per-tree scale resolution support "
+              f"spans {min(_resolved):.1f}-{max(_resolved):.1f} on the 0-100 "
+              f"scale (BOOTSTRAP_THRESHOLD={BOOTSTRAP_THRESHOLD})",
+              file=sys.stderr)
+
+    if n_without_support:
         print(f"Warning: {n_without_support}/{len(og_trees)} orthogroup gene trees "
-              f"carry no branch-support values (OrthoFinder Resolved_Gene_Trees "
-              f"label internal nodes 'n1','n2',... rather than support). The "
-              f"og_confidence axis reports itself unavailable for those "
-              f"candidates rather than scoring them.", file=sys.stderr)
+              f"carry no branch-support values. The og_confidence axis reports "
+              f"itself UNAVAILABLE for those candidates (has_og_confidence_data "
+              f"= False) rather than scoring them 0.0.", file=sys.stderr)
 
     return og_trees
 
@@ -1340,9 +1458,11 @@ def get_og_confidence_score(candidate_id, gene_to_og, og_trees, bootstrap_thresh
         # 1.0 on no evidence at all. It was masked only because ete3 always
         # supplied 1.0, so the `>= 70` branch fired and returned 0.0 instead;
         # repairing the parse without repairing this would have converted a
-        # constant zero into a constant one. This is the real, common case:
-        # OrthoFinder's Resolved_Gene_Trees (what load_og_trees globs) label
-        # internal nodes 'n1', 'n2', ... -- node names, never support values.
+        # constant zero into a constant one. Since bead g416 load_og_trees globs
+        # Gene_Trees/ (which DO carry support) instead of Resolved_Gene_Trees/
+        # (whose labels are node names), so this branch is no longer the common
+        # case -- but it still fires for the ~62 of 430 trees that carry no
+        # support, and for those it must stay "unmeasured", not "measured 0".
         # (0.0, False) matches every other get_*_score helper and lets the
         # evidence-completeness machinery drop the axis from BOTH the numerator
         # and the denominator.
@@ -1396,16 +1516,16 @@ def load_chemosensory_expression(results_dir):
 def evidence_completeness(*, has_phylo_data, has_dnds_data, has_synteny,
                           has_expression, has_lse_data, has_chemo_expr,
                           has_gprotein, has_ecl, has_expansion, has_og_data,
-                          has_tandem):
-    """Fraction of the 11 evidence axes that HAVE DATA for a candidate.
+                          has_tandem, excluded_axes=()):
+    """Fraction of the in-scope evidence axes that HAVE DATA for a candidate.
 
     Availability, never value. Three axes used to be tested with ``score > 0``,
     which conflates "we never measured this" with "we measured it and it came
     out low":
 
-      - ``lse_depth``: get_lse_depth_score() returns 0.0 for any candidate at
+      - ``lse_divergence``: get_lse_divergence_score() returns 0.0 for any candidate at
         or below ``lse_threshold``, and that threshold is the
-        LSE_DEPTH_PERCENTILE (75th) percentile of ALL candidate depths. So ~75%
+        LSE_DIVERGENCE_PERCENTILE (75th) percentile of ALL candidate depths. So ~75%
         of candidates can never score > 0 BY CONSTRUCTION while being perfectly
         well measured. Availability is tree membership -- the same
         ``has_phylo_data`` the phylo axis uses (bead o98).
@@ -1419,20 +1539,37 @@ def evidence_completeness(*, has_phylo_data, has_dnds_data, has_synteny,
     subthreshold depth) crosses the CONFIDENCE_MIN_COMPLETENESS default of 0.7
     and silently drops the candidate out of emit_ranked_views' confidence view.
     """
-    sources = [
-        has_phylo_data,
-        has_dnds_data,
-        has_synteny,
-        has_expression,
-        has_lse_data,
-        has_chemo_expr,
-        has_gprotein,
-        has_ecl,
-        has_expansion,
-        has_og_data,
-        has_tandem,
-    ]
-    return sum(bool(s) for s in sources) / len(sources)
+    # Keyed by the SCORING_WEIGHTS axis name so ``excluded_axes`` can name an
+    # axis the same way every other consumer does. ``purifying``/``positive``
+    # share one availability fact (whether aBSREL reported), so they are one
+    # source here -- named ``dnds`` -- exactly as before.
+    sources = {
+        'phylo': has_phylo_data,
+        'dnds': has_dnds_data,
+        'synteny': has_synteny,
+        'expression': has_expression,
+        'lse_divergence': has_lse_data,
+        'chemosensory_expr': has_chemo_expr,
+        'gprotein_coexpr': has_gprotein,
+        'ecl_divergence': has_ecl,
+        'expansion': has_expansion,
+        'og_confidence': has_og_data,
+        'tandem_cluster': has_tandem,
+    }
+    # An axis that is globally unavailable (the orthology quarantine) must leave
+    # the DENOMINATOR too. Left in, it would depress every candidate's
+    # completeness by a constant that describes a dataset decision rather than
+    # the candidate -- which is invisible in the ranking (a constant cannot
+    # reorder) but decisive at the absolute CONFIDENCE_MIN_COMPLETENESS gate,
+    # where it can quietly empty the confidence view. `dnds` covers both
+    # selection axes, so naming either one excludes it.
+    excluded = set(excluded_axes)
+    if 'purifying' in excluded and 'positive' in excluded:
+        excluded.add('dnds')
+    live = {k: v for k, v in sources.items() if k not in excluded}
+    if not live:
+        return 0.0
+    return sum(bool(s) for s in live.values()) / len(live)
 
 
 def resolve_tissue_weights(tissues, weights_str):
@@ -1917,11 +2054,14 @@ def calculate_rank_score(df, weights):
     # (dN/dS reliability is shrunk upstream). phylo/lse gate on has_phylo_data (o98).
     _axes = [
         ('phylo', 'phylo_score_norm', 'has_phylo_data'),
-        ('lse_depth', 'lse_depth_score_norm', 'has_lse_depth_data'),
+        ('lse_divergence', 'lse_divergence_score_norm', 'has_lse_divergence_data'),
         ('lse_nesting_depth', 'lse_nesting_depth_score_norm',
          'has_lse_nesting_depth_data'),
-        ('purifying', 'purifying_score_norm', None),
-        ('positive', 'positive_score_norm', None),
+        # Gated on has_dnds_data, matching the production scorer. `_optional`
+        # below makes a row that lacks the column keep contributing, so this
+        # tightens behaviour only where the availability is actually recorded.
+        ('purifying', 'purifying_score_norm', 'has_dnds_data'),
+        ('positive', 'positive_score_norm', 'has_dnds_data'),
         ('synteny', 'synteny_score_norm', 'has_synteny_data'),
         # Bead -yfx8: this key MUST match SCORING_WEIGHTS (and therefore the
         # production scorer + the LHS sweep), which use 'expression'. It read
@@ -1942,12 +2082,22 @@ def calculate_rank_score(df, weights):
         ('tandem_cluster', 'tandem_cluster_score_norm', 'has_tandem_cluster_data'),
     ]
 
+    # Axes whose flag column, when ABSENT from the row, means "this row predates
+    # the flag" rather than "no data" -- mirroring
+    # rank_aggregation._OPTIONAL_FLAG_SIGNALS. Only the dN/dS pair needs it: the
+    # other flags have always been written alongside their scores.
+    _optional_flag_axes = {'purifying', 'positive'}
+
     def calc_row(row):
         avail_weight = 0.0
         weighted_sum = 0.0
         for wkey, col, flag in _axes:
-            if flag is not None and not row.get(flag, False):
-                continue
+            if wkey not in weights:
+                continue      # quarantined / not configured: absent, not zero
+            if flag is not None:
+                default = wkey in _optional_flag_axes
+                if not row.get(flag, default):
+                    continue
             v = row.get(col, 0)
             if v is None or (isinstance(v, float) and v != v):   # skip None / NaN
                 continue
@@ -2120,7 +2270,7 @@ def run_leave_one_out_crossval(df, tree, ref_ids, base_weights, n_folds=5):
             df['positive_score_norm'].values * base_weights['positive'] +
             df['synteny_score_norm'].values * base_weights['synteny'] +
             df['expression_score_norm'].values * base_weights['expression'] +
-            df['lse_depth_score_norm'].values * base_weights['lse_depth'] +
+            df['lse_divergence_score_norm'].values * base_weights['lse_divergence'] +
             # hf3u: the topological depth axis participates in cross-validation
             # on the same footing as the patristic one, so the CV diagnostic
             # reflects the axis set the production scorer actually uses.
@@ -2191,26 +2341,26 @@ if t is not None:
 else:
     print("Warning: Skipping depth calculation - tree not available.", file=sys.stderr)
 
-# Bead hf3u: whether an lse_depth threshold could be derived AT ALL. False
+# Bead hf3u: whether an lse_divergence threshold could be derived AT ALL. False
 # means the axis has no measurement for anyone and must report itself
 # unavailable rather than scoring against a substituted constant.
-LSE_DEPTH_AVAILABLE = len(all_depths) > 0
+LSE_DIVERGENCE_AVAILABLE = len(all_depths) > 0
 
-if LSE_DEPTH_AVAILABLE:
-    lse_threshold = np.percentile(all_depths, LSE_DEPTH_PERCENTILE)
-    print(f"LSE depth threshold: {lse_threshold:.4f} "
-          f"({LSE_DEPTH_PERCENTILE}th percentile of {len(all_depths)} "
+if LSE_DIVERGENCE_AVAILABLE:
+    lse_threshold = np.percentile(all_depths, LSE_DIVERGENCE_PERCENTILE)
+    print(f"LSE divergence threshold: {lse_threshold:.4f} "
+          f"({LSE_DIVERGENCE_PERCENTILE}th percentile of {len(all_depths)} "
           f"candidate depths)", file=sys.stderr)
 else:
     # No hardcoded stand-in. The previous fallback (`lse_threshold = 0.5`)
     # fired on EVERY run and was not neutral but INVERTED: 98.6% of candidates
-    # sat above it, where LSE_DEPTH_PERCENTILE=75 intends 25%, so a weight-1
+    # sat above it, where LSE_DIVERGENCE_PERCENTILE=75 intends 25%, so a weight-1
     # axis was near-saturated and backwards. An axis with no measurement is
     # dropped for every candidate, exactly as `phylo` is for non-tree-members.
     lse_threshold = float('inf')
-    print(f"Warning: no candidate was found in the tree, so no lse_depth "
-          f"threshold could be derived (LSE_DEPTH_PERCENTILE="
-          f"{LSE_DEPTH_PERCENTILE}). The lse_depth axis reports itself "
+    print(f"Warning: no candidate was found in the tree, so no lse_divergence "
+          f"threshold could be derived (LSE_DIVERGENCE_PERCENTILE="
+          f"{LSE_DIVERGENCE_PERCENTILE}). The lse_divergence axis reports itself "
           f"UNAVAILABLE for every candidate rather than scoring against a "
           f"substituted constant.", file=sys.stderr)
 
@@ -2253,15 +2403,29 @@ gprotein_coexpr_data = load_gprotein_coexpression(results_dir)
 ecl_divergence_data = load_ecl_divergence(results_dir)
 
 # Phase 5: CAFE expansion data
-cafe_expansion_data = load_cafe_expansion(results_dir)
-gene_to_orthogroup = load_gene_to_orthogroup(results_dir)
+# Quarantine: CAFE is computed over orthogroup gene counts AND joined to a
+# candidate through gene_to_orthogroup, so it is doubly orthogroup-derived.
+# gene_to_orthogroup is the single join key for the expansion / BUSTED-MEME /
+# og_confidence / OG-coverage signals, so emptying it is what takes them all
+# out at once -- and it also makes the emitted `orthogroup` column blank, which
+# is the honest value when the mapping is not to be trusted.
+cafe_expansion_data = load_cafe_expansion(results_dir) if ORTHOLOGY_SOURCE_TRUSTED else {}
+gene_to_orthogroup = load_gene_to_orthogroup(results_dir) if ORTHOLOGY_SOURCE_TRUSTED else {}
 
 # Bead -8st: per-OG dN/dS-axis reliability weights. Used downstream to
 # scale the purifying/positive contributions in the composite so that
 # under-supported OGs (chemoreceptor LSE expansions where miniprot
 # typically fails on most paralogs) don't get full dN/dS weight on
 # what is statistically just noise.
-og_dnds_reliability = load_og_dnds_reliability(results_dir)
+# Quarantine: this weight counts how many of an ORTHOGROUP's members have a
+# recovered reference CDS, so it is meaningless without a trusted orthogroup.
+# Note the distinction that matters here: its usual "no OG resolved" value is
+# 0.0, which is a real instruction ("this omega is unsupported, shrink it to the
+# cohort median"). Under quarantine there is no omega to shrink and no
+# reliability to report, so the column is written NaN (unmeasured) and the
+# shrink step is skipped entirely -- writing 0.0 would assert "measured, and
+# maximally unreliable", which is a plausible value we do not have.
+og_dnds_reliability = load_og_dnds_reliability(results_dir) if ORTHOLOGY_SOURCE_TRUSTED else {}
 
 # Orthogroup gene trees for bootstrap confidence scoring
 og_trees = {}
@@ -2365,10 +2529,10 @@ for cand_id in candidates['id']:
             expr_score = np.log2(1 + mean_tpm)
             has_expression = True
 
-    # LSE depth score. Bead hf3u: available only when the candidate is in the
+    # LSE divergence score. Bead hf3u: available only when the candidate is in the
     # tree AND a threshold could be derived from the candidate population.
-    lse_score, raw_depth = get_lse_depth_score(cand_id, t, lse_threshold)
-    has_lse_depth = bool(has_phylo and LSE_DEPTH_AVAILABLE)
+    lse_score, raw_depth = get_lse_divergence_score(cand_id, t, lse_threshold)
+    has_lse_divergence = bool(has_phylo and LSE_DIVERGENCE_AVAILABLE)
     # Bead hf3u: the topological companion axis. Measured from its own
     # population against its own threshold, so its availability is a genuinely
     # separate fact from the patristic axis's rather than an alias of it.
@@ -2407,13 +2571,17 @@ for cand_id in candidates['id']:
         has_dnds_data=has_dnds,
         has_synteny=has_synteny,
         has_expression=has_expression,
-        has_lse_data=has_lse_depth,
+        has_lse_data=has_lse_divergence,
         has_chemo_expr=has_chemo_expr,
         has_gprotein=has_gprotein,
         has_ecl=has_ecl,
         has_expansion=has_expansion,
         has_og_data=has_og_data,
         has_tandem=has_tandem,
+        # Quarantined axes leave the completeness denominator as well as the
+        # score, so a candidate is not penalized for evidence the pipeline has
+        # decided not to look at.
+        excluded_axes=QUARANTINED_AXES,
     )
 
     results.append({
@@ -2421,7 +2589,7 @@ for cand_id in candidates['id']:
         'phylo_score': phylo_score,
         # o98: whether the candidate is a leaf of the class-A chemoreceptor tree.
         # Non-members (class B/C/F, unclassified, or too divergent to be pooled)
-        # have no meaningful phylo/lse_depth signal, so those axes are dropped
+        # have no meaningful phylo/lse_divergence signal, so those axes are dropped
         # (not scored as a present 0.0) and the candidate is judged on its other
         # axes rather than penalized. Berghia GPCR chemoreceptors are class-A
         # rhodopsin-like; class C chemoreceptors are a vertebrate-only innovation.
@@ -2448,9 +2616,9 @@ for cand_id in candidates['id']:
         'has_synteny_data': has_synteny,
         'expression_score': expr_score,
         'has_expression_data': has_expression,
-        'lse_depth_score': lse_score,
+        'lse_divergence_score': lse_score,
         'raw_tree_depth': raw_depth,
-        'has_lse_depth_data': has_lse_depth,
+        'has_lse_divergence_data': has_lse_divergence,
         # hf3u: topological nesting depth, the duplication-history counterpart
         # of the patristic (divergence) measure above.
         'lse_nesting_depth_score': lse_nesting_score,
@@ -2486,8 +2654,12 @@ for cand_id in candidates['id']:
         # a multiplier on the dN/dS contribution in calculate_rank_score.
         # 0.0 when no OG can be resolved or no reliability map was loaded
         # — that takes dN/dS out of fair-scoring entirely for that row.
+        # NaN under the orthology quarantine: unmeasured, not "measured as
+        # maximally unreliable" (which 0.0 asserts and which would instruct the
+        # shrink step to move every selection score to the cohort median).
         'dnds_reliability_weight': (
-            og_dnds_reliability.get(cand_og, 0.0) if cand_og else 0.0),
+            float('nan') if not ORTHOLOGY_SOURCE_TRUSTED
+            else (og_dnds_reliability.get(cand_og, 0.0) if cand_og else 0.0)),
         'evidence_completeness': completeness
     })
 
@@ -2496,7 +2668,7 @@ df = pd.DataFrame(results)
 # --- Normalize Scores ---
 # Normalize continuous scores to [0,1] range for fair comparison
 normalize_cols = [
-    'phylo_score', 'purifying_score', 'positive_score', 'expression_score', 'lse_depth_score',
+    'phylo_score', 'purifying_score', 'positive_score', 'expression_score', 'lse_divergence_score',
     'lse_nesting_depth_score',
     # NEW score columns
     'chemosensory_expr_score', 'gprotein_coexpr_score', 'ecl_divergence_score', 'expansion_score',
@@ -2534,7 +2706,14 @@ df['tandem_cluster_score_norm'] = df['tandem_cluster_score']
 # never a penalizing signal on any path; a fully-powered candidate is unchanged.
 # Reliability is thus applied exactly once, with no double-count.
 from dnds_reliability import reliability_shrink
-if 'dnds_reliability_weight' in df.columns:
+# Skipped entirely under the orthology quarantine: with no trusted orthogroup
+# there is no reliability measurement, and shrinking toward the cohort median on
+# a NaN weight would silently rewrite the selection columns using a number we do
+# not have. The selection axes are already unavailable at that point anyway.
+if not ORTHOLOGY_SOURCE_TRUSTED:
+    print("Quarantine: skipped the dN/dS reliability shrink "
+          "(no trusted per-OG reliability measurement)", file=sys.stderr)
+elif 'dnds_reliability_weight' in df.columns:
     _rel = dict(zip(df['id'], df['dnds_reliability_weight']))
     for _sig in ('positive_score_norm', 'purifying_score_norm'):
         if _sig in df.columns:
@@ -2561,7 +2740,7 @@ SCORING_WEIGHTS = {
     'phylo': PHYLO_WEIGHT,
     'purifying': PURIFYING_WEIGHT,
     'positive': POSITIVE_WEIGHT,
-    'lse_depth': LSE_DEPTH_WEIGHT,
+    'lse_divergence': LSE_DIVERGENCE_WEIGHT,
     'lse_nesting_depth': LSE_NESTING_DEPTH_WEIGHT,
     'synteny': SYNTENY_WEIGHT,
     'expression': EXPR_WEIGHT,
@@ -2572,6 +2751,24 @@ SCORING_WEIGHTS = {
     'og_confidence': OG_CONFIDENCE_WEIGHT,
     'tandem_cluster': TANDEM_CLUSTER_WEIGHT,
 }
+
+# Quarantined axes are REMOVED from the weight dict, not zeroed. Zeroing would
+# leave them in `total_weight`, so every candidate's evidence_completeness (and
+# therefore rank_score, confidence_tier, and confidence-view membership at the
+# 0.7 floor) would be depressed by a constant that describes a dataset decision
+# rather than the candidate's evidence. Removing them is what makes an
+# unavailable axis genuinely indistinguishable from an absent one: it leaves
+# BOTH the numerator and the denominator, exactly as an axis added tomorrow
+# would be absent from both today.
+_QUARANTINED_WEIGHTS = {k: SCORING_WEIGHTS[k]
+                        for k in sorted(QUARANTINED_AXES) if k in SCORING_WEIGHTS}
+if _QUARANTINED_WEIGHTS:
+    SCORING_WEIGHTS = {k: v for k, v in SCORING_WEIGHTS.items()
+                       if k not in QUARANTINED_AXES}
+    print(f"Quarantine: removed {sorted(_QUARANTINED_WEIGHTS)} from the "
+          f"composite weights (released weight: "
+          f"{sum(_QUARANTINED_WEIGHTS.values())}); remaining total "
+          f"{sum(SCORING_WEIGHTS.values())}", file=sys.stderr)
 
 # Floor for the evidence-completeness multiplier, shared by the scorer and the
 # denominator derivation so the two cannot disagree.
@@ -2612,16 +2809,26 @@ def calculate_fair_rank_score(row):
     # Build scores/weights dicts; missing axes set to None so the lib's
     # evidence-completeness multiplier applies correctly.
     scores = {
-        # o98: phylo/lse_depth are class-A-tree signals; drop them (None) for
+        # o98: phylo/lse_divergence are class-A-tree signals; drop them (None) for
         # candidates not in that tree so they fall out of fair-scoring instead
         # of carrying a full-weight present-zero. Mirrors the has_*_data gating
         # used by synteny/expression/etc. below.
         'phylo': row.get('phylo_score_norm') if row.get('has_phylo_data') else None,
-        'purifying': row.get('purifying_score_norm'),
-        'positive': row.get('positive_score_norm'),
-        # hf3u: lse_depth additionally needs a DERIVABLE threshold, not just
-        # tree membership -- see LSE_DEPTH_AVAILABLE.
-        'lse_depth': row.get('lse_depth_score_norm') if row.get('has_lse_depth_data') else None,
+        # The dN/dS axes now gate on has_dnds_data like every other axis. They
+        # were ungated, so a candidate aBSREL never reported on contributed a
+        # full-weight present 0.0 -- a measured "no selection signal" where
+        # there was no measurement at all. That was latent before; under the
+        # orthology quarantine (which makes has_dnds_data False for EVERY
+        # candidate) it would have become the dominant behaviour, pinning the
+        # whole cohort's selection axes at 0. Defaulting the flag to True keeps
+        # a legacy row that predates the column contributing exactly as before.
+        'purifying': (row.get('purifying_score_norm')
+                      if row.get('has_dnds_data', True) else None),
+        'positive': (row.get('positive_score_norm')
+                     if row.get('has_dnds_data', True) else None),
+        # hf3u: lse_divergence additionally needs a DERIVABLE threshold, not just
+        # tree membership -- see LSE_DIVERGENCE_AVAILABLE.
+        'lse_divergence': row.get('lse_divergence_score_norm') if row.get('has_lse_divergence_data') else None,
         # hf3u: topological nesting depth votes alongside -- not instead of --
         # the patristic measure, gated on its own availability flag.
         'lse_nesting_depth': row.get('lse_nesting_depth_score_norm') if row.get('has_lse_nesting_depth_data') else None,
@@ -2708,7 +2915,16 @@ if RANK_METHOD == 'rankagg':
     # one discrete piece of intent into an explicit named set so a zero-weight
     # axis cannot vote at full strength here; RANKAGG_EXCLUDED_SIGNALS
     # overrides in either direction.
-    _excluded_signals = _excluded(SCORING_WEIGHTS)
+    # Union in the quarantined axes EXPLICITLY. They would already fall out on
+    # their own (their has_*_data flags are False for every candidate, so each
+    # produces an empty ranklist), but relying on that would leave the
+    # quarantine invisible in the ranking's provenance and would silently
+    # reactivate the axis if a stale ranked CSV ever supplied a stale flag.
+    # Naming them makes the exclusion a stated fact rather than a side effect.
+    _excluded_signals = _excluded(SCORING_WEIGHTS) | set(QUARANTINED_AXES)
+    if QUARANTINED_AXES:
+        print(f"rankagg: excluding quarantined orthogroup-derived signal(s) "
+              f"{sorted(QUARANTINED_AXES)}", file=sys.stderr)
     if _excluded_signals:
         print(f"rankagg: excluding zero-weight signal(s) "
               f"{sorted(_excluded_signals)} from the aggregation",
@@ -2750,7 +2966,7 @@ output_cols = [
     'meme_high_confidence_sites', 'meme_lenient_only_sites',
     'meme_strict_only_sites', 'meme_alignment_robustness_index',
     'synteny_score', 'has_synteny_data', 'expression_score', 'has_expression_data',
-    'lse_depth_score', 'raw_tree_depth', 'has_lse_depth_data',
+    'lse_divergence_score', 'raw_tree_depth', 'has_lse_divergence_data',
     # Bead hf3u: the topological depth axis, written alongside the patristic
     # one so audit_signal_ranking_independence.py can correlate the two.
     'lse_nesting_depth_score', 'raw_nesting_depth', 'has_lse_nesting_depth_data',
@@ -2852,8 +3068,8 @@ if RUN_SENSITIVITY:
                             'phylo': r.get('phylo_score_norm'),
                             'purifying': r.get('purifying_score_norm'),
                             'positive': r.get('positive_score_norm'),
-                            'lse_depth': (r.get('lse_depth_score_norm')
-                                          if r.get('has_lse_depth_data') else None),
+                            'lse_divergence': (r.get('lse_divergence_score_norm')
+                                          if r.get('has_lse_divergence_data') else None),
                             'lse_nesting_depth': (r.get('lse_nesting_depth_score_norm')
                                                   if r.get('has_lse_nesting_depth_data') else None),
                             'synteny': r.get('synteny_score_norm') if r.get('has_synteny_data') else None,
@@ -2925,7 +3141,7 @@ if RUN_CROSSVAL and len(ref_ids) >= CROSSVAL_FOLDS:
         # Bead -yfx8: 'expression', not 'expr' -- one vocabulary across
         # SCORING_WEIGHTS, calculate_rank_score and run_leave_one_out_crossval.
         'expression': EXPR_WEIGHT,
-        'lse_depth': LSE_DEPTH_WEIGHT,
+        'lse_divergence': LSE_DIVERGENCE_WEIGHT,
         'lse_nesting_depth': LSE_NESTING_DEPTH_WEIGHT
     }
 
@@ -2995,7 +3211,7 @@ if cv_results:
 # --- Score Component Correlation Analysis (M27) ---
 # Analyze correlations between score components to detect redundancy or unexpected relationships
 score_cols_for_corr = ['phylo_score', 'purifying_score', 'positive_score',
-                       'synteny_score', 'expression_score', 'lse_depth_score',
+                       'synteny_score', 'expression_score', 'lse_divergence_score',
                        # hf3u: both depth axes, so this report shows how
                        # redundant they actually were on THIS run's data.
                        'lse_nesting_depth_score']

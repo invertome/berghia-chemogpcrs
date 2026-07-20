@@ -9,7 +9,7 @@ WHY THIS TEST EXISTS
 support via ``getattr(node, 'support', None)`` and compared it to
 ``BOOTSTRAP_THRESHOLD = 70``, so every internal node scored 1.0 and every node
 failed the threshold. Net effect: ``phylo_score`` was 0.0 for every candidate
-(a weight-2 axis contributing zero discriminative power), the LSE depth
+(a weight-2 axis contributing zero discriminative power), the LSE divergence
 threshold silently fell back to a hardcoded 0.5, and ``og_confidence`` was a
 constant 0.0.
 
@@ -443,13 +443,13 @@ def test_og_confidence_scores_when_support_is_present() -> None:
 
 
 # --------------------------------------------------------------------------
-# 5. LSE depth threshold: LSE_DEPTH_PERCENTILE must stop being dead config.
+# 5. LSE divergence threshold: LSE_DIVERGENCE_PERCENTILE must stop being dead config.
 # --------------------------------------------------------------------------
 
-def test_lse_depth_collects_depths_on_a_supported_tree() -> None:
+def test_lse_divergence_collects_depths_on_a_supported_tree() -> None:
     """The ``all_depths`` loop broke on every candidate (ete3's 1.0 < 70), so
     ``np.percentile`` was never reached and the code fell back to a hardcoded
-    ``lse_threshold = 0.5`` -- making LSE_DEPTH_PERCENTILE dead config.
+    ``lse_threshold = 0.5`` -- making LSE_DIVERGENCE_PERCENTILE dead config.
 
     SUPERSEDED IN PART by bead hf3u. Parsing support correctly was necessary
     but not sufficient: at the real per-node pass rate (0.8238) over a median
@@ -458,7 +458,7 @@ def test_lse_depth_collects_depths_on_a_supported_tree() -> None:
     threshold at all -- the percentile population is every candidate in the
     tree, because support anti-correlates with depth (spearman -0.59) and any
     support filter biases the threshold toward shallow candidates. See
-    tests/unit/test_lsedepth_percentile_population.py.
+    tests/unit/test_lsedivergence_percentile_population.py.
 
     What this test still guards is the i3w9 half: depths are collected from a
     tree whose labels parse, and they are real root distances.

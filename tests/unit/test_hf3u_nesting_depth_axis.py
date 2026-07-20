@@ -2,7 +2,7 @@
 
 WHY THIS AXIS EXISTS
 --------------------
-The ``lse_depth`` axis is named for nesting depth inside a lineage-specific
+The ``lse_divergence`` axis is named for nesting depth inside a lineage-specific
 expansion but measures ``node.get_distance(tree)`` -- cumulative branch length,
 which is evolutionary RATE multiplied by TIME. For chemoreceptors specifically
 those two quantities come apart, because chemoreceptor radiations are fast
@@ -251,7 +251,7 @@ def test_rank_aggregation_registers_both_depth_signals_separately() -> None:
     import rank_aggregation as ra
 
     keys = [spec[0] for spec in ra.SIGNAL_SPEC]
-    assert "lse_depth" in keys
+    assert "lse_divergence" in keys
     assert "lse_nesting_depth" in keys
     assert len(keys) == len(set(keys)), "duplicate signal key in SIGNAL_SPEC"
 
@@ -271,14 +271,14 @@ def test_both_depth_signals_produce_independent_ranklists() -> None:
     # identical, and this asserts they are not.
     df = pd.DataFrame({
         "id": ["cand_a", "cand_b", "cand_c"],
-        "lse_depth_score": [9.0, 5.0, 1.0],
-        "has_lse_depth_data": [True, True, True],
+        "lse_divergence_score": [9.0, 5.0, 1.0],
+        "has_lse_divergence_data": [True, True, True],
         "lse_nesting_depth_score": [1.0, 5.0, 9.0],
         "has_lse_nesting_depth_data": [True, True, True],
     })
     rl = ra.build_ranklists_from_df(df)
-    assert "lse_depth" in rl and "lse_nesting_depth" in rl
-    assert rl["lse_depth"] != rl["lse_nesting_depth"]
+    assert "lse_divergence" in rl and "lse_nesting_depth" in rl
+    assert rl["lse_divergence"] != rl["lse_nesting_depth"]
     assert rl["lse_nesting_depth"]["cand_c"] > rl["lse_nesting_depth"]["cand_a"]
 
 
@@ -290,13 +290,13 @@ def test_nesting_axis_drops_out_when_it_could_not_be_measured() -> None:
 
     df = pd.DataFrame({
         "id": ["cand_a", "cand_b"],
-        "lse_depth_score": [9.0, 1.0],
-        "has_lse_depth_data": [True, True],
+        "lse_divergence_score": [9.0, 1.0],
+        "has_lse_divergence_data": [True, True],
         "lse_nesting_depth_score": [1.0, 9.0],
         "has_lse_nesting_depth_data": [False, False],
     })
     rl = ra.build_ranklists_from_df(df)
-    assert "lse_depth" in rl, "the patristic axis must be unaffected"
+    assert "lse_divergence" in rl, "the patristic axis must be unaffected"
     assert "lse_nesting_depth" not in rl
 
     # A CSV with no nesting columns at all (every ranked CSV written before this
@@ -322,10 +322,10 @@ def test_independence_audit_enumerates_both_depth_signals() -> None:
     """
     import audit_signal_ranking_independence as audit
 
-    assert "lse_depth_score" in audit.SIGNAL_COLUMNS
+    assert "lse_divergence_score" in audit.SIGNAL_COLUMNS
     assert "lse_nesting_depth_score" in audit.SIGNAL_COLUMNS
     # suffix-swap must land on the real flag names; no FLAG_OVERRIDES needed
-    for col, expected in (("lse_depth_score", "has_lse_depth_data"),
+    for col, expected in (("lse_divergence_score", "has_lse_divergence_data"),
                           ("lse_nesting_depth_score",
                            "has_lse_nesting_depth_data")):
         flag = audit.FLAG_OVERRIDES.get(col, "has_" + col.replace("_score", "_data"))
@@ -338,16 +338,16 @@ def test_audit_masks_each_depth_signal_by_its_own_flag(tmp_path: Path) -> None:
 
     csv = tmp_path / "ranked.csv"
     csv.write_text(
-        "id,lse_depth_score,has_lse_depth_data,"
+        "id,lse_divergence_score,has_lse_divergence_data,"
         "lse_nesting_depth_score,has_lse_nesting_depth_data\n"
         "a,9.0,True,1.0,True\n"
         "b,5.0,True,5.0,False\n"
         "c,1.0,False,9.0,True\n"
     )
     m = audit.load_signal_matrix(str(csv))
-    assert np.isnan(m.loc["c", "lse_depth_score"])
+    assert np.isnan(m.loc["c", "lse_divergence_score"])
     assert np.isnan(m.loc["b", "lse_nesting_depth_score"])
-    assert m.loc["a", "lse_depth_score"] == 9.0
+    assert m.loc["a", "lse_divergence_score"] == 9.0
     assert m.loc["a", "lse_nesting_depth_score"] == 1.0
 
 
@@ -391,14 +391,14 @@ def test_nesting_axis_gated_by_its_own_flag_in_the_production_scorer() -> None:
     assert ("'lse_nesting_depth': row.get('lse_nesting_depth_score_norm') "
             "if row.get('has_lse_nesting_depth_data') else None") in body
     # the patristic axis must be untouched by this change
-    assert ("'lse_depth': row.get('lse_depth_score_norm') "
-            "if row.get('has_lse_depth_data') else None") in body
+    assert ("'lse_divergence': row.get('lse_divergence_score_norm') "
+            "if row.get('has_lse_divergence_data') else None") in body
 
 
 def test_availability_is_derived_not_aliased() -> None:
     """``has_lse_nesting_depth_data`` must come from the nesting measurement.
 
-    Aliasing it to ``has_lse_depth_data`` would make the audit's two columns
+    Aliasing it to ``has_lse_divergence_data`` would make the audit's two columns
     co-missing by construction and bias the very redundancy estimate this axis
     exists to let the audit make.
     """
@@ -407,4 +407,4 @@ def test_availability_is_derived_not_aliased() -> None:
     assert re.search(r"has_lse_nesting_depth\s*=\s*bool\(\s*has_phylo\s+and\s+"
                      r"LSE_NESTING_DEPTH_AVAILABLE\s*\)", src), \
         "has_lse_nesting_depth must be derived from LSE_NESTING_DEPTH_AVAILABLE"
-    assert "has_lse_nesting_depth = has_lse_depth" not in src
+    assert "has_lse_nesting_depth = has_lse_divergence" not in src
