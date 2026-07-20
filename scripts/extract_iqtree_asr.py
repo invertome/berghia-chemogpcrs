@@ -15,7 +15,9 @@ when ASR_BACKEND=iqtree (the new default).
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -43,6 +45,40 @@ def extract_sites_for_node(state_file: str, node_name: str):
                 continue
             best_state = parts[2]  # IQ-TREE writes the marginal ML state here
             yield site_num, best_state
+
+
+
+def _write_fasta_atomic(output_fasta: str, payload: str) -> None:
+    """Publish the record by rename so a reader never sees a partial file.
+
+    08_structural_analysis.sh globs this directory (`find ... -name '*_asr.fa'`)
+    to pool ancestral sequences. Writing the destination directly truncates it
+    on open, so a task killed mid-write leaves a short-but-present FASTA that
+    the glob picks up and treats as complete -- the failure is silent, because a
+    truncated FASTA still parses. Staging to a unique temp in the destination
+    directory (same filesystem, or os.replace is not atomic) and renaming makes
+    the file appear whole or not at all. The stage is a SLURM array, so the tag
+    carries job and task identity as well as the pid: a pid is unique only
+    within a node, and this directory is shared across nodes.
+    """
+    out = Path(output_fasta)
+    tag = "{}.{}.{}".format(os.environ.get("SLURM_JOB_ID", "nojob"),
+                            os.environ.get("SLURM_ARRAY_TASK_ID", "0"),
+                            os.getpid())
+    fd, tmp = tempfile.mkstemp(dir=str(out.parent), prefix=out.name + ".",
+                               suffix="." + tag + ".tmp")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(payload)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, out)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def main() -> int:
@@ -78,8 +114,7 @@ def main() -> int:
     sites.sort(key=lambda x: x[0])
     seq = "".join(s for _, s in sites)
     Path(args.output_fasta).parent.mkdir(parents=True, exist_ok=True)
-    with open(args.output_fasta, "w") as f:
-        f.write(f">{record_id}\n{seq}\n")
+    _write_fasta_atomic(args.output_fasta, f">{record_id}\n{seq}\n")
     print(f"Wrote {len(seq)}-residue ancestral sequence for {args.node_name} "
           f"as {record_id!r} -> {args.output_fasta}", file=sys.stderr)
     return 0

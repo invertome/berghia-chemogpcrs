@@ -40,7 +40,8 @@ import sys
 from typing import Dict, List, Optional, Set
 
 from structural_evidence import (
-    _strip_structure_suffixes, classify_hit, parse_foldseek,
+    _strip_structure_suffixes, canonical_query_id, classify_hit, parse_foldseek,
+    query_keys,
 )
 
 # The exact columns scripts/rank_aggregation.py's merge_evidence_channels()
@@ -92,60 +93,6 @@ CHANNEL_TSV_COLUMNS = [
 # Trailing "_<chain>" as foldseek appends it (mmCIF/PDB chain ids are short
 # alphanumerics). Only ever consulted against a known candidate id set.
 _CHAIN_SUFFIX_RE = re.compile(r"^(.+)_([A-Za-z0-9]{1,4})$")
-
-
-def query_keys(query: Optional[str]) -> List[str]:
-    """Ordered candidate join keys for one Foldseek query id.
-
-    Mirrors structural_evidence.target_keys() for the query side, reusing the
-    same _strip_structure_suffixes() helper so the two sides cannot drift:
-    raw -> path basename -> extension-stripped basename -> chain-stripped.
-
-    Deduplicated and order-stable. An empty/None query yields [].
-    """
-    raw = (query or "").strip()
-    if not raw:
-        return []
-
-    keys: List[str] = []
-
-    def add(key: str) -> None:
-        if key and key not in keys:
-            keys.append(key)
-
-    add(raw)
-    basename = raw.rsplit("/", 1)[-1]
-    add(basename)
-    stem = _strip_structure_suffixes(basename)
-    add(stem)
-
-    chain = _CHAIN_SUFFIX_RE.match(stem)
-    if chain:
-        add(chain.group(1))
-    return keys
-
-
-def canonical_query_id(query: Optional[str],
-                        candidate_ids: Optional[Set[str]] = None) -> Optional[str]:
-    """Resolve a Foldseek query id into the candidate id namespace.
-
-    With `candidate_ids`, returns the first of query_keys() that is a REAL
-    candidate id, or None when none of them is -- an unresolvable query is
-    reported, never rewritten into something that merely looks joinable.
-
-    Without `candidate_ids` there is nothing to corroborate against, so only
-    the unambiguous extension strip is applied and the chain suffix is left
-    alone (stripping it on a guess could truncate a legitimate id).
-    """
-    keys = query_keys(query)
-    if not keys:
-        return None
-    if candidate_ids is None:
-        return _strip_structure_suffixes(keys[0].rsplit("/", 1)[-1]) or None
-    for key in keys:
-        if key in candidate_ids:
-            return key
-    return None
 
 
 def read_candidate_ids(fasta_path: str) -> Set[str]:

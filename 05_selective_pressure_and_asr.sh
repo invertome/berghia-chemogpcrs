@@ -292,9 +292,10 @@ PYTHON_SCRIPT
 # previously asserted an atomicity nobody had checked, and it was false):
 #   parse_busted.py  ATOMIC (write_csv_atomic: unique temp + os.replace)
 #   parse_meme.py    ATOMIC (write_csv_atomic: unique temp + os.replace)
-#   parse_absrel.py  NOT ATOMIC — still open(output_csv, "w"/"a"). Its
-#                    docstring's "atomic" refers to per-OG isolation, not to
-#                    the write. This is the aBSREL/dN-dS axis globbed below.
+#   parse_absrel.py  ATOMIC (write_csv_atomic: unique temp + os.replace).
+#                    Repaired after this note first recorded it as unsafe; its
+#                    docstring now distinguishes per-OG isolation from write
+#                    atomicity, which is what the two words used to conflate.
 concat_per_og_csv() {
     local dir="$1" suffix="$2" cumulative="$3"
     # The fallback recomposes the SLURM identity rather than degrading to a

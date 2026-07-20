@@ -195,8 +195,9 @@ _CHAIN_SUFFIX_RE = re.compile(r"^(.+)_([A-Za-z0-9]{1,4})$")
 def query_keys(query: Optional[str]) -> List[str]:
     """Ordered candidate join keys for one Foldseek query id.
 
-    Mirrors target_keys() for the query side: raw -> path basename ->
-    extension-stripped basename -> chain-stripped.
+    Mirrors target_keys() for the query side, reusing the same
+    _strip_structure_suffixes() helper so the two sides cannot drift:
+    raw -> path basename -> extension-stripped basename -> chain-stripped.
 
     Deduplicated and order-stable. An empty/None query yields [].
     """

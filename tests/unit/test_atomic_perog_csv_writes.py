@@ -69,7 +69,7 @@ def _tmp_debris(directory: Path) -> list[str]:
 # --------------------------------------------------------------------------
 # the shared helper
 # --------------------------------------------------------------------------
-@pytest.mark.parametrize("modname", ["parse_busted", "parse_meme"])
+@pytest.mark.parametrize("modname", ["parse_busted", "parse_meme", "parse_absrel"])
 def test_parser_exposes_an_atomic_csv_writer(modname):
     """Both parsers must route every CSV publish through one atomic helper."""
     mod = _load(modname)
@@ -79,7 +79,7 @@ def test_parser_exposes_an_atomic_csv_writer(modname):
     )
 
 
-@pytest.mark.parametrize("modname", ["parse_busted", "parse_meme"])
+@pytest.mark.parametrize("modname", ["parse_busted", "parse_meme", "parse_absrel"])
 def test_failed_write_leaves_the_published_file_untouched(modname, tmp_path, monkeypatch):
     """A crash mid-write must not truncate the previously published CSV.
 
@@ -109,7 +109,7 @@ def test_failed_write_leaves_the_published_file_untouched(modname, tmp_path, mon
     )
 
 
-@pytest.mark.parametrize("modname", ["parse_busted", "parse_meme"])
+@pytest.mark.parametrize("modname", ["parse_busted", "parse_meme", "parse_absrel"])
 def test_successful_write_publishes_and_leaves_no_debris(modname, tmp_path):
     mod = _load(modname)
     out = tmp_path / "OG0000007_busted_s.csv"
