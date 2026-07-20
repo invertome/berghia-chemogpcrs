@@ -118,7 +118,8 @@ find "$RECOVERED_DIR" -name "*.fna" -type f \
     ! -name "all_recovered_cds.fna*" -exec cat {} + >> "${ALL_REF_CDS}.tmp" 2>/dev/null || true
 mv "${ALL_REF_CDS}.tmp" "$ALL_REF_CDS"
 
-n_seq=$(grep -c '^>' "$ALL_REF_CDS" 2>/dev/null || echo 0)
+n_seq=$(grep -c '^>' "$ALL_REF_CDS" 2>/dev/null || true)
+n_seq=${n_seq:-0}
 n_native=$(awk -F, 'NR>1 && $2=="native"' "$MANIFEST" 2>/dev/null | wc -l || echo 0)
 n_miniprot=$(awk -F, 'NR>1 && $2=="miniprot"' "$MANIFEST" 2>/dev/null | wc -l || echo 0)
 

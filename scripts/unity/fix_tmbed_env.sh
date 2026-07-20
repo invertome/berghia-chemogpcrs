@@ -125,7 +125,8 @@ MRWLPEFKGAVKVGGSTKFSSPCFGSNSITATQKDDTTIVLEFQPSQKKSLLCYDWYFI
 FA
 if tmbed predict -f "$TMP/tiny.fa" -p "$TMP/out.3line" --out-format 3 \
         2>"$TMP/tmbed.log"; then
-    n="$(grep -c '^>' "$TMP/out.3line" 2>/dev/null || echo 0)"
+    n="$(grep -c '^>' "$TMP/out.3line" 2>/dev/null || true)"
+    n=${n:-0}
     echo "[fix-tmbed]   OK — predicted $n / 3 sequences"
 else
     echo "[fix-tmbed]   FAILED — see $TMP/tmbed.log:" >&2

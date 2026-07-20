@@ -114,7 +114,8 @@ cp "$CLOAK_RESULT" "$OUTPUT"
     echo "n_alignments=$N_VARIANTS"
     echo "ensemble_dir=$ENSEMBLE_DIR"
     echo "output=$OUTPUT"
-    n_seqs=$(grep -c '^>' "$OUTPUT" || echo 0)
+    n_seqs=$(grep -c '^>' "$OUTPUT" || true)
+    n_seqs=${n_seqs:-0}
     echo "n_seqs=$n_seqs"
     echo "run_at=$(date -Iseconds)"
 } > "${OUTPUT}.predictor_used.txt"

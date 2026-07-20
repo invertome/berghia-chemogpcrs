@@ -172,7 +172,8 @@ for level_file in "${RESULTS_DIR}/lse_classification/lse_"*.txt; do
         fi
     done < "$level_file"
 
-    seq_count=$(grep -c "^>" "$output_fasta" 2>/dev/null || echo 0)
+    seq_count=$(grep -c "^>" "$output_fasta" 2>/dev/null || true)
+    seq_count=${seq_count:-0}
     log "Created ${output_fasta} (${seq_count} sequences)"
 done
 

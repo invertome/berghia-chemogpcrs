@@ -66,6 +66,7 @@ PREQUAL_FILTERTHRESH="${PREQUAL_FILTERTHRESH:-0.90}" \
 
 date
 echo "=== Done ==="
-n_out=$(grep -c '^>' "$OUTPUT" 2>/dev/null || echo 0)
+n_out=$(grep -c '^>' "$OUTPUT" 2>/dev/null || true)
+n_out=${n_out:-0}
 echo "PREQUAL kept $n_out sequences"
 ls -la "$OUTPUT"

@@ -121,7 +121,8 @@ for stage_file in \
     label="${stage_file##*:}"
     if [[ -s "$path" ]]; then
         size=$(stat -c '%s' "$path")
-        n=$(grep -c '^>' "$path" 2>/dev/null || echo 0)
+        n=$(grep -c '^>' "$path" 2>/dev/null || true)
+        n=${n:-0}
         printf "    %-15s %10d bytes %5d seqs\n" "$label" "$size" "$n"
     else
         printf "    %-15s [missing]\n" "$label"

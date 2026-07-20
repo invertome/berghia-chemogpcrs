@@ -293,7 +293,8 @@ python3 "${SCRIPT_DIR}/_scan_proteome_filter_helper.py" \
     --min-confidence "${ARG_MIN_CONF}" \
     ${FORCE_FLAG}
 
-N_CANDS=$(grep -c '^>' "${OUT_FA}" 2>/dev/null || echo 0)
+N_CANDS=$(grep -c '^>' "${OUT_FA}" 2>/dev/null || true)
+N_CANDS=${N_CANDS:-0}
 echo "[scan] Done: ${N_CANDS} chemoreceptor candidates for ${SAMPLE_NAME}" >&2
 echo "[scan] FASTA: ${OUT_FA}" >&2
 echo "[scan] TSV:   ${OUT_TSV}" >&2

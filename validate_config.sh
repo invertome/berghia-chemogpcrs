@@ -262,7 +262,8 @@ validate_input_files() {
     if [ -n "${TRANSCRIPTOME}" ]; then
         print_check "TRANSCRIPTOME: ${TRANSCRIPTOME}"
         if [ -f "${TRANSCRIPTOME}" ]; then
-            local seq_count=$(grep -c "^>" "${TRANSCRIPTOME}" 2>/dev/null || echo 0)
+            local seq_count=$(grep -c "^>" "${TRANSCRIPTOME}" 2>/dev/null || true)
+            seq_count=${seq_count:-0}
             print_ok "TRANSCRIPTOME exists ($seq_count sequences)"
         else
             print_error "TRANSCRIPTOME not found: ${TRANSCRIPTOME}"

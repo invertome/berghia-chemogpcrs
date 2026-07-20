@@ -72,7 +72,8 @@ if [ ! -f "$TOPO_FILE" ]; then
     exit 1
 fi
 
-TOPO_COUNT=$(grep -c '^>' "$TOPO_FILE" 2>/dev/null || echo 0)
+TOPO_COUNT=$(grep -c '^>' "$TOPO_FILE" 2>/dev/null || true)
+TOPO_COUNT=${TOPO_COUNT:-0}
 log "Found topology predictions for $TOPO_COUNT sequences"
 
 # --- Run ECL divergence analysis ---

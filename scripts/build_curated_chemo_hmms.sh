@@ -60,7 +60,8 @@ for family_dir in "${family_dirs[@]}"; do
     seqs="$out_family_dir/${family}_combined_seqs.fa"
     cat "${seq_files[@]}" > "$seqs"
 
-    n_seqs=$(grep -c '^>' "$seqs" 2>/dev/null || echo 0)
+    n_seqs=$(grep -c '^>' "$seqs" 2>/dev/null || true)
+    n_seqs=${n_seqs:-0}
     total=$((total + 1))
     echo "[$family] combined $n_seqs sequences from ${#seq_files[@]} source(s): $(printf '%s ' "${seq_files[@]##*/}")" >&2
 

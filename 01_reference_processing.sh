@@ -99,7 +99,8 @@ fi
 if [ "${USE_NATH_ET_AL}" = true ]; then
     ALL_REF_CDS="${RESULTS_DIR}/reference_sequences/cds/all_references_cds.fna"
     if [ -f "$ALL_REF_CDS" ] && [ -s "$ALL_REF_CDS" ]; then
-        n_cds=$(grep -c '^>' "$ALL_REF_CDS" 2>/dev/null || echo 0)
+        n_cds=$(grep -c '^>' "$ALL_REF_CDS" 2>/dev/null || true)
+        n_cds=${n_cds:-0}
         log "Reference CDS coverage: ${n_cds} sequences in ${ALL_REF_CDS}"
         if [ "${n_cds}" -lt 5000 ]; then
             log --level=WARN "Only ${n_cds} reference CDS present — stage 05 dN/dS will be sparse."
@@ -119,13 +120,13 @@ if [ "${USE_NATH_ET_AL}" = true ]; then
 
     # Combine LSE references
     find "${NATH_ET_AL_DIR}/lse" -name "*.faa" -exec cat {} + > "${RESULTS_DIR}/reference_sequences/lse_references.fa" 2>/dev/null || true
-    lse_count=$(grep -c "^>" "${RESULTS_DIR}/reference_sequences/lse_references.fa" 2>/dev/null | tail -1)
+    lse_count=$(grep -c "^>" "${RESULTS_DIR}/reference_sequences/lse_references.fa" 2>/dev/null || true)
     lse_count=${lse_count:-0}
     log "Combined ${lse_count} LSE reference sequences"
 
     # Combine conserved (one_to_one_ortholog) references
     find "${NATH_ET_AL_DIR}/one_to_one_ortholog" -name "*.faa" -exec cat {} + > "${RESULTS_DIR}/reference_sequences/conserved_references.fa" 2>/dev/null || true
-    conserved_count=$(grep -c "^>" "${RESULTS_DIR}/reference_sequences/conserved_references.fa" 2>/dev/null | tail -1)
+    conserved_count=$(grep -c "^>" "${RESULTS_DIR}/reference_sequences/conserved_references.fa" 2>/dev/null || true)
     conserved_count=${conserved_count:-0}
     log "Combined ${conserved_count} conserved reference sequences"
 
@@ -171,7 +172,8 @@ if [ "${USE_NATH_ET_AL}" = true ]; then
     ALL_REF_CDS_BUILT="${RESULTS_DIR}/reference_sequences/cds/all_references_cds.fna"
     EXISTING_N=0
     if [ -s "$ALL_REF_CDS_BUILT" ]; then
-        EXISTING_N=$(grep -c '^>' "$ALL_REF_CDS_BUILT" 2>/dev/null || echo 0)
+        EXISTING_N=$(grep -c '^>' "$ALL_REF_CDS_BUILT" 2>/dev/null || true)
+        EXISTING_N=${EXISTING_N:-0}
     fi
     if [ "${EXISTING_N:-0}" -lt 5000 ]; then
         log "Rebuilding merged CDS file (currently ${EXISTING_N} seqs; target ≥5000)"
@@ -219,7 +221,8 @@ print(f'merge-filter: kept={kept}, dropped={dropped} (>{MAX} bp)', file=sys.stde
 " "$MERGE_CDS_MAX_BP" "$TMP_CDS" "$FILTERED_TMP" 2>>"${LOGS_DIR}/cds_merge.log" || cp "$TMP_CDS" "$FILTERED_TMP"
         mv -f "$FILTERED_TMP" "$ALL_REF_CDS_BUILT"
         rm -f "$TMP_CDS"
-        REBUILT_N=$(grep -c '^>' "$ALL_REF_CDS_BUILT" 2>/dev/null || echo 0)
+        REBUILT_N=$(grep -c '^>' "$ALL_REF_CDS_BUILT" 2>/dev/null || true)
+        REBUILT_N=${REBUILT_N:-0}
         log "Rebuilt merged CDS file: ${REBUILT_N} sequences (post length-cap at ${MERGE_CDS_MAX_BP} bp)"
     else
         log "Merged CDS file already has ${EXISTING_N} sequences — preserving (use run_cds_preprocess.sh to rebuild)."
@@ -296,7 +299,7 @@ if [ "${USE_NATH_ET_AL}" = true ]; then
         local label="$3"
 
         local seq_count
-        seq_count=$(grep -c "^>" "$faa_file" 2>/dev/null | tail -1)
+        seq_count=$(grep -c "^>" "$faa_file" 2>/dev/null || true)
         seq_count=${seq_count:-0}
         [ "$seq_count" -lt 2 ] && return 1  # Need at least 2 sequences for alignment
 
@@ -341,7 +344,7 @@ if [ "${USE_NATH_ET_AL}" = true ]; then
             combined="${OG_WORKDIR}/${category}_all.fa"
             find "$src_dir" -name "*.faa" -exec cat {} + > "$combined" 2>/dev/null
 
-            total_seqs=$(grep -c "^>" "$combined" 2>/dev/null | tail -1)
+            total_seqs=$(grep -c "^>" "$combined" 2>/dev/null || true)
             total_seqs=${total_seqs:-0}
             log "${category}: ${total_seqs} sequences for orthogroup clustering"
 
@@ -447,7 +450,7 @@ fi
 
 # --- Step 5: Update headers with short IDs and generate ID map ---
 # Check if we have any references
-ref_count=$(grep -c "^>" "${RESULTS_DIR}/reference_sequences/all_references.fa" 2>/dev/null | tail -1 || echo 0)
+ref_count=$(grep -c "^>" "${RESULTS_DIR}/reference_sequences/all_references.fa" 2>/dev/null || true)
 ref_count=${ref_count:-0}
 if [ "${ref_count}" -eq 0 ]; then
     log "Error: No reference sequences found in all_references.fa"

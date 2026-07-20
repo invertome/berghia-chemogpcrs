@@ -108,7 +108,8 @@ fi
 mkdir -p "$(dirname "$OUTPUT")"
 
 # Count sequences
-N=$(grep -c '^>' "$INPUT" 2>/dev/null || echo 0)
+N=$(grep -c '^>' "$INPUT" 2>/dev/null || true)
+N=${N:-0}
 
 # Decide backend
 choose_backend() {

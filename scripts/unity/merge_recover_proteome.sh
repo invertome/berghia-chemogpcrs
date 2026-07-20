@@ -159,8 +159,10 @@ REPORT="${OUTDIR}/merge_recover_report.tsv"
 printf 'candidate\tn_genes\tn_proteins\tC\tS\tD\tF\tM\tn\n' > "${REPORT}"
 for name in es ep merge_keep merge_filter; do
     gtf="${CAND[$name]}"
-    ng=$(grep -c $'\tgene\t' "$gtf" 2>/dev/null || echo 0)
-    np=$(grep -c "^>" "${OUTDIR}/${name}.longest.aa" 2>/dev/null || echo 0)
+    ng=$(grep -c $'\tgene\t' "$gtf" 2>/dev/null || true)
+    ng=${ng:-0}
+    np=$(grep -c "^>" "${OUTDIR}/${name}.longest.aa" 2>/dev/null || true)
+    np=${np:-0}
     summ=$(find "${BUSCO_ROOT}/${name}" -name "short_summary*.txt" 2>/dev/null | head -1)
     line=$(grep -oE 'C:[0-9.]+%\[S:[0-9.]+%,D:[0-9.]+%\],F:[0-9.]+%,M:[0-9.]+%,n:[0-9]+' "${summ}" 2>/dev/null | head -1)
     if [ -n "$line" ]; then

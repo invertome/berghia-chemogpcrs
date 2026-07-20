@@ -244,7 +244,8 @@ MANIFEST="$OUT_DIR/manifest.tsv"
         fasta="$OUT_DIR/${name}.fasta"
         tre="$OUT_DIR/${name}.treefile"
         tsv="$OUT_DIR/${name}.tsv"
-        n=$(grep -c '^>' "$fasta" 2>/dev/null || echo 0)
+        n=$(grep -c '^>' "$fasta" 2>/dev/null || true)
+        n=${n:-0}
         sha=$(git -C "$WORKDIR" rev-parse --short HEAD 2>/dev/null || echo unknown)
         echo -e "${name}\t${fasta}\t${tre}\t${tsv}\t${n}\t${sha}"
     done

@@ -337,8 +337,10 @@ identify_gpcr_candidates() {
     "${SEQTK:-seqtk}" subseq "$input_fa" "$ids_out" > "$output_fa"
 
     local n_in n_gpcr
-    n_in=$(grep -c '^>' "$input_fa" 2>/dev/null || echo 0)
-    n_gpcr=$(grep -c '^>' "$output_fa" 2>/dev/null || echo 0)
+    n_in=$(grep -c '^>' "$input_fa" 2>/dev/null || true)
+    n_in=${n_in:-0}
+    n_gpcr=$(grep -c '^>' "$output_fa" 2>/dev/null || true)
+    n_gpcr=${n_gpcr:-0}
     echo "identify_gpcr_candidates: $n_gpcr / $n_in proteins flagged as GPCR (input=$(basename "$input_fa"))" >&2
 }
 
@@ -1195,10 +1197,23 @@ find_nucleotide_sequences() {
 
 # --- Count Sequences in FASTA ---
 # Arguments: $1 - FASTA file
-# Returns: Number of sequences
+# Returns: echoes exactly one integer line (0 when the file is missing, empty,
+#          or has no headers)
+#
+# `|| true`, not `|| echo 0`: grep -c prints "0" AND exits 1 when nothing
+# matches, so `|| echo 0` appended a SECOND "0" and this helper returned the
+# two-line string "0\n0" (the bead-444 idiom defect). That is not cosmetic
+# here — three callers feed the value straight into shell arithmetic
+# (get_dataset_stats, estimate_memory_for_orthofinder, estimate_memory_for_hyphy's
+# `$((2 * num_seqs - 2))`), where "0\n0" is an arithmetic syntax error, and the
+# estimate_memory_* callers pass it to `awk -v n=`, which truncates at the
+# newline and silently mis-sizes the job. Header-less/empty FASTAs are ordinary
+# here: any upstream filter that drops every sequence produces one.
 count_sequences() {
     local fasta="$1"
-    grep -c "^>" "$fasta" 2>/dev/null || echo 0
+    local n
+    n=$(grep -c "^>" "$fasta" 2>/dev/null) || true
+    echo "${n:-0}"
 }
 
 # --- Get Average Sequence Length ---
@@ -2000,7 +2015,7 @@ run_alignment_filter_stack() {
         echo "stages_run=prequal=${RUN_PREQUAL:-1},cloak=${RUN_CLOAK:-1},taper=${RUN_TAPER:-1},hmmcleaner=${RUN_HMMCLEANER:-0}"
         echo "ensemble_dir=$ensemble_dir"
         echo "final_alignment=$cur"
-        echo "n_seqs=$(grep -c '^>' "$output" 2>/dev/null || echo 0)"
+        echo "n_seqs=$(count_sequences "$output")"
         echo "run_at=$(date -Iseconds)"
     } > "${output}.filter_stack.txt"
 

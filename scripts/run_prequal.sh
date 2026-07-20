@@ -106,8 +106,10 @@ cp "$WORKDIR/seqs.fa.filtered" "$OUTPUT"
     echo "version=$("$PREQUAL_BIN" -h 2>&1 | grep -oE 'PREQUAL[^[:space:]]*' | head -1 || echo unknown)"
     echo "input=$INPUT"
     echo "output=$OUTPUT"
-    n_in=$(grep -c '^>' "$INPUT" 2>/dev/null || echo 0)
-    n_out=$(grep -c '^>' "$OUTPUT" 2>/dev/null || echo 0)
+    n_in=$(grep -c '^>' "$INPUT" 2>/dev/null || true)
+    n_in=${n_in:-0}
+    n_out=$(grep -c '^>' "$OUTPUT" 2>/dev/null || true)
+    n_out=${n_out:-0}
     echo "input_seqs=$n_in"
     echo "output_seqs=$n_out"
     echo "run_at=$(date -Iseconds)"

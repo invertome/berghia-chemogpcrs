@@ -82,8 +82,10 @@ fi
     echo "julia_version=$("$JULIA_BIN" --version 2>/dev/null | head -1)"
     echo "input=$INPUT"
     echo "output=$OUTPUT"
-    n_in=$(grep -c '^>' "$INPUT"  || echo 0)
-    n_out=$(grep -c '^>' "$OUTPUT" || echo 0)
+    n_in=$(grep -c '^>' "$INPUT" || true)
+    n_in=${n_in:-0}
+    n_out=$(grep -c '^>' "$OUTPUT" || true)
+    n_out=${n_out:-0}
     echo "input_seqs=$n_in"
     echo "output_seqs=$n_out"
     echo "run_at=$(date -Iseconds)"
