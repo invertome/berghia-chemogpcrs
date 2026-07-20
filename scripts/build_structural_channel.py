@@ -35,10 +35,13 @@ from __future__ import annotations
 import argparse
 import csv
 import os
+import re
 import sys
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
-from structural_evidence import classify_hit, parse_foldseek
+from structural_evidence import (
+    _strip_structure_suffixes, classify_hit, parse_foldseek,
+)
 
 # The exact columns scripts/rank_aggregation.py's merge_evidence_channels()
 # reads from a struct TSV: the id_col join key ("id") plus its struct
@@ -50,6 +53,114 @@ CHANNEL_TSV_COLUMNS = [
     "id", "struct_state", "struct_novelty", "struct_nonchemo_corrob",
     "has_struct_data",
 ]
+
+
+# --------------------------------------------------------------------------- #
+# Foldseek QUERY-identifier normalisation
+#
+# The target side already normalises through structural_evidence.target_keys() /
+# _strip_structure_suffixes(). The query side used the raw foldseek field
+# VERBATIM as the channel join key, so any decoration foldseek adds to the query
+# made the channel row join to nothing -- silently, because an all-miss left
+# join just reads as has_struct_data=0 for every candidate.
+#
+# MEASURED, not assumed (foldseek 10.941cd33, this project's berghia-gpcr env on
+# Unity, srun 61999969; flat query dir staged <candidate_id>.<ext> exactly as
+# scripts/unity/run_foldseek_candidates.sh stages it):
+#
+#     BersteEVm000001t1.cif  (1 chain)   -> query "BersteEVm000001t1"
+#     BersteEVm000002t1.pdb  (1 chain)   -> query "BersteEVm000002t1"
+#     BersteEVm000003t1.cif  (2 chains)  -> queries "BersteEVm000003t1_A"
+#                                                   "BersteEVm000003t1_B"
+#
+# So foldseek STRIPS the extension (structcreatedb.cpp: Util::remove_extension,
+# applied twice for .gz/.zst) -- "<id>.cif" and hence "<id>.cif_A" are forms it
+# never emits -- and APPENDS "_<chain>" once a file holds more than one chain,
+# emitting one row PER CHAIN. The chain suffix is the real break: a multi-chain
+# AF3 model (receptor + peptide/ligand/G-protein, or any complex) yields
+# <cand_id>_A / <cand_id>_B, neither of which joins to the bare candidate id,
+# and one candidate silently becomes two orphan channel rows.
+#
+# target_keys() alone does not repair that: its _PDB_RE wants a 4-character id
+# starting with a digit, so "BersteEVm000003t1_A" normalises to itself. And the
+# chain strip cannot be applied blindly, because a candidate id may legitimately
+# end in "_<alnum>" ("Berghia_scaffold_12"). It is therefore applied ONLY when
+# the stripped form is corroborated against the real candidate id universe --
+# resolution by identity, never by pattern-guess.
+# --------------------------------------------------------------------------- #
+
+# Trailing "_<chain>" as foldseek appends it (mmCIF/PDB chain ids are short
+# alphanumerics). Only ever consulted against a known candidate id set.
+_CHAIN_SUFFIX_RE = re.compile(r"^(.+)_([A-Za-z0-9]{1,4})$")
+
+
+def query_keys(query: Optional[str]) -> List[str]:
+    """Ordered candidate join keys for one Foldseek query id.
+
+    Mirrors structural_evidence.target_keys() for the query side, reusing the
+    same _strip_structure_suffixes() helper so the two sides cannot drift:
+    raw -> path basename -> extension-stripped basename -> chain-stripped.
+
+    Deduplicated and order-stable. An empty/None query yields [].
+    """
+    raw = (query or "").strip()
+    if not raw:
+        return []
+
+    keys: List[str] = []
+
+    def add(key: str) -> None:
+        if key and key not in keys:
+            keys.append(key)
+
+    add(raw)
+    basename = raw.rsplit("/", 1)[-1]
+    add(basename)
+    stem = _strip_structure_suffixes(basename)
+    add(stem)
+
+    chain = _CHAIN_SUFFIX_RE.match(stem)
+    if chain:
+        add(chain.group(1))
+    return keys
+
+
+def canonical_query_id(query: Optional[str],
+                        candidate_ids: Optional[Set[str]] = None) -> Optional[str]:
+    """Resolve a Foldseek query id into the candidate id namespace.
+
+    With `candidate_ids`, returns the first of query_keys() that is a REAL
+    candidate id, or None when none of them is -- an unresolvable query is
+    reported, never rewritten into something that merely looks joinable.
+
+    Without `candidate_ids` there is nothing to corroborate against, so only
+    the unambiguous extension strip is applied and the chain suffix is left
+    alone (stripping it on a guess could truncate a legitimate id).
+    """
+    keys = query_keys(query)
+    if not keys:
+        return None
+    if candidate_ids is None:
+        return _strip_structure_suffixes(keys[0].rsplit("/", 1)[-1]) or None
+    for key in keys:
+        if key in candidate_ids:
+            return key
+    return None
+
+
+def read_candidate_ids(fasta_path: str) -> Set[str]:
+    """Candidate id universe from a FASTA: the first whitespace token of each
+    header. Missing/empty path yields an empty set (the caller decides)."""
+    ids: Set[str] = set()
+    if not fasta_path or not os.path.exists(fasta_path):
+        return ids
+    with open(fasta_path) as fh:
+        for line in fh:
+            if line.startswith(">"):
+                token = line[1:].split()
+                if token:
+                    ids.add(token[0])
+    return ids
 
 
 def merge_best_hits(foldseek_tsv_paths: List[str]) -> Dict[str, dict]:
@@ -119,26 +230,77 @@ def build_family_map(anchor_set_tsv: str, gpcrdb_meta: Optional[str] = None) -> 
 
 
 def build_structural_channel(foldseek_tsv_paths: List[str], family_map: Dict[str, str],
-                              tm_threshold: float = 0.5) -> Dict[str, dict]:
+                              tm_threshold: float = 0.5,
+                              candidate_ids: Optional[Set[str]] = None) -> Dict[str, dict]:
     """Per-candidate Foldseek structural-evidence channel across all DBs.
 
-    Merges the given Foldseek hit files (merge_best_hits) and classifies
-    each candidate's merged best hit (structural_evidence.classify_hit),
-    exactly mirroring structural_channel()'s per-candidate schema.
+    Merges the given Foldseek hit files (merge_best_hits), normalises each
+    Foldseek query into the candidate id namespace (canonical_query_id --
+    symmetric with the target side), and classifies each candidate's merged
+    best hit (structural_evidence.classify_hit), exactly mirroring
+    structural_channel()'s per-candidate schema.
 
-    Returns:
-        {candidate_id: {"struct_state": "novel"|"known_non_chemoreceptor"|
-                        "known_other",
-                        "struct_novelty": 1 if novel else 0,
-                        "struct_nonchemo_corrob": 1 if known_non_chemoreceptor
-                                                  else 0,
-                        "has_struct_data": True}}
+    `candidate_ids` is the real candidate id universe (e.g. the class-A
+    candidate FASTA's headers). Passing it is strongly preferred: it is what
+    lets a multi-chain query's "_<chain>" suffix be resolved rather than
+    guessed, collapses a model's chains into ONE candidate row (best
+    alntmscore wins), and enables the join assertion below.
+
+    Raises:
+        ValueError: if `candidate_ids` is given but empty, or if there are
+            hits and NOT ONE of them resolves to a candidate. Zero key
+            overlap means the channel would left-join to nothing and the
+            structural voter would go dormant while everything exits 0 --
+            the exact silent failure this guard exists to make loud.
     """
+    if candidate_ids is not None and not candidate_ids:
+        raise ValueError(
+            "build_structural_channel: candidate_ids is empty -- the candidate "
+            "universe could not be read, so every Foldseek query would fail to "
+            "resolve and the structural channel would silently join to nothing. "
+            "Check the --candidate-fasta path."
+        )
+
     hits = merge_best_hits(foldseek_tsv_paths)
-    channel: Dict[str, dict] = {}
+
+    resolved: Dict[str, dict] = {}
+    unresolved: List[str] = []
     for query, best in hits.items():
+        canonical = canonical_query_id(query, candidate_ids)
+        if canonical is None:
+            unresolved.append(query)
+            continue
+        # Chains of one model collapse here; keep the strongest hit.
+        current = resolved.get(canonical)
+        if current is None or best["alntmscore"] > current["alntmscore"]:
+            resolved[canonical] = best
+
+    if hits and candidate_ids is not None and not resolved:
+        raise ValueError(
+            "build_structural_channel: ZERO of "
+            f"{len(hits)} Foldseek queries resolved to a known candidate id. "
+            "The structural channel would left-join to nothing and go silently "
+            "dormant.\n"
+            f"  saw (up to 5):      {sorted(unresolved)[:5]}\n"
+            f"  expected ids like:  {sorted(candidate_ids)[:5]}\n"
+            "  Likely cause: the Foldseek query dir was staged under the wrong "
+            "id scheme (e.g. AF3 job names instead of candidate ids -- bead "
+            "5ubd), or --candidate-fasta points at a different candidate set."
+        )
+
+    if unresolved:
+        print(
+            f"[build_structural_channel] WARNING: {len(unresolved)} of "
+            f"{len(hits)} Foldseek queries did not resolve to a candidate id "
+            f"and were dropped: {sorted(unresolved)[:5]}"
+            f"{' ...' if len(unresolved) > 5 else ''}",
+            file=sys.stderr,
+        )
+
+    channel: Dict[str, dict] = {}
+    for candidate_id, best in resolved.items():
         state = classify_hit(best, family_map, tm_threshold=tm_threshold)
-        channel[query] = {
+        channel[candidate_id] = {
             "struct_state": state,
             "struct_novelty": 1 if state == "novel" else 0,
             "struct_nonchemo_corrob": 1 if state == "known_non_chemoreceptor" else 0,
@@ -191,6 +353,14 @@ def build_args_parser() -> argparse.ArgumentParser:
     p.add_argument("--gpcrdb-meta", default=None,
                     help="Optional target->family TSV for GPCRdb-DB-specific "
                          "targets not covered by --anchor-set")
+    p.add_argument("--candidate-fasta", default=None,
+                    help="Candidate FASTA whose headers give the candidate id "
+                         "universe. Used to resolve Foldseek query ids into the "
+                         "ranking table's namespace (a multi-chain model emits "
+                         "'<cand_id>_<chain>' per chain) and to assert the join "
+                         "is non-empty. Strongly recommended: without it a "
+                         "chain-suffixed query cannot be resolved and its row "
+                         "joins to nothing.")
     p.add_argument("--out", required=True,
                     help="Output structural-channel TSV path")
     return p
@@ -199,7 +369,24 @@ def build_args_parser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     args = build_args_parser().parse_args(argv)
     family_map = build_family_map(args.anchor_set, args.gpcrdb_meta)
-    channel = build_structural_channel(args.foldseek_tsvs, family_map)
+
+    candidate_ids = None
+    if args.candidate_fasta:
+        candidate_ids = read_candidate_ids(args.candidate_fasta)
+        if not candidate_ids:
+            print(f"[build_structural_channel] ERROR: no candidate ids read "
+                  f"from {args.candidate_fasta}", file=sys.stderr)
+            return 2
+        print(f"[build_structural_channel] candidate universe: "
+              f"{len(candidate_ids)} ids from {args.candidate_fasta}",
+              file=sys.stderr)
+    else:
+        print("[build_structural_channel] WARNING: no --candidate-fasta given; "
+              "Foldseek query ids cannot be resolved against the candidate "
+              "namespace and the join is unverified.", file=sys.stderr)
+
+    channel = build_structural_channel(args.foldseek_tsvs, family_map,
+                                        candidate_ids=candidate_ids)
     write_channel_tsv(channel, args.out)
     n_novel = sum(1 for r in channel.values() if r["struct_state"] == "novel")
     n_excl = sum(1 for r in channel.values()

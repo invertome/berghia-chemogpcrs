@@ -136,7 +136,20 @@ if [ "${EMB_SCORER:-consensus}" = "consensus" ]; then
         _cand="${EMBEDDINGS_DIR}/candidates_${_tag}_classA.npz"
         _ref="${EMBEDDINGS_DIR}/reference_${_tag}_PROD.npz"
         if [ -f "${_cand}" ] && [ -f "${_ref}" ]; then
-            _emb_specs+=("${_tag}:${_cand}:${_ref}:${EMB_CANDIDATE_IDENTITY_TSV}")
+            # The identity TSV is an OPTIONAL confound (candidate -> nearest-ref
+            # % identity, from an mmseqs run on Unity). Append it only when it
+            # exists: the spec's 4th field is optional by design, and a path
+            # that is merely ABSENT must degrade this one confound -- never the
+            # model, and never the channel. Appending it unconditionally made
+            # _read_identity raise FileNotFoundError into a caller whose handler
+            # is `|| log --level=WARN`, so the locked proteinclip3b + protrek
+            # consensus silently went dormant instead of losing one confound.
+            if [ -f "${EMB_CANDIDATE_IDENTITY_TSV}" ]; then
+                _emb_specs+=("${_tag}:${_cand}:${_ref}:${EMB_CANDIDATE_IDENTITY_TSV}")
+            else
+                _emb_specs+=("${_tag}:${_cand}:${_ref}")
+                log --level=WARN "Optional identity TSV absent (${EMB_CANDIDATE_IDENTITY_TSV}) -- '${_tag}' keeps scoring, identity_to_nearest confound degraded"
+            fi
         else
             _emb_missing=1
             log "Note: consensus model '${_tag}' npz missing (${_cand} / ${_ref}) -- excluded"
@@ -229,7 +242,7 @@ else
         python3 "${SCRIPTS_DIR}/build_embedding_channel.py" \
             --candidate-npz "${ESMC_CANDIDATE_NPZ}" \
             --ref-npz "${ESMC_REFERENCE_NPZ}" \
-            --ref-labels "${REFERENCE_DIR}/anchors/anchor_set.tsv" \
+            --ref-labels "${EMB_REF_LABELS}" \
             ${_emb_scorer_args} \
             --out "${CHANNELS_DIR}/embedding_channel.tsv" \
             2>> "${LOGS_DIR}/build_embedding_channel.err" \
@@ -301,9 +314,28 @@ if [ "${RANK_METHOD:-weighted}" = "rankagg" ]; then
     done
     if [ "${#FOLDSEEK_TSVS[@]}" -gt 0 ]; then
         log "RANK_METHOD=rankagg: building structural evidence channel (${#FOLDSEEK_TSVS[@]} Foldseek DB tab(s))..."
+        # --candidate-fasta gives the producer the candidate id universe, so a
+        # Foldseek query id can be RESOLVED into the ranking table's namespace
+        # rather than used verbatim. Measured (foldseek 10.941cd33): a
+        # single-chain model yields the bare candidate id, but a MULTI-chain
+        # model yields "<cand_id>_A"/"<cand_id>_B" -- one row per chain, none of
+        # which joins. It also arms the zero-overlap assertion, so a query dir
+        # staged under the wrong id scheme fails loudly instead of emitting a
+        # channel that left-joins to nothing.
+        #
+        # Passed only when present, for the same reason the identity TSV is:
+        # an absent optional input must degrade ONE thing (here, join
+        # verification) rather than void the channel. The degradation is logged.
+        _struct_cand_args=()
+        if [ -f "${EMB_CANDIDATE_FASTA}" ]; then
+            _struct_cand_args=(--candidate-fasta "${EMB_CANDIDATE_FASTA}")
+        else
+            log --level=WARN "Candidate FASTA absent (${EMB_CANDIDATE_FASTA}) -- structural channel builds WITHOUT query-id resolution or the join assertion"
+        fi
         python3 "${SCRIPTS_DIR}/build_structural_channel.py" \
             --foldseek-tsvs "${FOLDSEEK_TSVS[@]}" \
             --anchor-set "${REFERENCE_DIR}/anchors/anchor_set.tsv" \
+            "${_struct_cand_args[@]}" \
             --out "${CHANNELS_DIR}/structural_channel.tsv" \
             2>> "${LOGS_DIR}/build_structural_channel.err" \
             || log --level=WARN "Structural channel producer failed (channel stays dormant)"

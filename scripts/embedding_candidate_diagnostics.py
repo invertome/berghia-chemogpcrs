@@ -25,6 +25,7 @@ global correlation alone. The pathological case remains the ESM-C length confoun
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from typing import Dict, List
 
@@ -181,17 +182,44 @@ def _read_lengths(fasta: str) -> Dict[str, int]:
 
 def _read_identity(path: str) -> Dict[str, float]:
     """candidate_id \t max_pct_identity_to_any_reference (from an mmseqs/diamond
-    search, computed on Unity). Missing candidates default to 0.0 identity."""
+    search, computed on Unity). Missing candidates default to 0.0 identity.
+
+    This input is OPTIONAL: it feeds one confound (identity_to_nearest), not the
+    novelty score itself. It therefore DEGRADES rather than raises -- an empty
+    path, a path that does not exist, or a path that is not a readable file all
+    return {} and announce it on stderr.
+
+    Why explicitly, and why here: the callers (fusion_consensus.py's --models
+    spec loop and this module's own main()) run under stage 07 wrapped in
+    `|| log --level=WARN "... (channel stays dormant)"`. A FileNotFoundError
+    raised for a MISSING optional confound was swallowed by that handler and
+    took the ENTIRE embedding channel down with it -- the locked
+    proteinclip3b + protrek consensus, dormant, with only a WARN line to show
+    for it. A real job died on exactly that. Degrading loudly keeps the channel
+    scoring and still makes the missing input visible.
+    """
     if not path:
         return {}
+    if not os.path.isfile(path):
+        print(f"[candidate_diagnostics] WARNING: optional identity TSV not "
+              f"readable: {path} -- continuing WITHOUT the identity_to_nearest "
+              f"confound (novelty scoring is unaffected).", file=sys.stderr)
+        return {}
     d = {}
-    for line in open(path):
-        p = line.rstrip("\n").split("\t")
-        if len(p) >= 2:
-            try:
-                d[p[0]] = float(p[1])
-            except ValueError:
-                pass
+    try:
+        with open(path) as fh:
+            for line in fh:
+                p = line.rstrip("\n").split("\t")
+                if len(p) >= 2:
+                    try:
+                        d[p[0]] = float(p[1])
+                    except ValueError:
+                        pass
+    except OSError as exc:
+        print(f"[candidate_diagnostics] WARNING: optional identity TSV could "
+              f"not be read: {path} ({exc}) -- continuing WITHOUT the "
+              f"identity_to_nearest confound.", file=sys.stderr)
+        return {}
     return d
 
 

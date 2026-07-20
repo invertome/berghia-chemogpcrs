@@ -192,6 +192,25 @@ KNOWN_GAPS: dict[tuple[str, str], tuple[str, str]] = {
         "outright that nothing in the pipeline writes it; the real path comes "
         "from find_orthogroups_tsv(), which resolves.",
     ),
+    (
+        "07_candidate_ranking.sh",
+        "${RESULTS}/ranking/embeddings/candidate_ref_identity_PROD.tsv",
+    ): (
+        OPTIONAL_OVERRIDE,
+        "candidate->nearest-reference %identity, from an mmseqs/diamond search "
+        "run out of band on Unity (see embedding_candidate_diagnostics."
+        "_read_identity). Nothing in this repo writes it, and it has never been "
+        "generated in this checkout (observed on job 61993481). It is the "
+        "OPTIONAL 4th field of a fusion_consensus --models spec, feeding only "
+        "the identity_to_nearest CONFOUND -- never the novelty score. The probe "
+        "is the documented degradation: present -> spec carries the confound; "
+        "absent -> the spec is built without it, every model still scores, and "
+        "the omission is logged. Before that guard existed the path was appended "
+        "unconditionally, _read_identity raised FileNotFoundError on the missing "
+        "file, and stage 07's `|| log --level=WARN` swallowed it -- taking the "
+        "whole embedding channel dormant. The same guard already exists in "
+        "scripts/unity/rebuild_embedding_channel.sh.",
+    ),
 
     # --- LIVE FINDINGS -----------------------------------------------------
     ("05_selective_pressure_and_asr.sh", "${RESULTS}/calibration/depth_thresholds.json"): (
