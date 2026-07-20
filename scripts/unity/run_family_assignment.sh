@@ -29,12 +29,21 @@ set -u
 EMBEDDINGS_DIR="${EMBEDDINGS_DIR:-${RESULTS_DIR}/ranking/embeddings}"
 EMB_CONSENSUS_MODELS="${EMB_CONSENSUS_MODELS:-proteinclip3b protrek}"
 EMB_REF_LABELS="${EMB_REF_LABELS:-${REFERENCE_DIR}/anchors/anchor_set_PROD.tsv}"
+# seq_len sources for the MANDATORY length deconfounding (matches production's
+# fusion_consensus.py --deconfound seq_len). References and candidates both
+# need lengths so they share one residual scale.
+EMB_CANDIDATE_FASTA="${EMB_CANDIDATE_FASTA:-${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia_classA.fa}"
+EMB_ANCHOR_FASTA="${EMB_ANCHOR_FASTA:-${REFERENCE_DIR}/anchors/anchor_set_PROD.fasta}"
 OUT_DIR="${RESULTS_DIR}/ranking/diagnostics"
 mkdir -p "${OUT_DIR}" logs
 
 case "${EMB_REF_LABELS}" in
   *anchor_set.tsv) echo "FATAL: 206-row label set — that is the defect." >&2; exit 2 ;;
 esac
+
+for _f in "${EMB_CANDIDATE_FASTA}" "${EMB_ANCHOR_FASTA}"; do
+    [ -s "${_f}" ] || { echo "FATAL: missing seq_len source ${_f}; deconfounding cannot run." >&2; exit 2; }
+done
 
 for TAG in ${EMB_CONSENSUS_MODELS}; do
     echo
@@ -43,6 +52,9 @@ for TAG in ${EMB_CONSENSUS_MODELS}; do
         --candidate-npz "${EMBEDDINGS_DIR}/candidates_${TAG}_classA.npz" \
         --ref-npz "${EMBEDDINGS_DIR}/reference_${TAG}_PROD.npz" \
         --ref-labels "${EMB_REF_LABELS}" \
+        --candidate-fasta "${EMB_CANDIDATE_FASTA}" \
+        --anchor-fasta "${EMB_ANCHOR_FASTA}" \
+        --deconfound envelope \
         --out-tsv "${OUT_DIR}/family_assignment_${TAG}.tsv"
 done
 
