@@ -186,6 +186,11 @@ def _extract_results_append_dict() -> dict:
         'lse_score': 0.0,
         'raw_depth': 0.0,
         'has_lse_depth': False,   # hf3u: lse_depth availability flag
+        # hf3u: the topological nesting-depth axis, emitted alongside the
+        # patristic one (see tests/unit/test_hf3u_nesting_depth_axis.py).
+        'lse_nesting_score': 0.0,
+        'raw_nesting_depth': 0,
+        'has_lse_nesting_depth': False,
         'chemo_expr_score': 0.0,
         'has_chemo_expr': False,
         'gprotein_score': 0.0,

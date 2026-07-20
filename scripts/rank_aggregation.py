@@ -190,6 +190,21 @@ SIGNAL_SPEC = [
     ("purifying", "has_dnds_data"),
     ("positive", "has_dnds_data"),
     ("lse_depth", "has_phylo_data"),
+    # Bead hf3u: TWO depth axes, deliberately not fused. `lse_depth` scores
+    # cumulative branch length (divergence = rate x time); `lse_nesting_depth`
+    # scores root-to-tip node count (duplication depth). Measured on this
+    # repo's real trees they agree population-wide (spearman +0.897 / +0.604)
+    # and barely at all inside the top quartile that alone affects ranking
+    # (+0.078 / +0.034), so which one is used changes the scored set (62.7% /
+    # 42.5% retained). There is no positive control to arbitrate them -- the
+    # pipeline is subtractive -- so both vote and
+    # audit_signal_ranking_independence.py decides empirically, via the group
+    # map rank_candidates._load_signal_groups feeds back in here, whether they
+    # are redundant enough to count as one. Unlike lse_depth it gates on its
+    # OWN flag: it is measured from its own population against its own
+    # threshold, and is NOT in _OPTIONAL_FLAG_SIGNALS, so a CSV predating the
+    # axis skips it rather than voting blind.
+    ("lse_nesting_depth", "has_lse_nesting_depth_data"),
     ("synteny", "has_synteny_data"),
     ("expression", "has_expression_data"),
     ("chemosensory_expr", "has_chemosensory_expr_data"),

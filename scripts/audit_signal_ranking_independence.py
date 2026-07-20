@@ -14,7 +14,13 @@ from scipy.stats import spearmanr
 
 SIGNAL_COLUMNS = [
     "phylo_score", "purifying_score", "positive_score", "synteny_score",
-    "expression_score", "lse_depth_score", "chemosensory_expr_score",
+    "expression_score", "lse_depth_score",
+    # Bead hf3u: the two depth axes must BOTH reach this matrix -- deciding
+    # whether they are redundant is this audit's job, and it can only make that
+    # call if it sees both. Flag suffix-swaps correctly
+    # (has_lse_nesting_depth_data), so no FLAG_OVERRIDES entry is needed.
+    "lse_nesting_depth_score",
+    "chemosensory_expr_score",
     "gprotein_coexpr_score", "ecl_divergence_score", "expansion_score",
     "og_confidence_score",
     "tandem_cluster_score",  # flag suffix-swaps correctly (has_tandem_cluster_data)

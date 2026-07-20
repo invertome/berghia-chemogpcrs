@@ -70,6 +70,13 @@ _SIGNAL_SPEC = [
     ("purifying", "purifying_score_norm", None, "PURIFYING_WEIGHT", 1.0),
     ("positive", "positive_score_norm", None, "POSITIVE_WEIGHT", 1.0),
     ("lse_depth", "lse_depth_score_norm", None, "LSE_DEPTH_WEIGHT", 1.0),
+    # Bead hf3u: the topological companion to lse_depth (node count vs
+    # cumulative branch length). Unlike the four base axes it is GATED on its
+    # own has_*_data flag, matching how rank_candidates.py's production scorer
+    # contributes it -- the axis must drop out where it could not be measured
+    # rather than contribute a full-weight present-zero.
+    ("lse_nesting_depth", "lse_nesting_depth_score_norm",
+     "has_lse_nesting_depth_data", "LSE_NESTING_DEPTH_WEIGHT", 1.0),
     ("synteny", "synteny_score_norm", "has_synteny_data", "SYNTENY_WEIGHT", 3.0),
     ("expression", "expression_score_norm", "has_expression_data", "EXPR_WEIGHT", 1.0),
     ("chemosensory_expr", "chemosensory_expr_score_norm", "has_chemosensory_expr_data",

@@ -29,15 +29,18 @@ import ablate_ranking as ar
 # Fixtures / helpers
 # ---------------------------------------------------------------------------
 
-# The full 12-signal production weights (rank_candidates.py's *_WEIGHT env
+# The full production weight set (rank_candidates.py's *_WEIGHT env
 # defaults). NOTE the fair scorer's key is 'expression' (fed by EXPR_WEIGHT),
-# not 'expr', and includes tandem_cluster (2.5). Sum = 20.5. Passed
-# explicitly wherever a test needs exact, hand-computable numbers.
+# not 'expr', and includes tandem_cluster (2.5). Bead hf3u added
+# lse_nesting_depth (1.0), the topological companion to lse_depth, taking the
+# sum from 20.5 to 21.5. Passed explicitly wherever a test needs exact,
+# hand-computable numbers.
 DEFAULT_WEIGHTS = {
     "phylo": 2.0,
     "purifying": 1.0,
     "positive": 1.0,
     "lse_depth": 1.0,
+    "lse_nesting_depth": 1.0,
     "synteny": 3.0,
     "expression": 1.0,
     "chemosensory_expr": 3.0,
@@ -46,14 +49,15 @@ DEFAULT_WEIGHTS = {
     "expansion": 1.5,
     "og_confidence": 1.0,
     "tandem_cluster": 2.5,
-}  # sum = 20.5
-TOTAL_WEIGHT = 20.5
+}  # sum = 21.5
+TOTAL_WEIGHT = 21.5
 
 WEIGHT_ENV_VARS = [
     "PHYLO_WEIGHT", "PURIFYING_WEIGHT", "POSITIVE_WEIGHT", "SYNTENY_WEIGHT",
     "EXPR_WEIGHT", "LSE_DEPTH_WEIGHT", "CHEMOSENSORY_EXPR_WEIGHT",
     "GPROTEIN_COEXPR_WEIGHT", "ECL_DIVERGENCE_WEIGHT", "EXPANSION_WEIGHT",
     "OG_CONFIDENCE_WEIGHT", "TANDEM_CLUSTER_WEIGHT",
+    "LSE_NESTING_DEPTH_WEIGHT",
 ]
 
 
@@ -71,6 +75,11 @@ def _full_row(id_, **overrides):
         "purifying_score_norm": 0.0,
         "positive_score_norm": 0.0,
         "lse_depth_score_norm": 0.0,
+        # hf3u: the topological depth axis is GATED (it must report itself
+        # unavailable where it could not be measured), so it defaults to
+        # "no data" like the other gated axes rather than to a present zero.
+        "lse_nesting_depth_score_norm": 0.0,
+        "has_lse_nesting_depth_data": False,
         "synteny_score_norm": 0.0,
         "has_synteny_data": False,
         "expression_score_norm": 0.0,
@@ -104,6 +113,8 @@ def _direct_fair_score(row, weights):
         "purifying": row.get("purifying_score_norm"),
         "positive": row.get("positive_score_norm"),
         "lse_depth": row.get("lse_depth_score_norm"),
+        "lse_nesting_depth": (row.get("lse_nesting_depth_score_norm")
+                              if row.get("has_lse_nesting_depth_data") else None),
         "synteny": row.get("synteny_score_norm") if row.get("has_synteny_data") else None,
         "expression": row.get("expression_score_norm") if row.get("has_expression_data") else None,
         "chemosensory_expr": row.get("chemosensory_expr_score_norm") if row.get("has_chemosensory_expr_data") else None,
@@ -231,7 +242,7 @@ def test_harness_dropped_the_wrong_scorer_apparatus():
 # ---------------------------------------------------------------------------
 
 
-def test_production_weights_are_the_full_12_signal_set(monkeypatch):
+def test_production_weights_are_the_full_signal_set(monkeypatch):
     for var in WEIGHT_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
     weights = ar._production_weights()

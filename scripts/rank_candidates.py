@@ -146,6 +146,14 @@ DNDS_RELIABILITY_FULL = float(os.getenv('DNDS_RELIABILITY_FULL', 5))
 SYNTENY_WEIGHT = float(os.getenv('SYNTENY_WEIGHT', 3))
 EXPR_WEIGHT = float(os.getenv('EXPR_WEIGHT', 1))
 LSE_DEPTH_WEIGHT = float(os.getenv('LSE_DEPTH_WEIGHT', 1))
+# Bead hf3u: the TOPOLOGICAL companion to LSE_DEPTH_WEIGHT. `lse_depth` scores
+# cumulative branch length (divergence); `lse_nesting_depth` scores node count
+# (duplication depth). They are separate axes on purpose -- see
+# collect_candidate_nesting_depths for the measurement that separates them.
+# NB a weight of exactly 0 is read as an EXCLUSION by
+# rank_aggregation.excluded_signals_from_weights, so this default must be > 0
+# for the axis to vote under the production RANK_METHOD=rankagg default.
+LSE_NESTING_DEPTH_WEIGHT = float(os.getenv('LSE_NESTING_DEPTH_WEIGHT', 1))
 
 # NEW: Phase 1 - Chemosensory expression weight
 CHEMOSENSORY_EXPR_WEIGHT = float(os.getenv('CHEMOSENSORY_EXPR_WEIGHT', 3))
@@ -183,6 +191,12 @@ BOOTSTRAP_THRESHOLD = float(os.getenv('BOOTSTRAP_THRESHOLD', 70))       # New: m
 
 # LSE threshold percentile
 LSE_DEPTH_PERCENTILE = float(os.getenv('LSE_DEPTH_PERCENTILE', 75))
+# Same percentile, applied to the topological measure. Kept as its own knob so
+# the two axes can be tuned apart, but defaulted to LSE_DEPTH_PERCENTILE so
+# they select the same-sized tail unless deliberately separated. A percentile
+# (not a constant) is what makes this transfer to another species' tree.
+LSE_NESTING_DEPTH_PERCENTILE = float(
+    os.getenv('LSE_NESTING_DEPTH_PERCENTILE', LSE_DEPTH_PERCENTILE))
 
 # Local database directory (for reference categories)
 LOCAL_DB_DIR = os.getenv('LOCAL_DB_DIR', '')
@@ -367,6 +381,72 @@ def collect_candidate_depths(tree, candidate_ids):
             if not nodes:
                 continue
             depths.append(nodes[0].get_distance(tree))
+        except Exception:
+            continue
+    return depths
+
+
+def collect_candidate_nesting_depths(tree, candidate_ids):
+    """Root-to-tip NODE COUNTS of every candidate present in the tree.
+
+    The percentile population for the ``lse_nesting_depth`` axis, and the exact
+    topological analogue of ``collect_candidate_depths``: same membership-only
+    admission rule (measured or absent, never a substituted zero), same
+    no-support-filter rationale, different quantity.
+
+    WHY THIS IS A SEPARATE AXIS AND NOT A REPLACEMENT (bead hf3u)
+    -------------------------------------------------------------
+    ``collect_candidate_depths`` returns ``get_distance()``, cumulative branch
+    length. That is evolutionary RATE x TIME, not nesting depth. The two
+    questions differ, and for this project they differ in a way that matters:
+
+      * nesting depth asks "how deeply nested is this gene inside a
+        lineage-specific radiation" -- a claim about DUPLICATION HISTORY, which
+        is the signature the project hunts, since chemoreceptor expansions are
+        large, recent, species-specific radiations;
+      * cumulative branch length asks "how much sequence divergence has
+        accumulated", which conflates radiation depth with RATE. Chemoreceptors
+        evolve fast under diversifying selection, so a fast-evolving shallow
+        paralog can outscore a slow-evolving deeply-nested one.
+
+    MEASURED on this repo's two real trees (2026-07-20), branch length vs node
+    count, whole-leaf population and the top quartile that alone affects rank:
+
+        all_berghia_refs.treefile (439)  population rho +0.8973
+                                         top-quartile rho +0.0782  (n=110)
+                                         62.73% of the scored set retained
+        gpcrs.treefile (2371)            population rho +0.6038
+                                         top-quartile rho +0.0339  (n=593)
+                                         42.50% of the scored set retained
+
+    Nearly interchangeable population-wide; all but uncorrelated exactly where
+    ranking happens. Neither can be arbitrated against ground truth -- the
+    pipeline is SUBTRACTIVE (classify every other molluscan GPCR family, keep
+    the unclassified residual) and there is no positive control for molluscan
+    odorant receptors. So both are emitted and
+    ``audit_signal_ranking_independence.py`` decides empirically, from the
+    production ranked CSV, whether they are redundant enough to be grouped.
+
+    WHY ``len(get_ancestors())`` AND NOT NODES-TO-THE-EXPANSION-MRCA. The
+    alternative -- counting up to the root of the maximal conspecific clade --
+    was measured on the same trees and rejected: on the 439-leaf tree every
+    leaf is a candidate, so it degenerates to this measure exactly; on the
+    2371-leaf tree it is 20.1% zero-inflated (a candidate sister to a reference
+    scores 0) and ANTI-correlates with branch length (rho -0.5016), because it
+    is a function of which references happened to be sampled into the tree
+    rather than of the candidate's own history. That is dataset-specific in the
+    way the generalize-to-other-species constraint forbids. A bare node count
+    needs no clade delineation, no species labels and no external data; it
+    inherits a dependence on rooting, but that is the same dependence
+    ``get_distance(tree)`` already carries, so it adds none.
+    """
+    depths = []
+    for cand_id in candidate_ids:
+        try:
+            nodes = tree.search_nodes(name=cand_id)
+            if not nodes:
+                continue
+            depths.append(len(nodes[0].get_ancestors()))
         except Exception:
             continue
     return depths
@@ -1109,6 +1189,32 @@ def get_lse_depth_score(candidate_id, tree, threshold):
     return 0.0, 0.0
 
 
+def get_lse_nesting_depth_score(candidate_id, tree, threshold):
+    """Topological nesting depth score: node count, gated at ``threshold``.
+
+    The exact counterpart of ``get_lse_depth_score`` over
+    ``len(get_ancestors())`` instead of ``get_distance()`` -- see
+    ``collect_candidate_nesting_depths`` for why both quantities are carried.
+
+    Same present-but-unmeasured discipline: the SCORE is gated (only the deep
+    tail scores) but the RAW node count is reported whenever it could be
+    measured, so "measured, shallow" (score 0.0, raw 3) stays distinguishable
+    from "not in the tree" (0.0, 0.0). ``threshold`` is +inf when no percentile
+    could be derived, which scores nobody while still reporting every raw
+    depth; the ``has_lse_nesting_depth_data`` flag is what drops the axis.
+
+    Returns: (depth_score, raw_nesting_depth)
+    """
+    try:
+        nodes = tree.search_nodes(name=candidate_id)
+        if nodes:
+            depth = len(nodes[0].get_ancestors())
+            return (depth if depth > threshold else 0.0), depth
+    except Exception:
+        pass
+    return 0.0, 0.0
+
+
 # --- Orthogroup Bootstrap Confidence Score ---
 OG_CONFIDENCE_WEIGHT = float(os.getenv('OG_CONFIDENCE_WEIGHT', 1))
 
@@ -1812,6 +1918,8 @@ def calculate_rank_score(df, weights):
     _axes = [
         ('phylo', 'phylo_score_norm', 'has_phylo_data'),
         ('lse_depth', 'lse_depth_score_norm', 'has_lse_depth_data'),
+        ('lse_nesting_depth', 'lse_nesting_depth_score_norm',
+         'has_lse_nesting_depth_data'),
         ('purifying', 'purifying_score_norm', None),
         ('positive', 'positive_score_norm', None),
         ('synteny', 'synteny_score_norm', 'has_synteny_data'),
@@ -2012,7 +2120,12 @@ def run_leave_one_out_crossval(df, tree, ref_ids, base_weights, n_folds=5):
             df['positive_score_norm'].values * base_weights['positive'] +
             df['synteny_score_norm'].values * base_weights['synteny'] +
             df['expression_score_norm'].values * base_weights['expression'] +
-            df['lse_depth_score_norm'].values * base_weights['lse_depth']
+            df['lse_depth_score_norm'].values * base_weights['lse_depth'] +
+            # hf3u: the topological depth axis participates in cross-validation
+            # on the same footing as the patristic one, so the CV diagnostic
+            # reflects the axis set the production scorer actually uses.
+            df['lse_nesting_depth_score_norm'].values
+            * base_weights['lse_nesting_depth']
         )
 
         cv_ranks = pd.Series(cv_scores).rank(ascending=False)
@@ -2066,8 +2179,15 @@ if t is not None and ref_ids:
 # collect_candidate_depths for why filtering it on branch support biases the
 # percentile toward shallow candidates (bead hf3u).
 all_depths = []
+# Bead hf3u: the topological population, collected independently of the
+# patristic one. NOT derived from it and NOT aliased to it -- if the two
+# availability flags were co-missing by construction, the independence audit's
+# estimate of how redundant these axes are would be biased by the very
+# bookkeeping that is supposed to let it measure them.
+all_nesting_depths = []
 if t is not None:
     all_depths = collect_candidate_depths(t, candidates['id'])
+    all_nesting_depths = collect_candidate_nesting_depths(t, candidates['id'])
 else:
     print("Warning: Skipping depth calculation - tree not available.", file=sys.stderr)
 
@@ -2093,6 +2213,34 @@ else:
           f"{LSE_DEPTH_PERCENTILE}). The lse_depth axis reports itself "
           f"UNAVAILABLE for every candidate rather than scoring against a "
           f"substituted constant.", file=sys.stderr)
+
+# Bead hf3u: the topological axis's own availability and threshold. Same
+# discipline as above -- no constant is ever substituted for an underivable
+# threshold; the axis drops out instead.
+LSE_NESTING_DEPTH_AVAILABLE = len(all_nesting_depths) > 0
+
+if LSE_NESTING_DEPTH_AVAILABLE:
+    lse_nesting_threshold = np.percentile(
+        all_nesting_depths, LSE_NESTING_DEPTH_PERCENTILE)
+    # NB node counts are integers, so ties at the boundary mean the scored tail
+    # is not exactly (100 - percentile)%. Measured on this repo's trees: 20.3%
+    # and 21.7% above a 75th-percentile cut, vs 25.1% / 24.9% for the
+    # continuous patristic measure. That is a property of a discrete measure,
+    # not a mis-set threshold, so the fraction is REPORTED rather than forced.
+    _n_above = sum(1 for d in all_nesting_depths if d > lse_nesting_threshold)
+    print(f"LSE nesting-depth threshold: {lse_nesting_threshold:.1f} nodes "
+          f"({LSE_NESTING_DEPTH_PERCENTILE}th percentile of "
+          f"{len(all_nesting_depths)} candidate nesting depths); "
+          f"{_n_above} candidates score above it "
+          f"({_n_above / len(all_nesting_depths):.1%})", file=sys.stderr)
+else:
+    lse_nesting_threshold = float('inf')
+    print(f"Warning: no candidate was found in the tree, so no "
+          f"lse_nesting_depth threshold could be derived "
+          f"(LSE_NESTING_DEPTH_PERCENTILE={LSE_NESTING_DEPTH_PERCENTILE}). "
+          f"The lse_nesting_depth axis reports itself UNAVAILABLE for every "
+          f"candidate rather than scoring against a substituted constant.",
+          file=sys.stderr)
 
 # --- Load NEW Data Sources (Phases 1-5) ---
 # Phase 1: Chemosensory expression data
@@ -2221,6 +2369,12 @@ for cand_id in candidates['id']:
     # tree AND a threshold could be derived from the candidate population.
     lse_score, raw_depth = get_lse_depth_score(cand_id, t, lse_threshold)
     has_lse_depth = bool(has_phylo and LSE_DEPTH_AVAILABLE)
+    # Bead hf3u: the topological companion axis. Measured from its own
+    # population against its own threshold, so its availability is a genuinely
+    # separate fact from the patristic axis's rather than an alias of it.
+    lse_nesting_score, raw_nesting_depth = get_lse_nesting_depth_score(
+        cand_id, t, lse_nesting_threshold)
+    has_lse_nesting_depth = bool(has_phylo and LSE_NESTING_DEPTH_AVAILABLE)
 
     # Phase 1 - Chemosensory expression score (tissue-weighted: rhinophore > oral-tentacle)
     chemo_expr_score, has_chemo_expr = get_chemosensory_expression_score(
@@ -2297,6 +2451,11 @@ for cand_id in candidates['id']:
         'lse_depth_score': lse_score,
         'raw_tree_depth': raw_depth,
         'has_lse_depth_data': has_lse_depth,
+        # hf3u: topological nesting depth, the duplication-history counterpart
+        # of the patristic (divergence) measure above.
+        'lse_nesting_depth_score': lse_nesting_score,
+        'raw_nesting_depth': raw_nesting_depth,
+        'has_lse_nesting_depth_data': has_lse_nesting_depth,
         # NEW scores
         'chemosensory_expr_score': chemo_expr_score,
         'has_chemosensory_expr_data': has_chemo_expr,
@@ -2338,6 +2497,7 @@ df = pd.DataFrame(results)
 # Normalize continuous scores to [0,1] range for fair comparison
 normalize_cols = [
     'phylo_score', 'purifying_score', 'positive_score', 'expression_score', 'lse_depth_score',
+    'lse_nesting_depth_score',
     # NEW score columns
     'chemosensory_expr_score', 'gprotein_coexpr_score', 'ecl_divergence_score', 'expansion_score',
     'og_confidence_score'
@@ -2402,6 +2562,7 @@ SCORING_WEIGHTS = {
     'purifying': PURIFYING_WEIGHT,
     'positive': POSITIVE_WEIGHT,
     'lse_depth': LSE_DEPTH_WEIGHT,
+    'lse_nesting_depth': LSE_NESTING_DEPTH_WEIGHT,
     'synteny': SYNTENY_WEIGHT,
     'expression': EXPR_WEIGHT,
     'chemosensory_expr': CHEMOSENSORY_EXPR_WEIGHT,
@@ -2461,6 +2622,9 @@ def calculate_fair_rank_score(row):
         # hf3u: lse_depth additionally needs a DERIVABLE threshold, not just
         # tree membership -- see LSE_DEPTH_AVAILABLE.
         'lse_depth': row.get('lse_depth_score_norm') if row.get('has_lse_depth_data') else None,
+        # hf3u: topological nesting depth votes alongside -- not instead of --
+        # the patristic measure, gated on its own availability flag.
+        'lse_nesting_depth': row.get('lse_nesting_depth_score_norm') if row.get('has_lse_nesting_depth_data') else None,
         'synteny': row.get('synteny_score_norm') if row.get('has_synteny_data') else None,
         'expression': row.get('expression_score_norm') if row.get('has_expression_data') else None,
         'chemosensory_expr': row.get('chemosensory_expr_score_norm') if row.get('has_chemosensory_expr_data') else None,
@@ -2587,6 +2751,9 @@ output_cols = [
     'meme_strict_only_sites', 'meme_alignment_robustness_index',
     'synteny_score', 'has_synteny_data', 'expression_score', 'has_expression_data',
     'lse_depth_score', 'raw_tree_depth', 'has_lse_depth_data',
+    # Bead hf3u: the topological depth axis, written alongside the patristic
+    # one so audit_signal_ranking_independence.py can correlate the two.
+    'lse_nesting_depth_score', 'raw_nesting_depth', 'has_lse_nesting_depth_data',
     'has_phylo_data', 'has_dnds_data',
     # NEW: Phase 1-5 scores
     'chemosensory_expr_score', 'has_chemosensory_expr_data',
@@ -2687,6 +2854,8 @@ if RUN_SENSITIVITY:
                             'positive': r.get('positive_score_norm'),
                             'lse_depth': (r.get('lse_depth_score_norm')
                                           if r.get('has_lse_depth_data') else None),
+                            'lse_nesting_depth': (r.get('lse_nesting_depth_score_norm')
+                                                  if r.get('has_lse_nesting_depth_data') else None),
                             'synteny': r.get('synteny_score_norm') if r.get('has_synteny_data') else None,
                             'expression': r.get('expression_score_norm') if r.get('has_expression_data') else None,
                             'chemosensory_expr': r.get('chemosensory_expr_score_norm') if r.get('has_chemosensory_expr_data') else None,
@@ -2756,7 +2925,8 @@ if RUN_CROSSVAL and len(ref_ids) >= CROSSVAL_FOLDS:
         # Bead -yfx8: 'expression', not 'expr' -- one vocabulary across
         # SCORING_WEIGHTS, calculate_rank_score and run_leave_one_out_crossval.
         'expression': EXPR_WEIGHT,
-        'lse_depth': LSE_DEPTH_WEIGHT
+        'lse_depth': LSE_DEPTH_WEIGHT,
+        'lse_nesting_depth': LSE_NESTING_DEPTH_WEIGHT
     }
 
     cv_results = run_leave_one_out_crossval(
@@ -2825,7 +2995,10 @@ if cv_results:
 # --- Score Component Correlation Analysis (M27) ---
 # Analyze correlations between score components to detect redundancy or unexpected relationships
 score_cols_for_corr = ['phylo_score', 'purifying_score', 'positive_score',
-                       'synteny_score', 'expression_score', 'lse_depth_score']
+                       'synteny_score', 'expression_score', 'lse_depth_score',
+                       # hf3u: both depth axes, so this report shows how
+                       # redundant they actually were on THIS run's data.
+                       'lse_nesting_depth_score']
 available_cols = [col for col in score_cols_for_corr if col in df.columns]
 
 if len(available_cols) >= 2:
