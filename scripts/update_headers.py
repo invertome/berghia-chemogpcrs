@@ -17,6 +17,73 @@ from Bio.SeqRecord import SeqRecord
 # Track counters per taxid for unique IDs
 taxid_counters = defaultdict(int)
 
+# Opt-in gate for assigning IDs that do not already exist in the map.
+# IDs are WRITE-ONCE: once a record has a short ID, that ID denotes that record
+# forever. Re-issuing one is silent identity corruption -- both the old and new
+# files contain the same ID, so every downstream join SUCCEEDS and returns the
+# wrong record. The default is therefore refusal: when a map already exists,
+# any record it does not cover is a hard error unless the operator explicitly
+# opts in.
+ALLOW_NEW_IDS_ENV = 'ALLOW_NEW_IDS'
+
+# A short ID this script previously assigned: ref_<taxid>_<N>. Used to detect
+# input that has ALREADY been through the minter (stage 01 moves its output
+# over its own input, so a re-run feeds short IDs back in). Re-deriving a taxid
+# from such a header yields 'ref' for every taxon and collapses the whole
+# namespace, so it is never allowed to fall through to assignment.
+MINTED_ID_RE = re.compile(r'^ref_[A-Za-z0-9]+_\d+$')
+
+
+class IdentityError(Exception):
+    """Raised when honoring a request would re-issue or invent an identifier."""
+
+
+def _sample(items, limit=5):
+    """Render a short, actionable excerpt of an offending-ID list."""
+    shown = ", ".join(items[:limit])
+    if len(items) > limit:
+        shown += f", ... (+{len(items) - limit} more)"
+    return shown
+
+
+def new_ids_allowed():
+    """True when the operator has explicitly opted in to new-ID assignment."""
+    return os.environ.get(ALLOW_NEW_IDS_ENV, '').strip().lower() in {
+        '1', 'true', 'yes',
+    }
+
+
+def load_id_map(id_map_file):
+    """Load an existing ID map.
+
+    Returns (by_original, by_short, high_water) where by_original maps source
+    accession -> short ID, by_short is the inverse, and high_water records the
+    largest suffix ever handed out per taxid. The high-water mark is what keeps
+    a retired ID retired: pruning a record leaves a GAP, and the gap is never
+    reused by a later record.
+    """
+    by_original = {}
+    by_short = {}
+    high_water = defaultdict(int)
+
+    if not os.path.exists(id_map_file):
+        return by_original, by_short, high_water
+
+    with open(id_map_file) as handle:
+        handle.readline()  # discard the CSV header row
+        for line in handle:
+            fields = line.rstrip('\n').split(',')
+            if len(fields) < 3 or not fields[0]:
+                continue
+            original, short, taxid = fields[0], fields[1], fields[2]
+            by_original[original] = short
+            by_short[short] = original
+            suffix = re.search(r'_(\d+)$', short)
+            if suffix:
+                high_water[taxid] = max(high_water[taxid], int(suffix.group(1)))
+
+    return by_original, by_short, high_water
+
 
 def extract_taxid(header, description=""):
     """
@@ -136,60 +203,136 @@ def process_sequences(fasta_file, id_map_file, source_type=None, append=False,
     """
     global taxid_counters
 
-    if existing_counters:
-        taxid_counters = existing_counters
-
     output_file = f"{fasta_file}_updated.fa"
+
+    # --- Reuse before assign -------------------------------------------------
+    # Look for an existing map FIRST. If one exists it is authoritative: every
+    # record must resolve through it, and the file is only ever appended to,
+    # never rewritten. That is what makes a re-run a genuine no-op instead of a
+    # renumbering.
+    existing_by_original, existing_by_short, high_water = load_id_map(id_map_file)
+    map_exists = bool(existing_by_original)
+
+    taxid_counters = defaultdict(int, high_water)
+    if existing_counters:
+        for key, value in existing_counters.items():
+            taxid_counters[key] = max(taxid_counters[key], value)
+
+    # With no prior map there is no identity to preserve, so the first run
+    # bootstraps freely. Once a map exists, assignment needs the opt-in.
+    may_assign = (not map_exists) or new_ids_allowed()
+
     updated_records = []
+    new_rows = []
+    unresolved = []
+    premapped_without_entry = []
 
-    mode = 'a' if append else 'w'
-    write_header = not append or not os.path.exists(id_map_file)
+    # Use SeqIO for robust FASTA parsing (handles multi-line sequences, validates format)
+    for record in SeqIO.parse(fasta_file, "fasta"):
+        original_id = record.id
+        description = record.description.replace(record.id, "").strip()
 
-    with open(id_map_file, mode) as map_out:
-        if write_header:
-            map_out.write("original_id,short_id,taxid,source_type,species_name,gene_name,seq_length\n")
+        # 1. The record's source accession is already mapped -> reuse its ID.
+        #    This is what keeps the partial CDS subset aligned with the protein
+        #    pass: resolution is by IDENTITY, not by position, so a dropped CDS
+        #    record cannot shift the ones after it.
+        short_id = existing_by_original.get(original_id)
 
-        # Use SeqIO for robust FASTA parsing (handles multi-line sequences, validates format)
-        for record in SeqIO.parse(fasta_file, "fasta"):
-            original_id = record.id
-            description = record.description.replace(record.id, "").strip()
+        # 2. The input is itself already-mapped output (stage 01 moves the
+        #    updated FASTA over its own input). Carry the ID through unchanged
+        #    and add no row -- the record already owns this ID.
+        if short_id is None and original_id in existing_by_short:
+            short_id = original_id
 
-            taxid = extract_taxid(original_id, description)
-            species = extract_species_name(original_id, description)
-            gene = extract_gene_name(original_id, description)
-            src_type = source_type or infer_source_type(fasta_file, original_id)
-
-            # Increment counter for this taxid
-            taxid_counters[taxid] += 1
-            counter = taxid_counters[taxid]
-
-            # Create short ID preserving taxonomy
-            # Avoid double-prefixing (e.g., ref_ref_aplcal_1)
-            if id_prefix:
-                short_id = f"{id_prefix}_{taxid}_{counter}"
-            elif src_type == 'reference':
-                if taxid.startswith('ref_'):
-                    short_id = f"{taxid}_{counter}"
-                else:
-                    short_id = f"ref_{taxid}_{counter}"
-            else:
-                short_id = f"{taxid}_{counter}"
-
-            # Escape commas in fields for CSV
-            species_safe = species.replace(',', ';')
-            gene_safe = gene.replace(',', ';')
-            original_safe = original_id.replace(',', ';')
-
-            # Write mapping with extended metadata
-            map_out.write(f"{original_safe},{short_id},{taxid},{src_type},{species_safe},{gene_safe},{len(record.seq)}\n")
-
-            # Create updated record with new ID
-            updated_record = SeqRecord(
-                record.seq,
-                id=short_id,
-                description=""  # Clear description to keep header clean
+        if short_id is not None:
+            updated_records.append(
+                SeqRecord(record.seq, id=short_id, description="")
             )
-            updated_records.append(updated_record)
+            continue
+
+        # 3. Unresolved. An already-minted-looking header that the map does not
+        #    know about means the map is missing or stale relative to this
+        #    FASTA. Deriving a taxid from it would yield 'ref' for every taxon,
+        #    so this is a hard stop that the opt-in deliberately cannot waive.
+        if MINTED_ID_RE.match(original_id):
+            premapped_without_entry.append(original_id)
+            continue
+
+        if not may_assign:
+            unresolved.append(original_id)
+            continue
+
+        taxid = extract_taxid(original_id, description)
+        species = extract_species_name(original_id, description)
+        gene = extract_gene_name(original_id, description)
+        src_type = source_type or infer_source_type(fasta_file, original_id)
+
+        # Continue from the high-water mark so a gap left by a pruned record is
+        # never handed to a different record.
+        taxid_counters[taxid] += 1
+        position = taxid_counters[taxid]
+
+        # Create short ID preserving taxonomy
+        # Avoid double-prefixing (e.g., ref_ref_aplcal_1)
+        if id_prefix:
+            short_id = f"{id_prefix}_{taxid}_{position}"
+        elif src_type == 'reference':
+            if taxid == 'ref' or taxid.startswith('ref_'):
+                short_id = f"{taxid}_{position}"
+            else:
+                short_id = f"ref_{taxid}_{position}"
+        else:
+            short_id = f"{taxid}_{position}"
+
+        # Escape commas in fields for CSV
+        species_safe = species.replace(',', ';')
+        gene_safe = gene.replace(',', ';')
+        original_safe = original_id.replace(',', ';')
+
+        new_rows.append(
+            f"{original_safe},{short_id},{taxid},{src_type},"
+            f"{species_safe},{gene_safe},{len(record.seq)}\n"
+        )
+        existing_by_short[short_id] = original_id
+        updated_records.append(
+            SeqRecord(record.seq, id=short_id, description="")
+        )
+
+    # --- Abort loudly, before writing anything -------------------------------
+    if premapped_without_entry:
+        raise IdentityError(
+            "input contains short IDs this map does not cover: "
+            + _sample(premapped_without_entry)
+            + f"\nThe FASTA has already been through {os.path.basename(__file__)}"
+            f" but '{id_map_file}' is missing or stale."
+            "\nRestore the ID map that assigned those IDs; re-deriving them"
+            " would give every taxon the same 'ref' namespace and silently"
+            " re-point existing IDs at different records."
+        )
+
+    if unresolved:
+        raise IdentityError(
+            f"{len(unresolved)} record(s) are absent from '{id_map_file}': "
+            + _sample(unresolved)
+            + "\nIDs are write-once, so this script will not assign new ones by"
+            f" default. Set {ALLOW_NEW_IDS_ENV}=1 to extend the map (existing"
+            " IDs are preserved; new records continue above the high-water"
+            " mark)."
+        )
+
+    # --- Commit --------------------------------------------------------------
+    # The map is append-only: a pruned record keeps its row so its ID stays
+    # retired rather than being recycled. `append` is retained for callers but
+    # no longer decides truncation -- nothing truncates the map.
+    if new_rows or not os.path.exists(id_map_file):
+        need_header = not os.path.exists(id_map_file)
+        with open(id_map_file, 'a') as map_out:
+            if need_header:
+                map_out.write(
+                    "original_id,short_id,taxid,source_type,"
+                    "species_name,gene_name,seq_length\n"
+                )
+            map_out.writelines(new_rows)
 
     # Write updated sequences
     SeqIO.write(updated_records, output_file, "fasta")
@@ -210,22 +353,29 @@ def main():
     parser.add_argument('--id-prefix', help='Custom prefix for short IDs')
 
     # Support legacy positional-only usage
-    if len(sys.argv) == 3 and not sys.argv[1].startswith('-'):
-        fasta_file = sys.argv[1]
-        id_map_file = sys.argv[2]
-        count, counters = process_sequences(fasta_file, id_map_file)
-    else:
-        args = parser.parse_args()
-        count, counters = process_sequences(
-            args.fasta_file,
-            args.id_map_file,
-            source_type=args.source_type,
-            append=args.append,
-            id_prefix=args.id_prefix
-        )
+    try:
+        if len(sys.argv) == 3 and not sys.argv[1].startswith('-'):
+            fasta_file = sys.argv[1]
+            id_map_file = sys.argv[2]
+            count, counters = process_sequences(fasta_file, id_map_file)
+        else:
+            args = parser.parse_args()
+            count, counters = process_sequences(
+                args.fasta_file,
+                args.id_map_file,
+                source_type=args.source_type,
+                append=args.append,
+                id_prefix=args.id_prefix
+            )
+    except IdentityError as exc:
+        # Fail hard and visibly. Falling back to assigning IDs here is exactly
+        # the silent corruption this guard exists to prevent.
+        sys.stderr.write(f"ERROR: refusing to re-issue identifiers.\n{exc}\n")
+        return 2
 
     print(f"Processed {count} sequences from {len(counters)} taxa")
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

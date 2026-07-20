@@ -467,9 +467,18 @@ mv "${RESULTS_DIR}/reference_sequences/all_references.fa_updated.fa" "${RESULTS_
 # --- Step 6: Update CDS headers to match protein headers ---
 if [ -f "${RESULTS_DIR}/reference_sequences/cds/all_references_cds.fna" ]; then
     log "Updating CDS headers to match protein ID mapping..."
-    python3 "${SCRIPTS_DIR}/update_headers.py" \
+    # The CDS pass resolves against the protein pass's map by source accession,
+    # so the partial CDS subset keeps each protein's short ID. If a CDS record
+    # is absent from that map the minter refuses rather than assigning a new ID
+    # (see update_headers.py). Propagate that refusal: letting it through would
+    # leave the CDS headers unmapped and the mv below would fail with a
+    # misleading "failed to move" message that hides the real cause.
+    if ! python3 "${SCRIPTS_DIR}/update_headers.py" \
         "${RESULTS_DIR}/reference_sequences/cds/all_references_cds.fna" "${ID_MAP}" \
-        --source-type reference --append
+        --source-type reference --append; then
+        log "Error: CDS header update refused to assign identifiers (see above)"
+        exit 1
+    fi
     # update_headers.py always writes f"{fasta_file}_updated.fa" -- it appends to
     # the WHOLE input path, extension included -- so the CDS output is
     # all_references_cds.fna_updated.fa, matching the protein remap above.

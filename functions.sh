@@ -1097,8 +1097,12 @@ find_nucleotide_sequences() {
 
         # --- Check reference CDS file first for reference sequences ---
         if [ "$is_ref" = "yes" ] && [ -f "$REFERENCE_CDS_FILE" ]; then
-            # Try exact match with the seq_id
-            if grep -q "^>${seq_id}" "$REFERENCE_CDS_FILE"; then
+            # Anchor on the record boundary the extraction below uses. Short IDs
+            # end in an unpadded counter, so ref_phau_1 is a strict PREFIX of
+            # ref_phau_12: an unanchored gate passed while the anchored awk
+            # matched nothing, counting the sequence as found and writing zero
+            # bases under a header downstream codon alignment expects to be real.
+            if grep -qE "^>${seq_id}([[:space:]]|$)" "$REFERENCE_CDS_FILE"; then
                 # Extract sequence (handle multi-line FASTA)
                 awk -v id="$seq_id" '
                     /^>/ { if (match($0, "^>" id "($|[[:space:]])")) { print; found=1; next } else { found=0 } }
@@ -1123,9 +1127,12 @@ find_nucleotide_sequences() {
                                "${TRANSCRIPTOME_DIR}/${taxid}_${taxid}.${ext}" \
                                "${TRANSCRIPTOME_DIR}/${taxid}_"*".${ext}"; do
                     if [ -f "$nuc_file" ]; then
-                        # Extract the corresponding nucleotide sequence
-                        # Try exact match first, then partial match
-                        if grep -q "^>${seq_id}" "$nuc_file"; then
+                        # Extract the corresponding nucleotide sequence.
+                        # Both gates anchor on the record boundary, as above --
+                        # doubly important here because the protein_id branch
+                        # RENAMES whatever it matched to seq_id, so a prefix
+                        # collision would relabel another gene's nucleotides.
+                        if grep -qE "^>${seq_id}([[:space:]]|$)" "$nuc_file"; then
                             # Handle multi-line FASTA
                             awk -v id="$seq_id" '
                                 /^>/ { if (match($0, "^>" id "($|[[:space:]])")) { print; found=1; next } else { found=0 } }
@@ -1133,7 +1140,7 @@ find_nucleotide_sequences() {
                             ' "$nuc_file" >> "$output_file"
                             found=true
                             break 2
-                        elif grep -q "^>${protein_id}" "$nuc_file"; then
+                        elif grep -qE "^>${protein_id}([[:space:]]|$)" "$nuc_file"; then
                             # Extract and rename header to match protein
                             awk -v id="$protein_id" -v new_id="$seq_id" '
                                 /^>/ { if (match($0, "^>" id "($|[[:space:]])")) { print ">" new_id; found=1; next } else { found=0 } }
@@ -1150,7 +1157,8 @@ find_nucleotide_sequences() {
 
         # --- Fallback: check all reference CDS for non-reference sequences too ---
         if [ "$found" = false ] && [ -f "$REFERENCE_CDS_FILE" ]; then
-            if grep -q "^>${seq_id}" "$REFERENCE_CDS_FILE"; then
+            # Anchored for the same reason as the reference-CDS gate above.
+            if grep -qE "^>${seq_id}([[:space:]]|$)" "$REFERENCE_CDS_FILE"; then
                 awk -v id="$seq_id" '
                     /^>/ { if (match($0, "^>" id "($|[[:space:]])")) { print; found=1; next } else { found=0 } }
                     found { print }
