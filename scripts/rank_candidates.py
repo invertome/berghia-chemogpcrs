@@ -40,6 +40,8 @@ from _rank_candidates_lib import (
     calculate_fair_rank_score as _calculate_fair_rank_score_corrected,
     load_meme_concordance,
     normalize_synteny_counts,
+    parse_support_label,
+    resolve_support_scale,
 )
 
 # Conditional ete3 import - may fail on Python 3.13+ due to removed cgi module
@@ -230,11 +232,135 @@ if ref_cat_path:
     except Exception as e:
         print(f"Warning: Could not load reference categories: {e}", file=sys.stderr)
 
+# --- Branch-support parsing (bead -i3w9) -------------------------------
+# Defined HERE, above the module-level tree load below, because that load
+# calls annotate_tree_support() at import time.
+
+def annotate_tree_support(tree, source='tree', newick_format=1, quiet=False):
+    """Attach parsed branch support to every internal node as ``_parsed_support``.
+
+    Bead -i3w9. ete3's ``format=1`` parser puts the Newick internal label in
+    ``node.name`` and leaves ``node.support`` at its constructor default of 1.0,
+    so ``node.support`` is meaningless for trees loaded that way. Measured on
+    this repo's own class-A-style tree: 437/437 internal nodes reported
+    ``support == 1.0`` and 0 passed ``BOOTSTRAP_THRESHOLD = 70``. Every consumer
+    that gated on support therefore saw a constant, and ``phylo_score`` (weight
+    2, the pipeline's primary biological axis) was 0.0 for every candidate.
+
+    ``_parsed_support`` is a float on the 0-100 percent scale, or ``None`` when
+    the node carries no support value. ``None`` means "not measured" and must
+    never be silently substituted with a default by a caller.
+
+    Args:
+        tree: an ete3 Tree.
+        source: label used in the diagnostic messages (a filename is ideal).
+        newick_format: the format the tree was LOADED with. With ``0`` ete3
+            parses support natively into ``node.support`` and leaves the name
+            empty, so that is read instead of the label. Passing this explicitly
+            avoids having to guess, which is impossible: a genuine support of
+            1.0 is indistinguishable from ete3's default.
+
+    Returns:
+        (n_internal, n_with_support, n_labelled)
+    """
+    internals = [n for n in tree.traverse() if not n.is_leaf()]
+
+    if newick_format != 1:
+        raw = [(n, n.support) for n in internals if n.support is not None]
+        mult = resolve_support_scale([v for _, v in raw])
+        for node in internals:
+            node._parsed_support = None
+        for node, value in raw:
+            node._parsed_support = float(value) * mult
+        return len(internals), len(raw), len(raw)
+
+    parsed = {}
+    undetermined = []
+    n_labelled = 0
+    for node in internals:
+        label = (node.name or '').strip()
+        if label:
+            n_labelled += 1
+        got = parse_support_label(label)
+        parsed[id(node)] = got
+        if got is not None and not got[1]:
+            undetermined.append(got[0])
+
+    mult = resolve_support_scale(undetermined)
+    n_with_support = 0
+    for node in internals:
+        got = parsed[id(node)]
+        if got is None:
+            node._parsed_support = None
+            continue
+        value, is_percent = got
+        node._parsed_support = float(value) if is_percent else float(value) * mult
+        n_with_support += 1
+
+    # Degrade EXPLICITLY, never silently: say what was found and what it costs.
+    # `quiet` is for bulk loaders that aggregate one summary over many trees
+    # instead of emitting hundreds of identical lines -- the report still gets
+    # made, just once.
+    if quiet:
+        return len(internals), n_with_support, n_labelled
+    if internals and n_with_support == 0:
+        if n_labelled:
+            example = next((n.name for n in internals if (n.name or '').strip()), '')
+            print(f"Warning: {source}: {n_labelled}/{len(internals)} internal labels "
+                  f"are present but none parse as branch support (e.g. '{example}'). "
+                  f"This tree carries NO support data; support-gated scoring is "
+                  f"disabled for it.", file=sys.stderr)
+        else:
+            print(f"Warning: {source}: tree has no internal branch labels; "
+                  f"support-gated scoring is disabled for it.", file=sys.stderr)
+    elif n_labelled > n_with_support:
+        print(f"Warning: {source}: {n_labelled - n_with_support} of {n_labelled} "
+              f"internal labels could not be parsed as branch support; those "
+              f"nodes count as unsupported.", file=sys.stderr)
+
+    return len(internals), n_with_support, n_labelled
+
+
+def collect_candidate_depths(tree, candidate_ids, bootstrap_threshold):
+    """Root-to-tip depths of candidates whose whole path to the root is supported.
+
+    Bead -i3w9: this loop used to read ``getattr(current.up, 'support', None)``,
+    which under ete3 format=1 is always 1.0, so every candidate failed the
+    threshold, the list came back empty, and the caller silently fell back to a
+    hardcoded ``lse_threshold = 0.5`` -- making ``LSE_DEPTH_PERCENTILE`` dead
+    config. Nodes with no parsed support (``None``) are treated as unknown
+    rather than unsupported, matching the previous intent.
+    """
+    depths = []
+    for cand_id in candidate_ids:
+        try:
+            nodes = tree.search_nodes(name=cand_id)
+            if not nodes:
+                continue
+            node = nodes[0]
+            has_good_support = True
+            current = node
+            while current.up:
+                support = getattr(current.up, '_parsed_support', None)
+                if support is not None and support < bootstrap_threshold:
+                    has_good_support = False
+                    break
+                current = current.up
+            if has_good_support:
+                depths.append(node.get_distance(tree))
+        except Exception:
+            continue
+    return depths
+
+
 # --- Load Phylogenetic Tree ---
 tree_filename = os.environ.get("PHYLO_TREE_FILENAME", "class_A/class_A.treefile")
 tree_file = f"{phylo_dir}/{tree_filename}"
 t = None
 ref_ids = []
+# Bead -i3w9: whether this tree actually carries parsed branch support. False
+# means support-gated scoring degrades to distance-only (warned about at load).
+TREE_HAS_SUPPORT = False
 
 if not os.path.exists(tree_file):
     print(f"Warning: Tree file not found: {tree_file}. Phylogenetic scoring disabled.",
@@ -244,6 +370,13 @@ elif not ETE3_AVAILABLE:
 else:
     try:
         t = Tree(tree_file, format=1)  # format=1 for IQ-TREE output with support values
+        # Bead -i3w9: format=1 leaves node.support at ete3's default of 1.0 and
+        # puts the real IQ-TREE 'SH-aLRT/UFBoot' label in node.name, so support
+        # must be parsed off the label before any support-gated scoring runs.
+        _n_int, _n_sup, _n_lab = annotate_tree_support(t, source=tree_filename)
+        TREE_HAS_SUPPORT = _n_sup > 0
+        print(f"Parsed branch support for {_n_sup}/{_n_int} internal nodes "
+              f"in {tree_filename}", file=sys.stderr)
         # Identify reference sequences — exclude outgroup (used only for rooting)
         ref_ids = [leaf.name for leaf in t
                    if leaf.name.startswith('ref_') and not leaf.name.startswith('ref_outgroup_')]
@@ -256,6 +389,7 @@ else:
               file=sys.stderr)
         t = None
         ref_ids = []
+        TREE_HAS_SUPPORT = False
 
 
 # --- Load Reference Categories from CSV ---
@@ -680,7 +814,10 @@ def path_bootstrap_confidence(tree, name_a, name_b, threshold):
                 continue
             current = nodes[0]
             while current != ancestor and current.up:
-                support = getattr(current.up, 'support', None)
+                # Bead -i3w9: `_parsed_support` (from the Newick label via
+                # annotate_tree_support), not `node.support`, which ete3's
+                # format=1 parser leaves at a constant default of 1.0.
+                support = getattr(current.up, '_parsed_support', None)
                 if support is not None:
                     supports.append(support)
                 current = current.up
@@ -710,11 +847,14 @@ def precompute_phylo_data(tree, candidate_names, ref_ids, k_nearest=50):
         node_supports: dict of node_id -> support value for all internal nodes
         leaf_lookup: dict of leaf_name -> ete3 node
     """
-    # Cache all internal node support values by node id
+    # Cache all internal node support values by node id.
+    # Bead -i3w9: read `_parsed_support` (set by annotate_tree_support from the
+    # Newick label), NOT `node.support` -- under ete3 format=1 the latter is a
+    # constant 1.0 that never clears BOOTSTRAP_THRESHOLD.
     node_supports = {}
     for node in tree.traverse():
         if not node.is_leaf():
-            node_supports[id(node)] = getattr(node, 'support', None)
+            node_supports[id(node)] = getattr(node, '_parsed_support', None)
 
     # Build leaf name -> node lookup once
     leaf_lookup = {leaf.name: leaf for leaf in tree}
@@ -743,8 +883,17 @@ def precompute_phylo_data(tree, candidate_names, ref_ids, k_nearest=50):
     return distances, node_supports, leaf_lookup
 
 
-def fast_path_bootstrap_confidence(leaf_a, leaf_b, leaf_lookup, node_supports, threshold):
-    """Fast bootstrap confidence using cached node supports."""
+def fast_path_bootstrap_confidence(leaf_a, leaf_b, leaf_lookup, node_supports,
+                                   threshold, tree_has_support=True):
+    """Fast bootstrap confidence using cached node supports.
+
+    Args:
+        tree_has_support: False when annotate_tree_support found no parsed
+            support anywhere in this tree (already warned about at load time).
+            The path can then only be scored on distance, so no support penalty
+            is applied. When True, a path whose nodes carry no parsed support is
+            a genuine evidence gap and scores 0.
+    """
     if leaf_a not in leaf_lookup or leaf_b not in leaf_lookup:
         return 0.0
 
@@ -756,16 +905,25 @@ def fast_path_bootstrap_confidence(leaf_a, leaf_b, leaf_lookup, node_supports, t
         return 0.0
 
     supports = []
+    n_path_nodes = 0
     for node in (node_a, node_b):
         current = node
         while current != ancestor and current.up:
+            n_path_nodes += 1
             sup = node_supports.get(id(current.up))
             if sup is not None:
                 supports.append(sup)
             current = current.up
 
     if not supports:
-        return 1.0
+        # No support to check. Two distinct causes, only one of which is benign:
+        #   n_path_nodes == 0 -- nothing lies between the pair and their MRCA,
+        #     so there is no branch to doubt (maximal proximity, not missing
+        #     evidence); returning 0 here would zero the closest relationships.
+        #   not tree_has_support -- the whole tree lacks support annotation, an
+        #     explicit, already-warned degradation to distance-only scoring.
+        # Otherwise the path really is unvouched-for and scores 0.
+        return 1.0 if (n_path_nodes == 0 or not tree_has_support) else 0.0
 
     good = sum(1 for s in supports if s >= threshold)
     return good / len(supports)
@@ -810,7 +968,7 @@ def weighted_distance_to_refs(node_name, tree, ref_ids):
 
 
 def weighted_distance_to_refs_fast(node_name, precomputed_distances, leaf_lookup,
-                                    node_supports):
+                                    node_supports, tree_has_support=True):
     """Efficient phylo scoring using precomputed k-nearest distances.
 
     Uses cached distances and bootstrap values instead of per-pair tree traversal.
@@ -826,7 +984,8 @@ def weighted_distance_to_refs_fast(node_name, precomputed_distances, leaf_lookup
     for dist, ref_name in nearest:
         weight = categorize_reference(ref_name)
         confidence = fast_path_bootstrap_confidence(
-            node_name, ref_name, leaf_lookup, node_supports, BOOTSTRAP_THRESHOLD
+            node_name, ref_name, leaf_lookup, node_supports, BOOTSTRAP_THRESHOLD,
+            tree_has_support=tree_has_support
         )
         total += confidence * weight / (dist + 1e-6)
 
@@ -939,6 +1098,7 @@ def load_og_trees(results_dir):
         return {}
 
     og_trees = {}
+    n_without_support = 0
     og_tree_dirs = list(Path(results_dir).glob(
         'orthogroups/input/OrthoFinder/Results_*/Resolved_Gene_Trees'
     ))
@@ -946,13 +1106,33 @@ def load_og_trees(results_dir):
     for tree_dir in og_tree_dirs:
         for tree_file in tree_dir.glob('OG*_tree.txt'):
             og_name = tree_file.stem.replace('_tree', '')
+            # Bead -i3w9: annotate with the format the tree was actually loaded
+            # with -- format=1 keeps support in the label, format=0 in
+            # node.support. NB OrthoFinder's Resolved_Gene_Trees label internal
+            # nodes 'n1', 'n2', ... (node names, measured over 150 real files),
+            # so these trees usually carry no support at all and the
+            # og_confidence axis correctly reports itself unavailable.
             try:
-                og_trees[og_name] = Tree(str(tree_file), format=1)
+                tree_obj = Tree(str(tree_file), format=1)
+                _, n_sup, _ = annotate_tree_support(
+                    tree_obj, source=tree_file.name, newick_format=1, quiet=True)
             except Exception:
                 try:
-                    og_trees[og_name] = Tree(str(tree_file), format=0)
+                    tree_obj = Tree(str(tree_file), format=0)
+                    _, n_sup, _ = annotate_tree_support(
+                        tree_obj, source=tree_file.name, newick_format=0, quiet=True)
                 except Exception:
                     continue
+            og_trees[og_name] = tree_obj
+            if n_sup == 0:
+                n_without_support += 1
+
+    if og_trees and n_without_support:
+        print(f"Warning: {n_without_support}/{len(og_trees)} orthogroup gene trees "
+              f"carry no branch-support values (OrthoFinder Resolved_Gene_Trees "
+              f"label internal nodes 'n1','n2',... rather than support). The "
+              f"og_confidence axis reports itself unavailable for those "
+              f"candidates rather than scoring them.", file=sys.stderr)
 
     return og_trees
 
@@ -1016,13 +1196,27 @@ def get_og_confidence_score(candidate_id, gene_to_og, og_trees, bootstrap_thresh
             continue
         current = nodes[0]
         while current != ancestor and current.up:
-            sup = getattr(current.up, 'support', None)
+            # Bead -i3w9: `_parsed_support` comes from the Newick label via
+            # annotate_tree_support. `node.support` was a constant 1.0 here.
+            sup = getattr(current.up, '_parsed_support', None)
             if sup is not None:
                 supports.append(sup)
             current = current.up
 
     if not supports:
-        return 1.0, True  # No bootstrap data — don't penalize
+        # Bead -i3w9, related trap. This used to `return 1.0, True` -- "no
+        # bootstrap data, don't penalize" -- which records "could not measure"
+        # as "scored perfectly, WITH evidence" and hands the axis a full-weight
+        # 1.0 on no evidence at all. It was masked only because ete3 always
+        # supplied 1.0, so the `>= 70` branch fired and returned 0.0 instead;
+        # repairing the parse without repairing this would have converted a
+        # constant zero into a constant one. This is the real, common case:
+        # OrthoFinder's Resolved_Gene_Trees (what load_og_trees globs) label
+        # internal nodes 'n1', 'n2', ... -- node names, never support values.
+        # (0.0, False) matches every other get_*_score helper and lets the
+        # evidence-completeness machinery drop the axis from BOTH the numerator
+        # and the denominator.
+        return 0.0, False
 
     good = sum(1 for s in supports if s >= bootstrap_threshold)
     return good / len(supports), True
@@ -1597,7 +1791,17 @@ def calculate_rank_score(df, weights):
         ('purifying', 'purifying_score_norm', None),
         ('positive', 'positive_score_norm', None),
         ('synteny', 'synteny_score_norm', 'has_synteny_data'),
-        ('expr', 'expression_score_norm', 'has_expression_data'),
+        # Bead -yfx8: this key MUST match SCORING_WEIGHTS (and therefore the
+        # production scorer + the LHS sweep), which use 'expression'. It read
+        # 'expr' here, so `weights.get('expr', 0)` missed against the
+        # SCORING_WEIGHTS copy this function is actually called with and the
+        # axis contributed 0 to BOTH weighted_sum and avail_weight while
+        # total_weight still counted EXPR_WEIGHT. That silently corrupted
+        # sensitivity_analysis.csv, the rank_stability/std_rank/rank_range
+        # columns merged into the shipped CSV, and weight_importance.json --
+        # where weight_importance['expression'] was guaranteed to report
+        # expression as unimportant regardless of the data.
+        ('expression', 'expression_score_norm', 'has_expression_data'),
         ('chemosensory_expr', 'chemosensory_expr_score_norm', 'has_chemosensory_expr_data'),
         ('gprotein_coexpr', 'gprotein_coexpr_score_norm', 'has_gprotein_data'),
         ('ecl_divergence', 'ecl_divergence_score_norm', 'has_ecl_data'),
@@ -1783,7 +1987,7 @@ def run_leave_one_out_crossval(df, tree, ref_ids, base_weights, n_folds=5):
             df['purifying_score_norm'].values * base_weights['purifying'] +
             df['positive_score_norm'].values * base_weights['positive'] +
             df['synteny_score_norm'].values * base_weights['synteny'] +
-            df['expression_score_norm'].values * base_weights['expr'] +
+            df['expression_score_norm'].values * base_weights['expression'] +
             df['lse_depth_score_norm'].values * base_weights['lse_depth']
         )
 
@@ -1837,31 +2041,25 @@ if t is not None and ref_ids:
 # Only include nodes on paths with sufficient bootstrap support (H12 fix)
 all_depths = []
 if t is not None:
-    for cand_id in candidates['id']:
-        try:
-            nodes = t.search_nodes(name=cand_id)
-            if nodes:
-                node = nodes[0]
-                # Check if the path to root has sufficient bootstrap support
-                # Walk up the tree and verify bootstrap values
-                has_good_support = True
-                current = node
-                while current.up:
-                    # IQ-TREE stores bootstrap as support attribute
-                    support = getattr(current.up, 'support', None)
-                    if support is not None and support < BOOTSTRAP_THRESHOLD:
-                        has_good_support = False
-                        break
-                    current = current.up
-
-                if has_good_support:
-                    all_depths.append(node.get_distance(t))
-        except Exception:
-            pass
+    all_depths = collect_candidate_depths(t, candidates['id'], BOOTSTRAP_THRESHOLD)
 else:
     print("Warning: Skipping depth calculation - tree not available.", file=sys.stderr)
 
-lse_threshold = np.percentile(all_depths, LSE_DEPTH_PERCENTILE) if all_depths else 0.5
+if all_depths:
+    lse_threshold = np.percentile(all_depths, LSE_DEPTH_PERCENTILE)
+    print(f"LSE depth threshold: {lse_threshold:.4f} "
+          f"({LSE_DEPTH_PERCENTILE}th percentile of {len(all_depths)} "
+          f"well-supported candidate depths)", file=sys.stderr)
+else:
+    # Bead -i3w9: this fallback used to fire for EVERY run -- ete3's default
+    # support of 1.0 failed the >= 70 test at every node, so all_depths was
+    # always empty and LSE_DEPTH_PERCENTILE was dead config. Say so out loud
+    # rather than quietly substituting a magic number.
+    lse_threshold = 0.5
+    print(f"Warning: no candidate had a fully supported path to the root, so "
+          f"LSE_DEPTH_PERCENTILE={LSE_DEPTH_PERCENTILE} could not be applied; "
+          f"falling back to a fixed lse_threshold of {lse_threshold}.",
+          file=sys.stderr)
 
 # --- Load NEW Data Sources (Phases 1-5) ---
 # Phase 1: Chemosensory expression data
@@ -1904,7 +2102,8 @@ for cand_id in candidates['id']:
     # Phylogenetic score — use fast precomputed path when available
     if precomputed_distances:
         phylo_score = weighted_distance_to_refs_fast(
-            cand_id, precomputed_distances, leaf_lookup, node_supports
+            cand_id, precomputed_distances, leaf_lookup, node_supports,
+            tree_has_support=TREE_HAS_SUPPORT
         )
     else:
         phylo_score = weighted_distance_to_refs(cand_id, t, ref_ids)
@@ -2514,7 +2713,9 @@ if RUN_CROSSVAL and len(ref_ids) >= CROSSVAL_FOLDS:
         'purifying': PURIFYING_WEIGHT,
         'positive': POSITIVE_WEIGHT,
         'synteny': SYNTENY_WEIGHT,
-        'expr': EXPR_WEIGHT,
+        # Bead -yfx8: 'expression', not 'expr' -- one vocabulary across
+        # SCORING_WEIGHTS, calculate_rank_score and run_leave_one_out_crossval.
+        'expression': EXPR_WEIGHT,
         'lse_depth': LSE_DEPTH_WEIGHT
     }
 

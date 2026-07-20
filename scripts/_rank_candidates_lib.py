@@ -84,6 +84,97 @@ def categorize_reference(
 
 
 # -----------------------------------------------------------------------------
+# Branch-support parsing (bead -i3w9)
+# -----------------------------------------------------------------------------
+#
+# rank_candidates.py loads trees with ``Tree(path, format=1)``. ete3's format=1
+# parser puts the Newick internal LABEL into ``node.name`` and leaves
+# ``node.support`` at the constructor default of 1.0 -- it does NOT parse the
+# label into a number. Every consumer used to read ``node.support`` and compare
+# it to BOOTSTRAP_THRESHOLD (70), so on the repo's own class-A tree all 437
+# internal nodes reported 1.0 and none passed. The real support is in the label.
+#
+# Label forms measured in this repository on 2026-07-20 (not assumed):
+#
+#   producer                                        example label   meaning
+#   ----------------------------------------------  --------------  ---------------
+#   IQ-TREE `-B N -alrt N` (production, 04 line 63)  '0.777/97'     SH-aLRT/UFBoot
+#   IQ-TREE `-alrt N -abayes -B N`                   '88.3/.99/95'  UFBoot LAST
+#   IQ-TREE .contree                                 '100'          UFBoot percent
+#   FastTree                                         '0.768'        proportion
+#   OrthoFinder Gene_Trees                           '1', '0.999'   proportion
+#   OrthoFinder Resolved_Gene_Trees                  'n5'           NODE NAME
+#   unlabelled OG tree (e.g. OG0000339.treefile)     ''             nothing
+#
+# Which component is the support? For composite labels, the LAST one: that is
+# UFBoot, the value BOOTSTRAP_THRESHOLD=70 conventionally refers to, and
+# IQ-TREE always writes it as an integer percent. SH-aLRT is deliberately NOT
+# used -- it is emitted on a 0-1 scale by some invocations and 0-100 by others
+# (this repo's own treefile is 0-1: 0.229, 0.777, 1.000), so thresholding it at
+# 70 would be scale-dependent. UFBoot has no such ambiguity.
+
+_SUPPORT_SEPARATOR = "/"
+
+
+def parse_support_label(label: Optional[str]):
+    """Parse one Newick internal-node label into a raw branch-support number.
+
+    Args:
+        label: the internal node label (ete3 format=1 puts this in ``node.name``).
+
+    Returns:
+        ``None`` if the label carries no support value at all -- an empty label,
+        or a label that is not numeric (OrthoFinder's ``n5`` node names). The
+        caller must treat this as "not measured", never as a default value.
+
+        ``(value, True)`` when the value is known to be on the 0-100 percent
+        scale (composite IQ-TREE labels, whose trailing UFBoot field always is).
+
+        ``(value, False)`` for a bare number, whose scale cannot be decided from
+        one label -- a bare ``1`` is 100% in an OrthoFinder Gene_Tree (siblings
+        are 0.999) but 1% in an IQ-TREE .contree. Resolve those together with
+        :func:`resolve_support_scale`, which looks at the whole tree.
+    """
+    if label is None:
+        return None
+    text = str(label).strip()
+    if not text:
+        return None
+
+    if _SUPPORT_SEPARATOR in text:
+        parts = [p.strip() for p in text.split(_SUPPORT_SEPARATOR)]
+        if any(not p for p in parts):
+            return None                      # malformed, e.g. '0.9/' or '//'
+        try:
+            values = [float(p) for p in parts]
+        except ValueError:
+            return None
+        return (values[-1], True)            # UFBoot is last, always percent
+
+    try:
+        return (float(text), False)
+    except ValueError:
+        return None                          # 'n5', 'abc', ...
+
+
+def resolve_support_scale(raw_values: Sequence[float]) -> float:
+    """Multiplier converting bare support values to the 0-100 percent scale.
+
+    Decided once per tree rather than per label, because a single bare value is
+    genuinely ambiguous. If every bare value in the tree is <= 1.0 the tree is
+    proportion-scaled (FastTree, OrthoFinder Gene_Trees) and must be multiplied
+    by 100; if any exceeds 1.0 the tree is already percent-scaled (IQ-TREE
+    .contree). Without this, a perfectly supported FastTree node (1.000) would
+    read as 1% and fail a threshold of 70 -- the same failure mode as the ete3
+    default this bead fixes.
+    """
+    values = [v for v in raw_values if v is not None]
+    if not values:
+        return 1.0
+    return 100.0 if max(values) <= 1.0 else 1.0
+
+
+# -----------------------------------------------------------------------------
 # Benjamini-Hochberg FDR (bead -wux part 1)
 # -----------------------------------------------------------------------------
 
