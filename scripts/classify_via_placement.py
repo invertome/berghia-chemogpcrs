@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 import re
 import shutil
@@ -230,6 +231,23 @@ def build_edge_to_family_map(tree_newick: str,
 
 # ---- LWR-gated classification ------------------------------------------
 
+def _finite_lwr(value) -> float | None:
+    """Coerce a likelihood weight ratio to a finite float, else None.
+
+    IEEE-754 makes every comparison with NaN False, so a bare
+    `lwr < threshold` gate lets a NaN fall through to the CONFIDENT branch —
+    a placement whose LWR could not be computed at all was being emitted as
+    a real family call. A missing or degenerate LWR is the least confident
+    outcome possible, so it must land in the same bucket as a low one.
+    """
+    try:
+        lwr = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(lwr):
+        return None
+    return lwr
+
 def classify_placement_for_id(
     candidate_id: str,
     placements: dict[str, dict],
@@ -244,12 +262,16 @@ def classify_placement_for_id(
             "edge": -1,
         }
     p = placements[candidate_id]
-    if p["lwr"] < lwr_threshold:
+    lwr = _finite_lwr(p.get("lwr"))
+    if lwr is None or lwr < lwr_threshold:
         return {
             "family": "unclassified-placement",
             "subfamily": "",
-            "lwr": p["lwr"],
-            "edge": p["edge_num"],
+            # A degenerate LWR is reported as 0.0, never propagated: a NaN
+            # would compare False against every downstream threshold too,
+            # recreating this bug further along the pipeline.
+            "lwr": 0.0 if lwr is None else lwr,
+            "edge": p.get("edge_num", -1),
         }
     fam, sub = edge_map.get(p["edge_num"], ("", ""))
     if not fam:

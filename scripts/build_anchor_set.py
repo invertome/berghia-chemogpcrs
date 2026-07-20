@@ -62,7 +62,13 @@ PLATYNEREIS_TAXID = 6359
 BERGHIA_TAXID = 1287507
 PLATYNEREIS_DEORPH_PMID = "26190115"  # Bauknecht & Jekely 2015
 
-GPCR_KEYWORD = 'keyword:"g-protein coupled receptor"'
+# Stable UniProt keyword ACCESSION for "G protein-coupled receptor".
+# 2026-07-20: the display-name form keyword:"g-protein coupled receptor"
+# returns HTTP 200 with zero results — UniProt renamed KW-0297 to
+# "G protein-coupled receptor" (no hyphen after G). Verified the same day:
+# display name -> 0 rows for human, KW-0297 -> 839. Accessions cannot be
+# renamed, so always query the accession.
+GPCR_KEYWORD = "keyword:KW-0297"
 
 # Tier-3 source taxa (reviewed, from the curated non-chemo TSV).
 TIER3_TAXA = {

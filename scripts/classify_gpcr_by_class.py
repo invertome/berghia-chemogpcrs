@@ -8,12 +8,12 @@ Output: per-sequence TSV
     seq_id  class  evidence_pfam  evidence_family_hmm  top_evalue
 
 Class call hierarchy:
-    1. hmmscan against Pfam 7TM-class HMMs (17 accessions covering A/B/C/F).
-       Best E-value below --evalue wins → class label.
+    1. hmmscan against Pfam 7TM-class HMMs (11 verified accessions covering
+       A/B/C/F). Best E-value below --evalue wins → class label.
     2. hmmscan against 06c family HMMs (aminergic, opsin, etc.) independently.
        Best passing hit → evidence_family_hmm (subfamily annotation).
        This NEVER overrides the Pfam-derived class label.
-    3. Special case: PF10324 (insect 7tm_6) → class=A but
+    3. Special case: PF02949 (insect 7tm_6 odorant receptors) → class=A but
        evidence_family_hmm=insect_OR_atypical even without a 06c hit.
 
 TIAMMAT preference: on startup, glob family_hmm_dir for tiammat_*.hmm.
@@ -54,34 +54,73 @@ from typing import Callable, Optional
 # Constants
 # ---------------------------------------------------------------------------
 
-# 17 Pfam accessions -> GPCR class (A/B/C/F).
-# Class A covers rhodopsin-like (PF00001) plus all the expanded sr / 7tm_N
-# families used in invertebrate chemoreceptor research.
+# Pfam accession -> GPCR class (A/B/C/F).
+#
+# 2026-07-20 audit: the previous 17-entry map was largely wrong. Twelve of
+# the seventeen inline comments named a family the accession does not
+# encode, and SIX accessions were not GPCRs at all — see
+# _NON_GPCR_PFAM_BLOCKLIST below. Every surviving entry was re-verified
+# against https://www.ebi.ac.uk/interpro/api/entry/pfam/{accession}/ and the
+# names are now pinned in _PFAM_VERIFIED_NAME (machine-checked by
+# tests/unit/test_classification_vocab_pfam.py) rather than left in
+# comments, which is how the drift went unnoticed in the first place.
 _PFAM_TO_CLASS: dict[str, str] = {
-    "PF00001": "A",   # 7tm_1      rhodopsin-like (canonical Class A)
-    "PF00002": "B",   # 7tm_2      secretin/adhesion (Class B)
-    "PF00003": "C",   # 7tm_3      glutamate-like (Class C)
-    "PF01534": "F",   # Frizzled   frizzled/smoothened (Class F)
-    "PF02949": "A",   # 7tm_4      vertebrate olfactory receptors
-    "PF05296": "A",   # TAS2R      taste type-2 receptors
-    "PF10324": "A",   # 7tm_6      insect olfactory receptors (inverted topology)
-    "PF08395": "A",   # 7tm_5      C. elegans sr family
-    "PF03402": "A",   # 7tm_7      C. elegans sr family
-    "PF12022": "A",   # 7tm_8      C. elegans
-    "PF11399": "A",   # 7tm_9      C. elegans
-    "PF13853": "A",   # Srx        C. elegans nematode chemoreceptors
-    "PF10326": "A",   # Srsx       C. elegans
-    "PF13863": "A",   # Srbc       C. elegans
-    "PF13886": "A",   # Srt        C. elegans
-    "PF13887": "A",   # Sri        C. elegans
-    "PF13889": "A",   # Srh        C. elegans
+    "PF00001": "A",   # rhodopsin-like (canonical Class A)
+    "PF00002": "B",   # secretin/adhesion (Class B)
+    "PF00003": "C",   # glutamate-like (Class C)
+    "PF01534": "F",   # frizzled/smoothened (Class F)
+    "PF02949": "A",   # insect odorant receptors (inverted topology)
+    "PF05296": "A",   # taste type-2 receptors
+    "PF08395": "A",   # chemosensory receptors
+    "PF03402": "A",   # vomeronasal type-1 pheromone receptors
+    "PF13853": "A",   # vertebrate olfactory receptors
+    "PF10324": "A",   # C. elegans serpentine chemoreceptor Srw
+    "PF10326": "A",   # C. elegans serpentine chemoreceptor Str
 }
 
-# Pfam accessions that carry an intrinsic subfamily annotation even
-# without a 06c family-HMM hit.  Currently only PF10324 (atypical inverted
-# topology — must NOT be grouped with mollusc Class A in per-class trees).
+# Accession -> InterPro Pfam "short name". Verified 2026-07-20 against the
+# InterPro REST API. Kept as data (not comments) so a test can pin it.
+_PFAM_VERIFIED_NAME: dict[str, str] = {
+    "PF00001": "7tm_1",           # 7 transmembrane receptor (rhodopsin family)
+    "PF00002": "7tm_2",           # 7 transmembrane receptor (Secretin family)
+    "PF00003": "7tm_3",           # 7tm sweet-taste receptor of 3 GCPR
+    "PF01534": "Frizzled",        # Frizzled/Smoothened family membrane region
+    "PF02949": "7tm_6",           # 7tm Odorant receptor
+    "PF05296": "TAS2R",           # Taste receptor protein (TAS2R)
+    "PF08395": "7tm_7",           # 7tm Chemosensory receptor
+    "PF03402": "V1R",             # Vomeronasal organ pheromone receptor, V1R
+    "PF13853": "7tm_4",           # Olfactory receptor
+    "PF10324": "7TM_GPCR_Srw",    # Serpentine type 7TM GPCR chemoreceptor Srw
+    "PF10326": "7TM_GPCR_Str",    # Serpentine type 7TM GPCR chemoreceptor Str
+}
+
+# Accessions REMOVED 2026-07-20 because they are not GPCRs. Recorded here so
+# the rationale travels with the code and a re-add is an obvious conflict.
+#
+# The most dangerous of these was PF13886: TM7S3/TM198 is genuinely a 7-TM
+# domain, so a hit cleared the downstream >=6-TM filter and entered the
+# candidate set labelled "class A GPCR". The others could turn a
+# chromosome-segregation or COG-complex protein into a class-A call at the
+# stage-02 default of --evalue 1e-5.
+_NON_GPCR_PFAM_BLOCKLIST: dict[str, str] = {
+    "PF12022": "COG2_C",          # COG complex component, COG2, C-terminal
+    "PF11399": "DUF3192",         # Protein of unknown function
+    "PF13863": "DUF4200",         # Domain of unknown function
+    "PF13886": "TM7S3_TM198",     # TM7S3/TM198-like domain (7-TM, NOT a GPCR)
+    "PF13887": "MYRF_ICA",        # Myelin regulatory factor ICA domain
+    "PF13889": "Chromosome_seg",  # Chromosome segregation during meiosis
+}
+
+# Pfam accessions that carry an intrinsic subfamily annotation even without a
+# 06c family-HMM hit.
+#
+# 2026-07-20: this tag was on PF10324, which is 7TM_GPCR_Srw — a *C. elegans*
+# serpentine chemoreceptor, not an insect OR. That routed genuine
+# chemoreceptors out of the class-A tree. PF02949 (7tm_6) is the family that
+# actually holds the insect odorant receptors with inverted topology, which
+# must NOT be grouped with mollusc Class A in the per-class trees.
 _PFAM_SUBFAMILY: dict[str, str] = {
-    "PF10324": "insect_OR_atypical",
+    "PF02949": "insect_OR_atypical",
 }
 
 # 06c family-HMM prefixes that represent GPCR classes, not subfamilies.

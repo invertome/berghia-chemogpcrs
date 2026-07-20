@@ -81,20 +81,29 @@ def test_call_class_A_from_PF02949():
 
 
 # ---------------------------------------------------------------------------
-# 6. PF10324 -> class=A AND evidence_family_hmm=insect_OR_atypical
+# 6. PF02949 -> class=A AND evidence_family_hmm=insect_OR_atypical
 # ---------------------------------------------------------------------------
 
-def test_PF10324_sets_class_A_and_insect_subfamily():
-    """PF10324 (insect 7tm_6) maps to class A, and the _PFAM_SUBFAMILY
-    lookup sets evidence_family_hmm even when no 06c hit exists."""
-    hits = [("PF10324", "seq1", 1e-60)]
+def test_PF02949_sets_class_A_and_insect_subfamily():
+    """PF02949 is the REAL insect odorant-receptor family (InterPro short name
+    `7tm_6`), so the insect_OR_atypical subfamily belongs on it.
+
+    It was previously on PF10324, which InterPro reports as `7TM_GPCR_Srw`
+    (a *C. elegans* serpentine chemoreceptor). That mislabelling routed real
+    chemoreceptors OUT of the class-A tree."""
+    hits = [("PF02949", "seq1", 1e-60)]
     cls, evidence_pfam, top_evalue = cgc.call_class(hits, cgc._PFAM_TO_CLASS, 1e-5)
     assert cls == "A"
-    assert evidence_pfam == "PF10324"
+    assert evidence_pfam == "PF02949"
 
-    # Subfamily from _PFAM_SUBFAMILY (no 06c hits)
-    subfam = cgc.refine_subfamily([], pfam_accession="PF10324")
+    subfam = cgc.refine_subfamily([], pfam_accession="PF02949")
     assert subfam == "insect_OR_atypical"
+
+
+def test_PF10324_is_srw_and_carries_no_insect_subfamily():
+    """Regression guard: PF10324 must never regain the insect-OR label."""
+    assert cgc._PFAM_VERIFIED_NAME["PF10324"] == "7TM_GPCR_Srw"
+    assert cgc.refine_subfamily([], pfam_accession="PF10324") != "insect_OR_atypical"
 
 
 # ---------------------------------------------------------------------------
@@ -397,16 +406,25 @@ def test_parse_tblout_groups_and_sorts(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 16. _PFAM_TO_CLASS completeness — all 17 Pfams present
+# 16. _PFAM_TO_CLASS completeness — 11 verified GPCR Pfams, 6 blocklisted
 # ---------------------------------------------------------------------------
 
-def test_pfam_to_class_has_all_17_entries():
+def test_pfam_to_class_holds_only_verified_gpcr_families():
+    # Verified against InterPro 2026-07-20. Six accessions previously in this
+    # map are NOT GPCRs and were moved to the blocklist; two of the comments
+    # they carried (`7tm_8`, `7tm_9`) name Pfam entries that do not exist.
     required = {
         "PF00001", "PF00002", "PF00003", "PF01534",
         "PF02949", "PF05296", "PF10324", "PF08395",
-        "PF03402", "PF12022", "PF11399", "PF13853",
-        "PF10326", "PF13863", "PF13886", "PF13887",
-        "PF13889",
+        "PF03402", "PF13853", "PF10326",
+    }
+    blocklisted = {
+        "PF12022",  # COG2_C          - COG complex component
+        "PF11399",  # DUF3192
+        "PF13863",  # DUF4200
+        "PF13886",  # TM7S3_TM198     - 7-TM but NOT a GPCR; cleared the >=6-TM filter
+        "PF13887",  # MYRF_ICA
+        "PF13889",  # Chromosome_seg  - chromosome segregation during meiosis
     }
     assert required == set(cgc._PFAM_TO_CLASS.keys()), (
         f"Missing: {required - set(cgc._PFAM_TO_CLASS.keys())}\n"
@@ -484,8 +502,8 @@ def test_parse_tblout_strips_pfam_version_suffix(tmp_path):
     assert evalue == 1.2e-50
 
 
-def test_pf10324_atypical_with_versioned_accession(tmp_path):
-    """PF10324 (insect 7tm_6) with versioned accession should still trigger
+def test_pf02949_atypical_with_versioned_accession(tmp_path):
+    """PF02949 (the real insect 7tm_6) with a versioned accession should still trigger
     the special subfamily annotation insect_OR_atypical."""
     # Simulate parsing a tblout with versioned PF10324
     tblout_pf10324 = """\
@@ -493,25 +511,26 @@ def test_pf10324_atypical_with_versioned_accession(tmp_path):
 #                         --- full sequence ---
 # target name  accession  query name  accession  E-value  score  bias
 # ------------ ---------  ----------- ---------  ------- ------ ----
-7tm_6          PF10324.13 seq_insect  -          1.5e-60  250.0  0.0
+7tm_6          PF02949.13 seq_insect  -          1.5e-60  250.0  0.0
 """
-    tbl = tmp_path / "pf10324_versioned.tbl"
+    tbl = tmp_path / "pf02949_versioned.tbl"
     tbl.write_text(tblout_pf10324)
     hits = cgc.parse_hmmscan_tblout(str(tbl))
 
     assert "seq_insect" in hits
     target, accession, evalue = hits["seq_insect"][0]
-    assert accession == "PF10324", "Version suffix should be stripped"
+    assert accession == "PF02949", "Version suffix should be stripped"
 
     # Now call_class and refine_subfamily with the stripped accession
     cls, evidence_pfam, _ = cgc.call_class(hits["seq_insect"], cgc._PFAM_TO_CLASS, 1e-5)
     assert cls == "A"
-    assert evidence_pfam == "PF10324"
+    assert evidence_pfam == "PF02949"
 
     # refine_subfamily should return the intrinsic _PFAM_SUBFAMILY annotation
-    subfam = cgc.refine_subfamily([], pfam_accession="PF10324")
+    subfam = cgc.refine_subfamily([], pfam_accession="PF02949")
     assert subfam == "insect_OR_atypical", (
-        "PF10324 should map to insect_OR_atypical in _PFAM_SUBFAMILY"
+        "PF02949 (InterPro short name 7tm_6, the real insect odorant-receptor "
+        "family) should map to insect_OR_atypical in _PFAM_SUBFAMILY"
     )
 
 

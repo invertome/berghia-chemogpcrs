@@ -49,12 +49,22 @@ UNCLASSIFIED_LABELS = {"unclassified-hmm", "unclassified-og",
                         "unclassified-placement", ""}
 
 
+# classify_via_hmm.py tags calls made against the unvalidated fallback
+# threshold. Such a call is ~100 orders of magnitude looser than any
+# leave-one-out-benchmarked family, and the Pfam library that produces it
+# also annotates the reference set the OG vote reads — so HMM and OG agree
+# by construction rather than by evidence. Those calls are reported but may
+# not carry a candidate into a demotion tier.
+UNVALIDATED_THRESHOLD_SOURCE = "unvalidated-default"
+
+
 def _is_real_call(family: str) -> bool:
     """Return True if `family` is a non-empty, non-unclassified label."""
     return bool(family) and family not in UNCLASSIFIED_LABELS
 
 
-def _consensus(hmm_fam: str, og_fam: str, placement_fam: str | None
+def _consensus(hmm_fam: str, og_fam: str, placement_fam: str | None,
+               hmm_validated: bool = True
                ) -> tuple[str, str, int]:
     """Determine consensus from up to three family calls.
 
@@ -71,7 +81,15 @@ def _consensus(hmm_fam: str, og_fam: str, placement_fam: str | None
     of divergent invertebrate LSE sequences is the least reliable of the three
     signals, so an HMM+placement or OG+placement pair (with the HMM/OG pair
     itself split) stays a conservative 'chemoreceptor-candidate'.
+
+    `hmm_validated` is False when the HMM call came from the unvalidated
+    fallback threshold. Such a call cannot contribute to either demotion
+    tier: demoting a real chemoreceptor on unbenchmarked evidence is the
+    expensive error for this pipeline. It still appears in the evidence
+    string so a reviewer can see it was found and discounted.
     """
+    if not hmm_validated:
+        hmm_fam = ""
     hmm_real = _is_real_call(hmm_fam)
     og_real = _is_real_call(og_fam)
     placement_real = placement_fam is not None and _is_real_call(placement_fam)
@@ -118,8 +136,12 @@ def _consensus_subfamily(consensus_family: str,
 
 
 def _evidence_string(hmm_fam: str, og_fam: str,
-                     placement_fam: str | None) -> str:
-    parts = [f"hmm:{hmm_fam or 'NA'}", f"og:{og_fam or 'NA'}"]
+                     placement_fam: str | None,
+                     hmm_validated: bool = True) -> str:
+    hmm_part = hmm_fam or "NA"
+    if hmm_fam and not hmm_validated:
+        hmm_part = f"{hmm_fam}(unvalidated-threshold)"
+    parts = [f"hmm:{hmm_part}", f"og:{og_fam or 'NA'}"]
     if placement_fam is not None:
         parts.append(f"placement:{placement_fam or 'NA'}")
     return ";".join(parts)
@@ -177,6 +199,11 @@ def run_consensus(hmm_tsv: str, og_tsv: str,
 
         hmm_fam = str(h.get("hmm_family", ""))
         hmm_sub = str(h.get("hmm_subfamily", ""))
+        # Absent column => written before threshold provenance existed;
+        # keep the historical meaning rather than silently dropping every
+        # demotion on an old artifact.
+        hmm_validated = (str(h.get("threshold_source", ""))
+                         != UNVALIDATED_THRESHOLD_SOURCE)
         og_fam = str(o.get("og_vote_family", ""))
         og_sub = str(o.get("og_vote_subfamily", ""))
         if placement is not None:
@@ -187,14 +214,15 @@ def run_consensus(hmm_tsv: str, og_tsv: str,
             placement_sub = None
 
         consensus_family, classification, n_agree = _consensus(
-            hmm_fam, og_fam, placement_fam)
+            hmm_fam, og_fam, placement_fam, hmm_validated)
         subfamily = _consensus_subfamily(
-            consensus_family, hmm_fam, hmm_sub, og_fam, og_sub,
-            placement_fam, placement_sub)
+            consensus_family, hmm_fam if hmm_validated else "", hmm_sub,
+            og_fam, og_sub, placement_fam, placement_sub)
         confidence = ("high" if n_agree >= 3
                       else "medium" if n_agree >= 2
                       else "NA")
-        evidence = _evidence_string(hmm_fam, og_fam, placement_fam)
+        evidence = _evidence_string(hmm_fam, og_fam, placement_fam,
+                                    hmm_validated)
 
         out_rows.append({
             "candidate_id": cid,

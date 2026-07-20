@@ -35,10 +35,29 @@ from pathlib import Path
 from typing import Optional
 
 
-DEFAULT_THRESHOLD = 1e-10  # Conservative default when LOO metrics are absent
-                            # or a family has no specific threshold (e.g. Pfam
-                            # fallback HMMs). Looser than the LOO-derived
-                            # thresholds so candidates can still classify.
+# Fallback cutoff for families with no leave-one-out benchmark row.
+#
+# 2026-07-20 audit: this is NOT comparable to a validated threshold. The real
+# LOO thresholds span 2.4e-105 .. 2.5e-198, so this default is 95-190 orders
+# of magnitude looser. Only the 8 custom families have a LOO row; every Pfam
+# fallback label lands here. Because the same Pfam library also annotates the
+# reference set the orthogroup vote reads, HMM and OG then agree BY
+# CONSTRUCTION, producing 'likely-non-chemoreceptor' and a 0.5x score
+# multiplier from a path that was never benchmarked.
+#
+# The threshold value is unchanged — tightening it to a validated number
+# would be a fabricated benchmark, and dropping the path entirely would lose
+# real annotation. Instead every call now reports its `threshold_source`, and
+# classify_consensus.py refuses to demote a candidate on unvalidated evidence
+# alone. Fail-open on annotation, fail-closed on demotion.
+UNVALIDATED_FALLBACK_THRESHOLD = 1e-10
+
+# Back-compat alias for callers/tests written before the rename.
+DEFAULT_THRESHOLD = UNVALIDATED_FALLBACK_THRESHOLD
+
+# threshold_source values.
+THRESHOLD_SOURCE_LOO = "loo"
+THRESHOLD_SOURCE_UNVALIDATED = "unvalidated-default"
 
 
 # ---- HMMER tblout parsing -----------------------------------------------
@@ -110,24 +129,54 @@ def assign_classification(hits: list[tuple[str, float, float]],
                           ) -> dict:
     """For a single candidate's hit list (already sorted best E-value first),
     return the best-PASSING-threshold classification, or unclassified-hmm
-    if all hits fail."""
+    if all hits fail.
+
+    Two passes, in order:
+
+      1. Families with a leave-one-out benchmark row. A validated call always
+         wins, even when an unvalidated label has a better raw E-value —
+         otherwise the ~100-orders-looser fallback cutoff lets the
+         unbenchmarked path outrank the benchmarked one.
+      2. Families without a LOO row, judged against
+         UNVALIDATED_FALLBACK_THRESHOLD and tagged accordingly.
+
+    The returned dict carries `threshold_source` so downstream consumers can
+    tell a benchmarked call from an unbenchmarked one. classify_consensus.py
+    uses it to avoid demoting candidates on unvalidated evidence alone.
+    """
+    fallback: dict | None = None
+
     for hmm_target, evalue, score in hits:
         family, subfamily = label_for_hmm(hmm_target)
-        threshold = thresholds.get(family, DEFAULT_THRESHOLD)
-        if evalue <= threshold:
-            return {
-                "family": family,
-                "subfamily": subfamily,
-                "evalue": evalue,
-                "score": score,
-                "hmm_target": hmm_target,
-            }
+        validated = family in thresholds
+        threshold = (thresholds[family] if validated
+                     else UNVALIDATED_FALLBACK_THRESHOLD)
+        if evalue > threshold:
+            continue
+        result = {
+            "family": family,
+            "subfamily": subfamily,
+            "evalue": evalue,
+            "score": score,
+            "hmm_target": hmm_target,
+            "threshold_source": (THRESHOLD_SOURCE_LOO if validated
+                                 else THRESHOLD_SOURCE_UNVALIDATED),
+        }
+        if validated:
+            return result
+        if fallback is None:
+            fallback = result
+
+    if fallback is not None:
+        return fallback
+
     return {
         "family": "unclassified-hmm",
         "subfamily": "",
         "evalue": float("inf"),
         "score": 0.0,
         "hmm_target": "",
+        "threshold_source": "",
     }
 
 
@@ -286,24 +335,32 @@ def main() -> int:
         with open(args.output_tsv, "w", newline="") as f:
             w = csv.writer(f, delimiter="\t")
             w.writerow(["candidate_id", "hmm_family", "hmm_subfamily",
-                        "evalue", "score", "hmm_target"])
+                        "evalue", "score", "hmm_target", "threshold_source"])
             n_classified = 0
+            n_unvalidated = 0
             for cid in candidate_ids:
                 cand_hits = hits.get(cid, [])
                 result = assign_classification(cand_hits, thresholds)
                 if result["family"] != "unclassified-hmm":
                     n_classified += 1
+                if result["threshold_source"] == THRESHOLD_SOURCE_UNVALIDATED:
+                    n_unvalidated += 1
                 evalue_str = (f"{result['evalue']:.3e}"
                               if result["evalue"] != float("inf") else "inf")
                 w.writerow([
                     cid, result["family"], result["subfamily"],
                     evalue_str, f"{result['score']:.2f}",
-                    result["hmm_target"],
+                    result["hmm_target"], result["threshold_source"],
                 ])
 
         print(f"[hmm-classify] DONE: {n_classified}/{len(candidate_ids)} "
               f"candidates classified -> {args.output_tsv}",
               file=sys.stderr)
+        if n_unvalidated:
+            print(f"[hmm-classify] WARN: {n_unvalidated} call(s) used the "
+                  f"unvalidated fallback threshold "
+                  f"({UNVALIDATED_FALLBACK_THRESHOLD:g}); these cannot demote "
+                  "a candidate on their own.", file=sys.stderr)
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
     return 0

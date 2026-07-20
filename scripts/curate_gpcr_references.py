@@ -64,13 +64,23 @@ CURATED_TAXA = {
 }
 
 
+# Stable UniProt keyword ACCESSION for "G protein-coupled receptor".
+#
+# 2026-07-20: the previous query used the keyword's DISPLAY NAME,
+# keyword:"g-protein coupled receptor". UniProt renamed KW-0297 to
+# "G protein-coupled receptor" (no hyphen after G), so the old string
+# returned HTTP 200 with x-total-results: 0 — curate_all() produced an empty
+# record list and the writers happily overwrote the reference FASTA/TSV with
+# headers only, exit 0. Verified the same day: the display name gives 0 rows
+# for human, the accession gives 839. Accessions cannot be renamed; display
+# names can, so always query the accession.
+GPCR_KEYWORD = "keyword:KW-0297"
+
+
 def base_query() -> str:
     """The unified UniProt query: reviewed GPCRs in curated taxa."""
     taxa = " OR ".join(f"organism_id:{tid}" for tid in CURATED_TAXA)
-    return (
-        f'reviewed:true AND keyword:"g-protein coupled receptor" '
-        f'AND ({taxa})'
-    )
+    return f"reviewed:true AND {GPCR_KEYWORD} AND ({taxa})"
 
 
 # ---- Family / subfamily classification by protein-name pattern ---------
@@ -203,7 +213,23 @@ _AMINERGIC_SUBFAMILY_PATTERNS = [
      "norepinephrine"),
     (re.compile(r"\bhistamine\b|\bHRH\d\b", re.I), "histamine"),
     (re.compile(r"\boctopamine\b|\bOct[A-Za-z]?\d?R?\b", re.I), "octopamine"),
-    (re.compile(r"\btyramine\b|\bTyrR\b|\bTAR\d?\b", re.I), "tyramine"),
+    # Trace amine-associated receptors — MUST be tested before tyramine.
+    #
+    # 2026-07-20: the tyramine needle used to include `\bTAR\d?\b`, which
+    # matches the alternative names UniProt packs into the `protein_name` TSV
+    # field: "Trace amine-associated receptor 5 (TaR-5) ...". The shipped
+    # aminergic_tyramine.aln had 41 members, 39 of them TAARs and only 2
+    # genuine tyramine receptors. The needle contributed zero unique true
+    # positives on the curated taxa (all real tyramine receptors match on the
+    # word "tyramine" or on \bTyrR\b), so it was pure false-positive surface.
+    #
+    # TAARs keep an honest label rather than being dropped: TAAR1 is a
+    # bona-fide non-olfactory aminergic receptor, while TAAR2-9 are
+    # vertebrate olfactory chemoreceptors. Whether the olfactory ones belong
+    # in a NON-chemoreceptor reference set at all is a scientific call for
+    # the user, not something to decide silently here.
+    (re.compile(r"\btrace amine\b", re.I), "trace-amine"),
+    (re.compile(r"\btyramine\b|\bTyrR\b", re.I), "tyramine"),
 ]
 
 # Peptide medium-granularity sub-patterns.
@@ -372,8 +398,19 @@ def make_curated_record(uniprot_row: dict[str, str], family: str,
 def curate_all() -> list[dict[str, str]]:
     """Run the full curation: query UniProt, classify each entry, return
     canonical records."""
-    text = query_uniprot_paginated(base_query())
+    query = base_query()
+    text = query_uniprot_paginated(query)
     rows = parse_uniprot_tsv(text)
+    if not rows:
+        # A malformed keyword/field returns HTTP 200 with zero results, which
+        # is indistinguishable from success until the reference artifacts have
+        # already been overwritten with headers only. Fail loudly instead.
+        raise RuntimeError(
+            "UniProt returned zero rows for the curation query — refusing to "
+            "overwrite the reference set with an empty result. This usually "
+            "means a query term stopped matching (e.g. a renamed keyword). "
+            f"Query was: {query}"
+        )
     records: list[dict[str, str]] = []
     for row in rows:
         family = classify_family(
