@@ -240,7 +240,6 @@ taxid	binomial	clade	policy_class	source	accession	assembly_level	annotation_sta
 413425	Mopalia kennerleyi	Polyplacophora	rare_basal	GenBank	GCA_034783855.1	Scaffold		0		4396	743018383		extension_phase1d
 413429	Mopalia swanii	other_molluscan_classes		GenBank	GCA_030265315.1	Scaffold		0		2201	860836749		nath_phase1e
 416868	Notospermus geniculatus	other_lophotrochozoan_phyla		GenBank	GCA_002633025.1	Scaffold		0		22604	858599399		nath_phase1e
-427924	Dreissena rostriformis bugensis	Bivalvia	other_mollusca	GenBank	GCA_055670145.1	Chromosome		0		1391067	1613145916		extension_phase1d
 429176	Glycymeris glycymeris	Bivalvia	other_mollusca	GenBank	GCA_978048415.1	Chromosome		0		14499000	3667539238		extension_phase1d
 429181	Laevicardium crassum	Bivalvia	other_mollusca	GenBank	GCA_964662305.1	Chromosome		0		7549063	1507392325		extension_phase1d
 430714	Mopalia vespertina	other_molluscan_classes		GenBank	GCA_030265115.1	Scaffold		0		6583	676010105		nath_phase1e
