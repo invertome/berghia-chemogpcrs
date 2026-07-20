@@ -551,7 +551,24 @@ export EMB_SCORER="${EMB_SCORER:-consensus}"
 export EMBEDDINGS_DIR="${EMBEDDINGS_DIR:-${RESULTS_DIR}/ranking/embeddings}"
 export EMB_CONSENSUS_MODELS="${EMB_CONSENSUS_MODELS:-proteinclip3b protrek}"  # tags: expects candidates_<tag>_classA.npz + reference_<tag>_PROD.npz under EMBEDDINGS_DIR
 export EMB_CANDIDATE_FASTA="${EMB_CANDIDATE_FASTA:-${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia_classA.fa}"  # class-A candidates (seq_len for deconfounding)
-export EMB_REF_LABELS="${EMB_REF_LABELS:-${REFERENCE_DIR}/anchors/anchor_set.tsv}"  # family/class-labeled reference anchors
+# Family/class-labeled reference anchors. MUST be the PROD set (1094 rows), NOT
+# the June anchor_set.tsv (206 rows). The reference embeddings are
+# reference_<tag>_PROD.npz, keyed by the composite anchor header
+# ANCHOR_<class>_<tier>_<accession>, and measured on Unity they hold all 1094
+# PROD entries. load_ref_labels reconstructs that same composite key from
+# WHICHEVER label TSV it is given, so pointing this at the 206-row set produced
+# a join that SUCCEEDED on key format while resolving almost nothing: 116 of the
+# 953 class-A keys, 12%. No exception, no NaN, ~840 reference vectors silently
+# discarded. Per-family prototypes collapsed (aminergic 37 vs 212, opsin 17 vs
+# 105, peptide 39 vs 386, lipid 1 vs 70, which trips a single-mean fallback) and
+# chemokine / nucleotide / glycoprotein-hormone got NO prototype at all. A
+# candidate that genuinely IS one of those then had nothing to be near, so it
+# scored MAXIMALLY NOVEL and ranked to the top of the wet-lab shortlist, which
+# inverts the exclusion axis. With the PROD set, measured overlap is 1094/1094
+# against the reference npz, and every family resolves. Measured on job
+# 61993577, not assumed, and re-asserted at runtime by
+# scripts/unity/rebuild_embedding_channel.sh.
+export EMB_REF_LABELS="${EMB_REF_LABELS:-${REFERENCE_DIR}/anchors/anchor_set_PROD.tsv}"
 export EMB_CANDIDATE_IDENTITY_TSV="${EMB_CANDIDATE_IDENTITY_TSV:-${EMBEDDINGS_DIR}/candidate_ref_identity_PROD.tsv}"  # candidate->nearest-ref % identity (confound; optional)
 
 # A1 (v4bs.2) — phylogeny-residualized novelty (DORMANT, default OFF).
