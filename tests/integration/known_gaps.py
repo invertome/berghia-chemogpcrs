@@ -149,6 +149,13 @@ KNOWN_GAPS: dict[tuple[str, str], tuple[str, str]] = {
     ),
 
     # --- real producer, invisible to static extraction
+    ("05_selective_pressure_and_asr.sh", "${RESULTS}/selective_pressure/*_absrel.csv"): (
+        EXTRACTOR_LIMIT,
+        "scripts/parse_absrel.py writes it as POSITIONAL argv[2] at "
+        "05_selective_pressure_and_asr.sh:454, so the resolver cannot bind it. "
+        "The bead-higb coverage check probes the same per-OG path to count "
+        "products on disk rather than trusting control flow.",
+    ),
     ("03b_lse_classification.sh", "${RESULTS}/reference_sequences/id_map.csv"): (
         EXTRACTOR_LIMIT,
         "scripts/update_headers.py writes it via a POSITIONAL argv[2] "

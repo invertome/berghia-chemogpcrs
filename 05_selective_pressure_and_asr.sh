@@ -617,15 +617,51 @@ if [ "$berghia_count" -gt 0 ] && [ "$seq_count" -gt 2 ]; then
     fi
 fi
 
-# Create completion flag for this orthogroup
-touch "${RESULTS_DIR}/selective_pressure/step_completed_${base}.txt"
+# --- Coverage accounting (bead higb) ----------------------------------------
+# Count PRODUCTS ON DISK rather than trusting control flow. Bead F1 (stage 05
+# reading a path nothing wrote) stayed invisible for months precisely because
+# the stage reported what it BELIEVED it had done: both completion markers were
+# touched unconditionally, so a run in which every orthogroup resolved to
+# nothing still reported success and let stage 07 proceed on an empty table.
+# "Complete" without coverage numbers is an unverified claim.
+selection_ran=0
+[ -s "${RESULTS_DIR}/selective_pressure/${base}_absrel.csv" ] && selection_ran=1
+asr_ran=0
+ls "${RESULTS_DIR}/asr/${base}"_*_asr.fa >/dev/null 2>&1 && asr_ran=1
+og_products=$((selection_ran + asr_ran))
 
-# Create array checkpoint for resume capability
+# One record per orthogroup, never a shared append: stage 05 is a SLURM array
+# and concurrent tasks appending to one file is a write race.
+coverage_dir="${RESULTS_DIR}/selective_pressure/coverage"
+mkdir -p "$coverage_dir"
+{
+    printf 'orthogroup\tselection_ran\tasr_ran\tproducts\ttaxa_count\n'
+    printf '%s\t%s\t%s\t%s\t%s\n' "$base" "$selection_ran" "$asr_ran" \
+        "$og_products" "$taxa_count"
+} > "${coverage_dir}/${base}.tsv"
+
+if [ "$og_products" -eq 0 ]; then
+    # Explicit, and deliberately NOT a completion. Downstream must be able to
+    # tell "this orthogroup produced nothing" from "this orthogroup was fine".
+    log "ERROR: ${base} produced nothing (selection=0 asr=0); refusing to mark it complete"
+else
+    log "Coverage for ${base}: selection=${selection_ran} asr=${asr_ran}"
+    # Create completion flag for this orthogroup
+    touch "${RESULTS_DIR}/selective_pressure/step_completed_${base}.txt"
+fi
+
+# Create array checkpoint for resume capability. This records that the TASK
+# ran, which is independent of whether the orthogroup yielded products, so it
+# stays outside the gate: resume must not re-run a task that already completed.
 [ -n "$SLURM_ARRAY_TASK_ID" ] && create_array_checkpoint "05_selective" "$SLURM_ARRAY_TASK_ID"
 
-log "Selective pressure and ASR completed for ${base}."
+log "Selective pressure and ASR finished for ${base} (products=${og_products})."
 
 # Create overall step completion flag
 # Note: We create this flag after each task completes, since downstream steps
-# can start processing as results become available
-touch "${RESULTS_DIR}/step_completed_05.txt"
+# can start processing as results become available. Gated on this task having
+# produced something, so a run where every orthogroup fails leaves no marker
+# at all and stage 07 cannot mistake emptiness for completion.
+if [ "$og_products" -gt 0 ]; then
+    touch "${RESULTS_DIR}/step_completed_05.txt"
+fi
