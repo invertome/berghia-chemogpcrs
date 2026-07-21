@@ -39,8 +39,29 @@ Agreement is judged on two levels, because vector-level agreement alone is not
 the quantity that matters:
 
   * VECTOR level: cosine similarity and max abs difference per id, plus the
-    vector NORMS -- a normalization divergence shows up in the norms even when
-    cosine similarity stays at 1.0.
+    vector norms.
+
+    MEASURED CORRECTION (2026-07-20) -- do not restore the original claim here,
+    which was that "a normalization divergence shows up in the norms even when
+    cosine stays at 1.0". That is FALSE for this pipeline and was disproved by
+    the same-dimension negative control
+    (molluscan_calibration_negcontrol_norm.sh, job 62008841):
+
+        proteinclip3b reprojected with apply_norm=False, 66 probes
+          output norms   1.000000 vs 1.000000   ratio 1.000000  <- CATCHES NOTHING
+          cosine         min 0.042, median 0.382                <- catches it
+          max|diff|      median 0.232, max 0.303                <- catches it
+          family argmin  62/66 disagreements                    <- catches it
+
+    The ONNX head L2-normalizes its OWN output, so the emitted vectors are unit
+    norm whether or not the INPUT was normalized. The norm ratio is therefore
+    blind to precisely the same-dimension failure it was supposed to guard, and
+    it is NOT the instrument protecting this pipeline. Cosine is -- with the
+    family-argmin comparison as an independent second detector. Anyone relaxing
+    --min-cosine is removing the real guard, and the norms line will not save
+    them. The norms are still printed because they would discriminate for an
+    embedder whose output is not graph-normalized; here they are diagnostic
+    only, not load-bearing.
   * DECISION level: the per-family squared Mahalanobis distances actually
     consumed downstream, and the family argmin they imply. A path that
     reproduces cosines but reorders any family call is still a failure.
