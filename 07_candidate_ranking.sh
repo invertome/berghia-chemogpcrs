@@ -514,6 +514,27 @@ if [ -f "${RANKED_CSV}" ]; then
         || log --level=WARN "Ranking-method comparison failed (non-fatal)"
 fi
 
+# --- RRA correlation-sensitivity + tie-saturation audit (always emitted; non-fatal) ---
+# Bead 8k8e requirement 4. saturation_report() measures how much of the SHIPPED
+# order is decided by exact ties -- stretches that aggregate() can only break by
+# ascending transcript id, i.e. alphabetically -- and it had zero callers, so
+# that health metric was computed nowhere. Detection that does not report is not
+# detection. Runs on the FINAL ranked CSV (post-augmentation, the order actually
+# shipped), reusing the signal-independence groups.json so the fused-signal view
+# matches what the ranker received. Also emits the correlation matrix and the
+# fusion-impact deltas. Writes results/ranking/rra_{correlation.tsv,
+# sensitivity.json,sensitivity.md}. Changes no ranking.
+if [ -f "${RANKED_CSV}" ]; then
+    RRA_AUDIT_ARGS=(--ranked-csv "${RANKED_CSV}" \
+        --out-prefix "${RESULTS_DIR}/ranking/rra" \
+        --top-k "${RANK_TOPK:-20}")
+    RRA_AUDIT_GROUPS="${RESULTS_DIR}/ranking/signal_independence_groups.json"
+    [ -f "${RRA_AUDIT_GROUPS}" ] && RRA_AUDIT_ARGS+=(--groups-json "${RRA_AUDIT_GROUPS}")
+    python3 "${SCRIPTS_DIR}/audit_rra_correlation_sensitivity.py" "${RRA_AUDIT_ARGS[@]}" \
+        2>> "${LOGS_DIR}/rra_correlation_sensitivity.err" \
+        || log --level=WARN "RRA correlation-sensitivity audit failed (non-fatal)"
+fi
+
 # --- Whole-pipeline permutation null (always emitted; non-fatal) ---
 # Empirical p-value that the ranking's top-k separation exceeds a
 # candidate<->signal-shuffled null (each signal's values permuted across

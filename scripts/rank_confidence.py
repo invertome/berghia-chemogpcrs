@@ -6,9 +6,11 @@ bottom are stable, the middle is not. Under the production RRA aggregator
 (weight-free, so weight-perturbation is uninformative), we resample the SIGNAL
 SET with replacement, re-aggregate, and read each candidate's rank distribution
 -> a rank CI + P(candidate in top-k). The top-k-with-confidence set is the wet-
-lab shortlist; mid-list exact ranks are reported only as tiers. (RRA's Bonferroni
-cap ties most non-top candidates at rho=1.0, tie-broken by id -> their rank CIs
-are legitimately wide, which is the honest 'mid-ranks not separable' statement.)
+lab shortlist; mid-list exact ranks are reported only as tiers. (Mid-list RRA
+scores are densely packed and, where candidates share a rho, exactly tied and
+tie-broken by id -> their rank CIs are legitimately wide, which is the honest
+'mid-ranks not separable' statement. Before bead 8k8e the packing was far worse:
+the Bonferroni bound clipped 46.5% of the cohort to a single score of 1.0.)
 
 CLI (stage-07 augmenter): reads a ranked CSV, builds the SIGNAL_SPEC ranklists
 via rank_aggregation.build_ranklists_from_df, computes intervals + tiers, and

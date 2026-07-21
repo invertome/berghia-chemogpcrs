@@ -20,15 +20,21 @@ def topk_separation(order, agg, k):
     """Mean-|score| gap between the top-k of ``order`` and the rest, measured on
     the RRA significance scale (-log10 of the aggregator score).
 
-    RRA's ``rra_score`` returns a p-value-like rho after a Bonferroni-style
-    ``min(rho*m, 1.0)`` cap, so its raw values saturate at 1.0 for most
-    candidates and the discrimination between a real ranking and a shuffled
-    null lives entirely in the near-zero tail. A raw-rho mean gap flattens
-    that tail (real and null both differ from 1.0 by essentially the same
-    amount) and cannot tell signal from noise; the -log10 significance scale
-    -- the scale on which Kolde et al. (2012) report and plot RRA scores --
-    amplifies it. ``abs`` keeps the gap orientation-agnostic (RRA rho is
-    lower=better, so top-k sits at higher -log10 than the rest)."""
+    RRA's ``rra_score`` returns a p-value-like quantity that is heavily
+    concentrated near 1.0 -- most candidates are unremarkable by construction
+    -- so the discrimination between a real ranking and a shuffled null lives
+    almost entirely in the near-zero tail. A raw mean gap flattens that tail
+    (real and null both differ from 1.0 by essentially the same amount) and
+    cannot tell signal from noise; the -log10 significance scale -- the scale
+    on which Kolde et al. (2012) report and plot RRA scores -- amplifies it.
+    ``abs`` keeps the gap orientation-agnostic (RRA scores are lower=better, so
+    top-k sits at higher -log10 than the rest).
+
+    Bead 8k8e made this strictly better-behaved: the score is now the EXACT
+    null of rho rather than the ``min(rho*m, 1.0)`` bound, which used to CLIP
+    46.5% of the real cohort to exactly 1.0 -- contributing an identical
+    -log10 of 0.0 for both the observed and the shuffled runs across nearly
+    half the candidates."""
     if len(order) <= k:
         return 0.0
     sig = -np.log10(np.clip([agg[i] for i in order], 1e-300, None))

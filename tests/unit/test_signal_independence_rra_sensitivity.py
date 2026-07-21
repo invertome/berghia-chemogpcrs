@@ -22,7 +22,7 @@ So the subject measures the values RRA ACTUALLY votes on (by reusing
 rank_aggregation.build_ranklists_from_df, which resolves _norm preference,
 has_*_data gating and exclusion-signal inversion in one place -- no drift), and
 reports what correlation does to THIS RRA implementation: duplication
-inflation, Bonferroni-cap saturation, and the fused-vs-unfused order delta.
+inflation, tie saturation, and the fused-vs-unfused order delta.
 """
 from __future__ import annotations
 
@@ -168,20 +168,38 @@ def test_group_fusion_undoes_the_duplication_inflation():
     )
 
 
-def test_saturation_report_counts_bonferroni_capped_ties():
-    # rra_score returns min(rho*m, 1.0). Every candidate at the 1.0 cap is
-    # TIED, and aggregate() breaks those ties by ascending id -- i.e.
-    # alphabetically, not by evidence. The size of that block is a first-class
-    # health metric for the ranking.
+def test_saturation_report_counts_ties_not_the_removed_bonferroni_cap():
+    # Bead 8k8e replaced min(rho*m, 1.0) with the exact null, so "saturated at
+    # 1.0" is now reachable ONLY by a candidate ranked dead last in every list
+    # (rho == 1 exactly) -- here that is 'f'. What remains a first-class health
+    # metric is TIE saturation: candidates aggregate() can only order by id.
+    # Six candidates ranked identically by two identical signals -> no ties at
+    # all, and exactly one genuinely-saturated candidate.
     lists = {
         "s1": {c: v for c, v in zip("abcdef", [6, 5, 4, 3, 2, 1])},
         "s2": {c: v for c, v in zip("abcdef", [6, 5, 4, 3, 2, 1])},
     }
     rep = sens.saturation_report(lists)
     assert rep["n_candidates"] == 6
-    assert rep["n_saturated"] >= 1
+    assert rep["n_saturated"] == 1          # only 'f', whose rho is exactly 1
     assert 0.0 <= rep["fraction_saturated"] <= 1.0
-    assert rep["largest_tie_block"] >= rep["n_saturated"]
+    assert rep["largest_tie_block"] == 1    # every score distinct
+    assert rep["n_tied"] == 0
+    assert rep["fraction_tied"] == 0.0
+
+
+def test_saturation_report_counts_genuinely_tied_candidates():
+    # Two candidates with identical rank vectors are a GENUINE tie: they stay
+    # tied, and the report must say how many candidates sit in such blocks.
+    lists = {
+        "s1": {"a": 9.0, "b": 5.0, "c": 5.0, "d": 1.0},
+        "s2": {"a": 9.0, "b": 5.0, "c": 5.0, "d": 1.0},
+    }
+    rep = sens.saturation_report(lists)
+    assert rep["n_candidates"] == 4
+    assert rep["largest_tie_block"] == 2
+    assert rep["n_tied"] == 2
+    assert rep["fraction_tied"] == pytest.approx(0.5)
 
 
 def test_fusion_impact_is_a_no_op_for_singleton_groups():
@@ -260,3 +278,33 @@ def test_cli_smoke_runs_end_to_end(tmp_path):
     )
     assert proc.returncode == 0, proc.stderr
     assert (tmp_path / "cli_sensitivity.json").exists()
+
+
+# --------------------------------------------------------------------------- #
+# Bead 8k8e requirement 4: detection that does not report is not detection.
+#
+# saturation_report() had ZERO callers -- stage 07 ran only
+# audit_signal_ranking_independence.py, so the tie/saturation health of the
+# shipped ranking was measured nowhere. Pin the wiring.
+# --------------------------------------------------------------------------- #
+STAGE_07 = Path(__file__).resolve().parent.parent.parent / "07_candidate_ranking.sh"
+
+
+def test_stage07_invokes_the_rra_sensitivity_audit():
+    text = STAGE_07.read_text()
+    assert "audit_rra_correlation_sensitivity.py" in text, (
+        "stage 07 must run the RRA sensitivity audit -- saturation_report() is "
+        "the only thing that measures how much of the shipped order is decided "
+        "by ties rather than by evidence"
+    )
+
+
+def test_stage07_audits_the_final_ranked_csv_with_the_derived_groups():
+    text = STAGE_07.read_text()
+    idx = text.index("audit_rra_correlation_sensitivity.py")
+    # the invocation's argv is assembled just above the call, so window both ways
+    block = text[max(0, idx - 900):idx + 400]
+    assert "--ranked-csv" in block and "RANKED_CSV" in block, block
+    assert "--out-prefix" in block, block
+    # must reuse the independence audit's groups so the two audits agree
+    assert "signal_independence_groups.json" in text

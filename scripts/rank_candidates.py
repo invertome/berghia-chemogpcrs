@@ -2984,6 +2984,16 @@ output_cols = [
     'cds_source',
 ]
 
+# Bead 8k8e: how many candidates share this row's exact RRA score. Anything
+# above 1 is a genuine tie whose internal order final_rank decides by ascending
+# id -- arbitrarily -- and a shortlist consumer must be able to see that rather
+# than read a precision the aggregation does not have. Appended only under
+# rankagg, where the quantity exists: the default-fill below would otherwise
+# write a fabricated 0.0 on the weighted path, which reads as "nothing is tied"
+# when the truth is "no RRA ran".
+if RANK_METHOD == 'rankagg' and 'rra_tied_block_size' in df_sorted.columns:
+    output_cols.append('rra_tied_block_size')
+
 # Ensure all output columns exist (fill missing with defaults)
 for col in output_cols:
     if col not in df_sorted.columns:

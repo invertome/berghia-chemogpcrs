@@ -25,11 +25,19 @@ Two blind spots in the raw correlation audit motivate this tool:
    the list. `fusion_impact` reports that directly (order Spearman, top-K
    Jaccard, max displacement), so the threshold can be argued from effect size.
 
-It also reports BONFERRONI-CAP SATURATION. rra_score returns
-``min(rho * m, 1.0)``; every candidate at the 1.0 cap is exactly TIED, and
-aggregate() breaks ties by ascending id -- alphabetically, not by evidence. A
-large saturated block means the tail of the "ranking" is not a ranking at all,
-and correlated inputs change which candidates escape the cap.
+It also reports TIE SATURATION. Every candidate sharing an RRA score is exactly
+TIED, and aggregate() breaks ties by ascending id -- alphabetically, not by
+evidence. A large tied block means that stretch of the "ranking" is not a
+ranking at all, and correlated inputs change which candidates escape it.
+
+This is the metric bead 8k8e was opened on. rra_score used to return the
+Bonferroni bound ``min(rho * m, 1.0)``, which clipped 204 of the real 439
+candidates (46.5%) into ONE tie block flattening 112 distinct rho values. The
+exact null replaced it, and this report is now the standing check that no such
+block returns: ``n_saturated`` (score == 1.0) should be ~0, and the residual
+tied blocks should each hold a single shared rho -- candidates that agree on
+the one order statistic RRA looks at, which no exactness can or should
+separate.
 
 Usage (once a REAL ranked CSV exists -- see the module note below):
 
@@ -142,23 +150,33 @@ def rra_with(ranklists, groups=None):
 
 
 def saturation_report(ranklists, groups=None):
-    """How much of the order is decided by the Bonferroni cap rather than data.
+    """How much of the order is decided by TIES rather than by evidence.
 
-    ``rra_score`` returns ``min(rho * m, 1.0)``. Candidates at 1.0 are tied and
-    ``aggregate`` orders them by ascending id, i.e. alphabetically. Reports the
-    saturated count/fraction and the largest exactly-tied block (which is at
-    least the saturated block, and may be larger if scores collide elsewhere).
+    ``aggregate`` breaks equal scores by ascending id, i.e. alphabetically, so
+    every exactly-tied block is a stretch of the "ranking" that carries no
+    information. Reports the largest such block plus how many candidates sit in
+    any block of size > 1.
+
+    ``n_saturated`` (score == 1.0) is retained as a REGRESSION detector. Under
+    the Bonferroni bound this module was written against it counted 46.5% of
+    the real cohort; under the exact null (bead 8k8e) a score of exactly 1.0
+    requires rho == 1, i.e. ranked dead last in every list it appears in, so a
+    large value here now means the clip has come back.
     """
     scores = rra_score(ranklists, groups=groups)
     n = len(scores)
     values = list(scores.values())
     n_saturated = sum(1 for v in values if v >= 1.0)
     counts = pd.Series(values).value_counts() if values else pd.Series(dtype=int)
+    n_tied = int(counts[counts > 1].sum()) if len(counts) else 0
     return {
         "n_candidates": n,
         "n_saturated": n_saturated,
         "fraction_saturated": (n_saturated / n) if n else 0.0,
         "largest_tie_block": int(counts.iloc[0]) if len(counts) else 0,
+        "n_tied": n_tied,
+        "fraction_tied": (n_tied / n) if n else 0.0,
+        "n_distinct_scores": int(len(counts)),
     }
 
 
@@ -241,12 +259,15 @@ def write_report(result, out_prefix):
               or ["- none above threshold"])
     lines += [
         "",
-        "## Bonferroni-cap saturation (ungrouped)",
+        "## Tie saturation (ungrouped)",
         f"- candidates: {sat['n_candidates']}",
-        f"- at the min(rho*m, 1.0) cap: {sat['n_saturated']} "
-        f"({sat['fraction_saturated']:.1%})",
-        f"- largest exactly-tied block: {sat['largest_tie_block']} "
-        "(ties break alphabetically by id, NOT by evidence)",
+        f"- distinct RRA scores: {sat['n_distinct_scores']}",
+        f"- in an exactly-tied block: {sat['n_tied']} "
+        f"({sat['fraction_tied']:.1%}) "
+        "-- ties break alphabetically by id, NOT by evidence",
+        f"- largest exactly-tied block: {sat['largest_tie_block']}",
+        f"- score == 1.0 (regression check, expect ~0 under the exact null): "
+        f"{sat['n_saturated']} ({sat['fraction_saturated']:.1%})",
         "",
         "## Effect of fusing the flagged groups",
         f"- order Spearman (grouped vs ungrouped): {imp['order_spearman']:.4f}",

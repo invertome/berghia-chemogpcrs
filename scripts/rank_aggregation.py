@@ -11,8 +11,11 @@ Two methods, both label-free and parameter-light:
     normalized rank for a candidate as a draw from Uniform(0,1) under the
     null "this candidate is not special", and looks for the most extreme
     (smallest) order statistic across signals via the beta-distribution
-    CDF. Primary method -- yields a significance-like score (lower =
-    better).
+    CDF. That minimum, rho, is then referred to its EXACT null distribution
+    (Kolde's own exact path, computed per distinct number-of-lists m -- see
+    `rho_null_pvalue`), NOT to the Bonferroni bound min(rho*m, 1.0) this
+    module used to return. Primary method -- yields a significance-like
+    score (lower = better).
   - RRF (Reciprocal Rank Fusion, Cormack et al. 2009): a simpler
     Sigma 1/(k+rank) sum. Cross-check (higher = better).
 
@@ -25,12 +28,14 @@ casts one vote, not one vote per redundant signal.
 """
 from __future__ import annotations
 
+import math
 import os
 import sys
+from functools import lru_cache
 
 import numpy as np
 import pandas as pd
-from scipy.special import betainc
+from scipy.special import betainc, betaincinv
 from scipy.stats import rankdata
 
 
@@ -92,30 +97,169 @@ def _effective_lists(per_signal_ranklists, groups=None):
     return effective
 
 
-def rra_score(per_signal_ranklists, groups=None):
-    """Robust Rank Aggregation (Kolde et al. 2012) score per id.
+def _binomial_pmf(n, p):
+    """P(Binomial(n, p) = d) for d = 0..n, as a plain list.
+
+    scipy.stats.binom.pmf is ~15x slower per call than this at the sizes used
+    here (n <= ~30) and rho_null_pvalue is called O(candidates x bootstrap
+    replicates) times, so the dispatch overhead dominates.
+    """
+    if p <= 0.0:
+        return [1.0] + [0.0] * n
+    if p >= 1.0:
+        return [0.0] * n + [1.0]
+    q = 1.0 - p
+    return [math.comb(n, d) * p ** d * q ** (n - d) for d in range(n + 1)]
+
+
+@lru_cache(maxsize=65536)
+def rho_null_pvalue(rho, m):
+    """P(rho_null <= rho) -- the EXACT null distribution of Kolde's rho.
+
+    rho_null is the minimum of the m order-statistic beta scores when the m
+    normalized ranks really are i.i.d. Uniform(0,1), i.e. the statistic
+    computed by :func:`rho_statistic` under the null "this candidate is not
+    special". This is Kolde et al. (2012)'s own exact path, and it REPLACES
+    the Bonferroni bound ``min(rho * m, 1.0)`` the module used to return
+    (bead 8k8e).
+
+    Why the bound had to go: it is a bound, so it CLIPS. On the real
+    439-candidate cohort 204 candidates (46.5%) hit the 1.0 clip in ONE tie
+    block that flattened 112 distinct underlying rho values into a single
+    score, whereupon ``aggregate`` ordered them alphabetically by transcript
+    id. Nearly half the "ranking" was the alphabet.
+
+    THE NULL DEPENDS ON m, so this is computed per distinct m and memoized per
+    (rho, m). m varies across candidates (measured: 7 for 431 candidates, 6 for
+    8, because a signal only votes where it has data), and the same rho is less
+    surprising with more lists -- scores are NOT comparable across candidates
+    without conditioning on m.
+
+    Method. rho <= x iff some order statistic U_(k) falls at or below
+    a_k = the x-quantile of Beta(k, m-k+1), so the survival event is
+    {U_(k) > a_k for all k}. The a_k are non-decreasing in k, so sweeping the
+    thresholds in order and tracking N(a_j) = #{points <= a_j} gives an exact
+    dynamic program. The probability is accumulated as the FIRST-CROSSING mass
+    at each threshold -- a sum of strictly positive terms -- rather than as
+    1 - survival, which would catastrophically cancel in the tail where the
+    best candidates live (an id ranked top in all 7 lists has rho ~ 1e-19, and
+    1 - (1 - 7e-19) is exactly 1.0 in double precision).
+
+    Below rho ~ 1e-136 (m=6) / 1e-152 (m=7) scipy's ``betaincinv`` returns NaN.
+    There the union bound m*rho IS the answer: the deficit of the exact value
+    below m*rho scales as rho**(1/m), which at the crossover is already under
+    1e-13 relative and shrinks from there. That branch is exact to double
+    precision, not an approximation of convenience -- and it is unreachable by
+    any real cohort (rho >= (1/n)**m, so m=7 would need n > 1e21 candidates).
+
+    LOWER = more consistently top-ranked. Strictly increasing in rho on (0, 1),
+    so it never ties two candidates whose evidence differs.
+    """
+    if m < 1:
+        raise ValueError(f"rho_null_pvalue needs m >= 1, got {m!r}")
+    if rho <= 0.0:
+        return 0.0
+    if rho >= 1.0:
+        return 1.0
+
+    ks = np.arange(1, m + 1)
+    thresholds = betaincinv(ks, m - ks + 1, rho)
+    if not np.all(np.isfinite(thresholds)):
+        return min(m * rho, 1.0)
+    a = [float(t) for t in thresholds]
+
+    crossed = 0.0
+    prev = 0.0
+    # surviving[n] = P(N(a_j) = n and no threshold crossed at or before j)
+    surviving = {0: 1.0}
+    for j in range(1, m + 1):
+        aj = max(a[j - 1], prev)          # a_k is non-decreasing; enforce it
+        remaining_span = 1.0 - prev
+        # each of the not-yet-placed points is uniform on (prev, 1]
+        p = 1.0 if remaining_span <= 0.0 else min((aj - prev) / remaining_span, 1.0)
+        nxt = {}
+        for n, mass in surviving.items():
+            for d, weight in enumerate(_binomial_pmf(m - n, p)):
+                if weight == 0.0:
+                    continue
+                total = n + d
+                if total >= j:            # U_(j) <= a_j: the null event occurred
+                    crossed += mass * weight
+                else:
+                    nxt[total] = nxt.get(total, 0.0) + mass * weight
+        surviving = nxt
+        prev = aj
+        if not surviving:
+            break
+    # crossed <= 1 mathematically; the min only absorbs float round-off at
+    # rho -> 1, where the answer is 1 anyway. It is NOT the removed clip.
+    return min(crossed, 1.0)
+
+
+def rho_statistic(per_signal_ranklists, groups=None):
+    """Kolde's raw rho statistic and list count per id, as ``{id: (rho, m)}``.
 
     For each id, gather its normalized rank from every effective list it
     appears in, sort ascending r_(1) <= ... <= r_(m), and take the Kolde
     beta-score of each order statistic: the regularized incomplete beta
     betainc(i, m-i+1, r_(i)) -- the probability the i-th of m Uniform(0,1)
-    draws is <= r_(i) under the null. rho = min over i. The returned score
-    applies the Bonferroni-style correction min(rho * m, 1.0). LOWER =
-    more consistently top-ranked.
+    draws is <= r_(i) under the null. rho = min over i.
+
+    Exposed separately from :func:`rra_score` because rho is not a p-value (it
+    is the minimum of m dependent, marginally-uniform quantities) and because
+    audits need the pre-null statistic and its m.
     """
     lists = _effective_lists(per_signal_ranklists, groups)
     ids = set()
     for lst in lists:
         ids.update(lst.keys())
 
-    scores = {}
+    out = {}
     for i in ids:
         r = sorted(lst[i] for lst in lists if i in lst)
         m = len(r)
-        betas = [betainc(k, m - k + 1, r[k - 1]) for k in range(1, m + 1)]
-        rho = min(betas)
-        scores[i] = min(rho * m, 1.0)
-    return scores
+        out[i] = (min(betainc(k, m - k + 1, r[k - 1]) for k in range(1, m + 1)), m)
+    return out
+
+
+def rra_score(per_signal_ranklists, groups=None):
+    """Robust Rank Aggregation (Kolde et al. 2012) score per id.
+
+    The Kolde beta/rho step is :func:`rho_statistic`; the score is that rho
+    mapped through its EXACT null distribution, :func:`rho_null_pvalue`,
+    conditioned on the id's own m. LOWER = more consistently top-ranked.
+
+    Bead 8k8e: this used to return the Bonferroni bound ``min(rho * m, 1.0)``,
+    which clipped 46.5% of the real cohort into a single tie block broken by
+    transcript id. The exact null is strictly monotone in rho and unclipped, so
+    two candidates share a score only if their rank vectors genuinely agree --
+    see :func:`rra_tied_block_size`, which reports those blocks rather than
+    letting the alphabet resolve them silently.
+    """
+    return {i: rho_null_pvalue(rho, m)
+            for i, (rho, m) in rho_statistic(per_signal_ranklists, groups).items()}
+
+
+def rra_tied_block_size(per_signal_ranklists, groups=None, scores=None):
+    """``{id: how many candidates share this id's exact RRA score}``.
+
+    A block size > 1 means :func:`aggregate` cannot order those candidates on
+    evidence -- it falls back to ascending id, which is arbitrary. Under the
+    exact null that happens only for a GENUINE tie (identical sorted rank
+    vectors and identical m), which is a real statement about the data and must
+    stay a tie; what must not happen is for it to stay invisible. Stage 07
+    writes this as the ``rra_tied_block_size`` column so a shortlist consumer
+    can see that positions inside a block are interchangeable.
+
+    ``scores`` reuses an already-computed :func:`rra_score` map (same
+    ``groups``) instead of recomputing it.
+    """
+    if scores is None:
+        scores = rra_score(per_signal_ranklists, groups=groups)
+    counts = {}
+    for value in scores.values():
+        counts[value] = counts.get(value, 0) + 1
+    return {i: counts[v] for i, v in scores.items()}
 
 
 def rrf_score(per_signal_ranklists, k=60, groups=None):
@@ -462,13 +606,25 @@ def rerank_output(df_sorted, method, groups=None, excluded=None):
     voting, e.g. a zero-weight axis -- see
     :func:`excluded_signals_from_weights`); ids covered by no signal keep their
     incoming (weighted) order at the tail via a stable sort.
+
+    Under rankagg it also writes ``rra_tied_block_size`` (bead 8k8e): how many
+    candidates share each row's exact RRA score. Anything above 1 is a genuine
+    tie whose internal order is decided by ascending id, i.e. arbitrarily, and
+    a shortlist consumer needs to see that rather than infer a precision the
+    aggregation does not have. Ids with no voting signal get 0 -- they were
+    never scored, so they are not tied with anything.
     """
     if method != "rankagg":
         return df_sorted
     ranklists = build_ranklists_from_df(df_sorted, excluded=excluded)
-    order = aggregate(ranklists, method="rra", groups=groups)
+    scores = rra_score(ranklists, groups=groups)
+    blocks = rra_tied_block_size(ranklists, groups=groups, scores=scores)
+    order = sorted(scores, key=lambda i: (scores[i], i))
     pos = {idv: i for i, idv in enumerate(order)}
     tail = len(pos)
-    keyed = df_sorted.assign(_rankagg_pos=[pos.get(i, tail) for i in df_sorted["id"]])
+    keyed = df_sorted.assign(
+        _rankagg_pos=[pos.get(i, tail) for i in df_sorted["id"]],
+        rra_tied_block_size=[blocks.get(i, 0) for i in df_sorted["id"]],
+    )
     reordered = keyed.sort_values("_rankagg_pos", kind="stable")
     return reordered.drop(columns="_rankagg_pos")
