@@ -36,8 +36,21 @@
 set -eo pipefail
 mkdir -p logs
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$SCRIPT_DIR"
+# Slurm COPIES the batch script into a per-job spool directory and executes the
+# copy, so under sbatch "$0" is /var/spool/slurm/slurmd/job<id>/slurm_script and
+# dirname "$0" is that spool dir -- which holds no config.sh. The job's WorkDir
+# is already correct; SLURM_SUBMIT_DIR is where sbatch was invoked. Fall back to
+# dirname "$0" only for interactive runs, where it is the real path.
+SCRIPT_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")" && pwd)}"
+cd "$SCRIPT_DIR" || { echo "ERROR: cannot cd to ${SCRIPT_DIR}" >&2; exit 1; }
+
+# Assert the repo really is here rather than letting `source` emit a bare
+# "No such file or directory" that names neither the stage nor the directory.
+if [ ! -f config.sh ]; then
+    echo "ERROR: config.sh not found in ${SCRIPT_DIR}." >&2
+    echo "       Submit 06c from the repository root, or set SLURM_SUBMIT_DIR." >&2
+    exit 1
+fi
 
 # shellcheck disable=SC1091
 source config.sh
