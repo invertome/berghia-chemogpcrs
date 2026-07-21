@@ -174,12 +174,25 @@ submit_step() {
         [ "$VERBOSE" = true ] && echo "  Script: $script_name" >&2
         [ "$VERBOSE" = true ] && echo "  Options: $slurm_opts" >&2
 
+        # Submit via submit_stage.sh, NOT bare sbatch. Eleven numbered stages
+        # carry `#SBATCH --time=${DEFAULT_TIME}` / `#SBATCH $(scale_resources)`,
+        # and sbatch parses directives BEFORE the body runs, so it sees those
+        # tokens verbatim and rejects the job ("Invalid --time specification").
+        # A command-line --time does NOT rescue it, because the in-file
+        # directive is still parsed. submit_stage.sh preprocesses only the
+        # #SBATCH header, requires every variable to resolve non-empty, and
+        # refuses to hand sbatch a directive still containing '$'.
+        local submitter="${SCRIPT_DIR}/scripts/unity/submit_stage.sh"
         if [ "$DRY_RUN" = true ]; then
-            echo "  Would run: sbatch${slurm_opts} $script_path" >&2
+            echo "  Would run: ${submitter} $script_path${slurm_opts}" >&2
             echo "12345"  # Fake job ID for dry run (stdout for capture)
         else
+            if [ ! -f "$submitter" ]; then
+                echo "  ERROR: submitter not found: $submitter" >&2
+                exit 1
+            fi
             local output
-            output=$(sbatch${slurm_opts} "$script_path" 2>&1)
+            output=$(bash "$submitter" "$script_path"${slurm_opts} 2>&1) || true
             local job_id
             job_id=$(echo "$output" | grep -oP 'Submitted batch job \K\d+' || echo "")
 
@@ -187,8 +200,13 @@ submit_step() {
                 echo "  Job ID: $job_id" >&2
                 echo "$job_id"  # stdout for capture
             else
-                echo "  Warning: Could not parse job ID from: $output" >&2
-                echo ""
+                # FATAL, not a warning. Returning "" here is precisely what let
+                # an unsubmittable pipeline report success: the orchestrator
+                # moved on to the next stage and exited having submitted
+                # nothing. A stage that could not be submitted must stop the run.
+                echo "  ERROR: submission failed for ${step} (no job id returned):" >&2
+                echo "$output" | sed 's/^/    /' >&2
+                exit 1
             fi
         fi
     fi
@@ -308,7 +326,13 @@ main() {
     # Submit steps
     local prev_job_id=""
     for step in "${steps[@]}"; do
-        prev_job_id=$(submit_step "$step" "$prev_job_id")
+        # submit_step exits non-zero when a stage could not be submitted. That
+        # happens inside a command substitution, so the failure is caught here
+        # explicitly rather than relying on `set -e` semantics for assignments.
+        if ! prev_job_id=$(submit_step "$step" "$prev_job_id"); then
+            echo "Aborting: stage ${step} could not be submitted." >&2
+            exit 1
+        fi
     done
 
     echo ""
