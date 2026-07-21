@@ -116,6 +116,32 @@ def main() -> int:
                 f"fraction of the references and the join would still 'succeed'."
             )
 
+        # --- TRAP 1b: orphan npz keys (a STALE reference npz) -----------------
+        # TRAP 1 is a FRACTION, and a fraction cannot see this failure. When the
+        # anchor set is repaired -- e.g. evicting non-class-A entries -- the npz
+        # keeps embedding the removed anchors while the labels no longer name
+        # them. Measured on the real eviction of 55 rows: 898/953 = 0.9423, which
+        # is comfortably ABOVE REF_OVERLAP_MIN, so TRAP 1 stays silent while the
+        # family prototypes are still built from every evicted member.
+        #
+        # The invariant is directional and exact, not proportional: every key in
+        # the reference npz MUST be named in the label set. A key that is not is
+        # an embedding of something the reference set no longer contains, and no
+        # threshold on the other direction can detect it.
+        orphans = sorted(set(ref) - set(ref_labels))
+        m["ref_orphan_keys"] = len(orphans)
+        print(f"[preflight] TRAP1b orphan npz keys (in npz, absent from labels): "
+              f"{len(orphans)} (need exactly 0)")
+        if orphans:
+            failures.append(
+                f"TRAP 1b FIRED ({tag}): {len(orphans)} key(s) in the reference "
+                f"npz are absent from the label TSV, e.g. {orphans[:5]}. The npz "
+                f"predates the current anchor set -- prototypes would still be "
+                f"built from references that have been removed. Regenerate "
+                f"reference_{tag}_PROD.npz (and the class-A FASTA it derives "
+                f"from) against the current anchor set."
+            )
+
         # --- TRAP 2: deconfound (seq_len) key overlap ------------------------
         ov_len = set(seq_len) & set(cand)
         frac_len = len(ov_len) / len(cand)

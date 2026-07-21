@@ -280,6 +280,50 @@ def classify_family(protein_name: str, gene_names: str) -> str:
     return "unclassified-gpcr"
 
 
+# ---- GPCR class from the underlying record (NOT from the protein name) ------
+
+# UniProt curates GPCR class as "Belongs to the G[-]protein coupled receptor N
+# family": 1 = rhodopsin (A), 2 = secretin/adhesion (B), 3 = glutamate (C).
+# The hyphenation is inconsistent across entries, so both spellings are matched.
+_CURATED_GPCR_FAMILY_RE = re.compile(
+    r"Belongs to the G[- ]?protein[- ]coupled receptor (\d+) family", re.I)
+_CURATED_FAMILY_TO_CLASS = {"1": "A", "2": "B", "3": "C"}
+
+# Fallback: the SPECIFIC Pfam family. Clan membership is useless here --
+# PF00001/PF00002/PF00003/PF02101 all sit in clan CL0192 (GPCR_A), verified
+# against InterPro -- so only the family accession discriminates class.
+_PFAM_TO_CLASS = {"PF00001": "A", "PF00002": "B", "PF00003": "C"}
+_PFAM_TOKEN_RE = re.compile(r"\bPF\d{5}\b")
+
+
+def gpcr_class_from_evidence(curated_similarity: str, pfam: str) -> str:
+    """Resolve a GPCR class (A/B/C) from a UniProt record's own evidence.
+
+    This is the single, uniform rule that decides anchor-set membership of the
+    class-A envelope. Precedence:
+
+    1. UniProt's curated "Belongs to the G-protein coupled receptor N family"
+       statement (expert-assigned; outranks a profile hit).
+    2. The specific Pfam family (PF00001/PF00002/PF00003).
+    3. ``UNKNOWN`` -- there is deliberately no default to "A", because a silent
+       default is exactly how a class-B receptor ends up polluting a class-A
+       family prototype.
+
+    Both arguments come straight from the API (``cc_similarity``, ``xref_pfam``);
+    neither the protein name nor any existing label is consulted, so a mislabelled
+    row cannot launder itself through this function.
+    """
+    m = _CURATED_GPCR_FAMILY_RE.search(curated_similarity or "")
+    if m:
+        klass = _CURATED_FAMILY_TO_CLASS.get(m.group(1))
+        if klass:
+            return klass
+    for token in _PFAM_TOKEN_RE.findall(pfam or ""):
+        if token in _PFAM_TO_CLASS:
+            return _PFAM_TO_CLASS[token]
+    return "UNKNOWN"
+
+
 def classify_subfamily(family: str, protein_name: str,
                        gene_names: str) -> str:
     """Drill-down for aminergic / peptide; empty string for other families."""
