@@ -60,7 +60,7 @@ def _core_keys_from_ablate():
     return {spec[0] for spec in ablate._SIGNAL_SPEC}
 
 
-def test_core_signal_key_sets_are_exactly_twelve():
+def test_core_signal_key_sets_all_match_the_declared_count():
     # Guards the filters above themselves: if a future edit changed what
     # counts as "core" (e.g. a 6th evidence channel without a "_score"
     # suffix, or a channel entry that happens to be a 2-tuple), the count
