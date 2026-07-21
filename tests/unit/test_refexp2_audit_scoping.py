@@ -66,6 +66,33 @@ def test_partition_preserves_the_whole_row():
     assert skipped[0]["tier"] == "9" and skipped[0]["family"] == "opsin"
 
 
+def test_auditing_nothing_resolvable_raises_rather_than_writing_an_empty_audit(tmp_path: Path):
+    """A guard the mutation sweep found UNTESTED.
+
+    If every class-A anchor is non-UniProt, the audit would otherwise proceed
+    to write a table covering zero anchors -- which reads downstream as 'the
+    audit ran and everything passed'. Asserts the exception TYPE and this
+    guard's OWN message, so an incidental failure elsewhere cannot stand in
+    for the gate firing.
+    """
+    import argparse
+
+    from refexp2_evidence_gate import run_audit
+
+    tsv = tmp_path / "anchors.tsv"
+    tsv.write_text(
+        "\t".join(["accession", "tier", "taxid", "species", "family", "class", "evidence"]) + "\n"
+        + "\t".join(["10228_0_00188c", "9", "10228", "x", "opsin", "A", "orthodb-harvest"]) + "\n"
+        + "\t".join(["400682_1_001cae", "9", "400682", "y", "lipid", "A", "orthodb-harvest"]) + "\n"
+    )
+    args = argparse.Namespace(anchor_tsv=str(tsv), output=str(tmp_path / "out.tsv"))
+
+    with pytest.raises(RuntimeError) as exc:
+        run_audit(args)
+    assert "no UniProt-resolvable class-A anchors" in str(exc.value)
+    assert not (tmp_path / "out.tsv").exists(), "an audit table was written anyway"
+
+
 @pytest.mark.skipif(not ANCHORS.exists(), reason="production anchor set absent")
 def test_real_anchor_set_partitions_into_the_measured_split():
     """Real-data guard. The counts are the ones that made the audit 400."""

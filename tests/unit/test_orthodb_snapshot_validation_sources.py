@@ -65,10 +65,13 @@ def test_harvest_verdict_requires_all_three_checks(tmp_path: Path):
         {**_ok("1_0:ddd"), "organism_verified": "False"},
     ])
     v = load_harvest_verdicts(p)
-    assert v["1_0_aaa"] is True
-    assert v["1_0_bbb"] is False
-    assert v["1_0_ccc"] is False
-    assert v["1_0_ddd"] is False
+    # Each assertion names its own guard. These are SIBLING guards over the same
+    # row, so a bare `assert x is False` makes every one of them fail with an
+    # identical diff and you cannot tell which check was removed.
+    assert v["1_0_aaa"] is True, "a row passing all three checks was rejected"
+    assert v["1_0_bbb"] is False, "guard 'verdict == verified_class_A' did not fire"
+    assert v["1_0_ccc"] is False, "guard 'quality_verdict == PASS' did not fire"
+    assert v["1_0_ddd"] is False, "guard 'organism_verified == True' did not fire"
 
 
 def test_anchor_in_neither_source_is_explicitly_unvalidated(tmp_path: Path):
