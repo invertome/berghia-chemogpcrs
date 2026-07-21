@@ -123,9 +123,11 @@ class TestClassAVerification:
     """Class membership is verified from the record, never inferred from a name."""
 
     def test_rhodopsin_clan_domain_verifies(self):
-        ok, evidence = gate.verify_class_a(entry())
+        ok, basis, evidence = gate.verify_class_a(entry())
         assert ok
         assert "PF00001" in evidence
+        # No curated family on this record, so the signature is what decided it.
+        assert basis == "signature-pfam"
 
     def test_chemosensory_clan_is_not_class_a(self):
         """PF08395 / PF02949 are Pfam clan CL0176 Chemosens_recp, NOT the
@@ -133,18 +135,85 @@ class TestClassAVerification:
         for pfam in ("PF08395", "PF02949"):
             record = entry(uniProtKBCrossReferences=[
                 {"database": "Pfam", "id": pfam}])
-            ok, reason = gate.verify_class_a(record)
+            ok, basis, reason = gate.verify_class_a(record)
             assert not ok
             assert "CL0176" in reason
+            assert basis == "chemosensory-clan"
 
-    def test_curated_family_string_alone_does_not_establish_class_a(self):
-        """The string is an annotation; the domain is the evidence."""
+    @pytest.mark.parametrize("curated", [
+        # BOTH hyphenations occur in UniProt at comparable frequency: across the
+        # anchor set's cached records, 441 entries say "G-protein coupled" and
+        # 409 say "G protein-coupled". A rule matching only one silently misses
+        # nearly half the class-A statements.
+        "Belongs to the G-protein coupled receptor 1 family",
+        "Belongs to the G protein-coupled receptor 1 family",
+        "Belongs to the G protein-coupled receptor 1 family. "
+        "Atypical chemokine receptor subfamily",
+    ])
+    def test_curated_family_1_establishes_class_a_without_a_domain(self, curated):
+        """REVERSED 2026-07-20, and the reversal is the point.
+
+        This assertion used to read "the string is an annotation; the domain is
+        the evidence" -- i.e. class A required PF00001/IPR000276 and a curated
+        family statement alone was refused. Measured against live UniProt, that
+        is wrong in the direction that matters: eight anchors are curated
+        "Belongs to the G protein-coupled receptor 1 family" -- which IS class A
+        -- yet carry NO rhodopsin signature at all, because they are too
+        divergent for the profile to fire. ACKR1/DARC (Q5Y7A3, Q8IWP5, Q53ZP8)
+        and Q09554, Q09964, Q09965, Q09966, Q9UJ42 all return empty Pfam or
+        Pfam without PF00001. The anchor repair correctly KEPT all eight, so a
+        gate that fails them disagrees with the anchor set permanently.
+
+        Domain detection is a DOMAIN test. UniProt's curated family assignment
+        is the CLASS test, and it is the expert call -- so it outranks the
+        profile. The old fixture encoded the author's assumption and, being
+        synthetic, could never contradict it; the live records did.
+        """
         record = entry(
             uniProtKBCrossReferences=[],
-            comments=[{"commentType": "SIMILARITY", "texts": [{"value":
-                "Belongs to the G-protein coupled receptor 1 family"}]}])
-        ok, _ = gate.verify_class_a(record)
+            comments=[{"commentType": "SIMILARITY",
+                       "texts": [{"value": curated}]}])
+        ok, basis, evidence = gate.verify_class_a(record)
+        assert ok
+        assert basis == "curated-family-1"
+        assert "no rhodopsin-clan signature" in evidence
+
+    @pytest.mark.parametrize("curated,expected_class", [
+        ("Belongs to the G protein-coupled receptor 2 family", "B"),
+        ("Belongs to the G-protein coupled receptor 2 family. "
+         "Adhesion G-protein coupled receptor (ADGR) subfamily", "B"),
+        ("Belongs to the G protein-coupled receptor 3 family", "C"),
+        ("Belongs to the G-protein coupled receptor 3 family. "
+         "GABA-B receptor subfamily", "C"),
+    ])
+    def test_curated_family_2_or_3_is_rejected_even_carrying_pf00001(
+            self, curated, expected_class):
+        """Curation is decisive in BOTH directions, which is the half a
+        containment-style fix would miss. A stray rhodopsin profile hit on a
+        curated class-B/C receptor must not launder it into class A -- that is
+        how a secretin receptor ends up polluting a class-A family prototype.
+        The default fixture carries PF00001 AND IPR000276 and is still refused.
+        """
+        record = entry(comments=[{"commentType": "SIMILARITY",
+                                  "texts": [{"value": curated}]}])
+        ok, basis, evidence = gate.verify_class_a(record)
         assert not ok
+        assert basis.startswith("curated-family-")
+        assert f"class {expected_class}" in evidence
+
+    def test_a_family_naming_no_class_falls_back_to_the_signature(self):
+        """The other direction the correction had to preserve. A0A0A8JZN4 and
+        P46091 are curated into the "chemokine-like receptor (CMKLR) family",
+        which names no GPCR class number at all, but both carry PF00001 and both
+        are genuinely class A. A curation-ONLY rule would have dropped them, so
+        the signature still decides wherever curation is silent.
+        """
+        record = entry(comments=[{"commentType": "SIMILARITY", "texts": [{"value":
+            "Belongs to the chemokine-like receptor (CMKLR) family"}]}])
+        ok, basis, evidence = gate.verify_class_a(record)
+        assert ok
+        assert basis == "signature-pfam"
+        assert "curation non-decisive" in evidence
 
     @pytest.mark.parametrize("name", [
         # Real anchors currently declared class A that carry no PF00001. Diuretic

@@ -225,9 +225,10 @@ class TestUniverseIsWiderButTheGateIsNot:
         record = entry(["Eukaryota", "Metazoa", "Ecdysozoa", "Arthropoda"],
                        uniProtKBCrossReferences=[
                            {"database": "Pfam", "id": "PF02949"}])
-        is_class_a, evidence = gate.verify_class_a(record)
+        is_class_a, basis, evidence = gate.verify_class_a(record)
         assert not is_class_a
         assert "CL0176" in evidence
+        assert basis == "chemosensory-clan"
 
     def test_reporting_layer_cannot_flip_a_verdict(self):
         """The single most important invariant in this file: refexp3 labels,

@@ -76,6 +76,20 @@ import urllib.parse
 import urllib.request
 from typing import Dict, Iterable, List, Optional, Sequence
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# The class call is delegated, not reimplemented. `gpcr_class_from_evidence` is
+# the resolver that decided anchor-set membership, so sharing it is what keeps
+# this audit and the anchor set from disagreeing about which accessions are
+# class A. The two module-private names are imported alongside it for the same
+# reason: re-typing the family regex here would create a second copy of the rule,
+# free to drift from the one that is authoritative.
+from curate_gpcr_references import (  # noqa: E402
+    _CURATED_FAMILY_TO_CLASS as CURATED_FAMILY_TO_CLASS,
+    _CURATED_GPCR_FAMILY_RE as CURATED_GPCR_FAMILY_RE,
+    gpcr_class_from_evidence,
+)
+
 UNIPROT_SEARCH = "https://rest.uniprot.org/uniprotkb/search"
 EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 USER_AGENT = "berghia-chemogpcrs/1.0"
@@ -85,10 +99,20 @@ USER_AGENT = "berghia-chemogpcrs/1.0"
 # right direction.
 LOPHOTROCHOZOA_TAXID = "1206795"
 
-# Class-A membership, established three independent ways (see verify_class_a).
-CURATED_CLASS_A_FAMILY = "g-protein coupled receptor 1 family"
+# Class-A membership (see verify_class_a). UniProt's curated family statement is
+# the authority; these signatures corroborate it, and stand in for it only where
+# curation is silent.
 PFAM_7TM_1 = "PF00001"          # 7tm_1, Pfam clan CL0192 (rhodopsin-like)
 INTERPRO_RHODOPSIN = "IPR000276"  # GPCR, rhodopsin-like superfamily
+
+# SEARCH-SIDE ONLY: the UniProt `family:` query term used to cast the candidate
+# net wide (refexp3 builds its universe query from it). It is deliberately NOT
+# the verdict rule -- verify_class_a resolves class from the record's own curated
+# statement, and matching a query string is not evidence of anything. UniProt's
+# `family:` field is hyphenation-insensitive, measured 2026-07-20: this spelling
+# and "g protein-coupled receptor 1 family" both return 396250 entries globally
+# and both return 5700 within Mollusca, so the net is not narrowed by the choice.
+CURATED_CLASS_A_FAMILY = "g-protein coupled receptor 1 family"
 
 # Pfam clan CL0176 (Chemosens_recp) -- NOT the rhodopsin clan. A hit on these
 # does not establish class A, and silently treating it as if it did is the
@@ -296,34 +320,77 @@ def curated_family_text(entry: dict) -> str:
 
 
 def verify_class_a(entry: dict) -> tuple:
-    """Verify class-A membership from the record, never from a family name.
+    """Verify class-A membership from the record's own evidence.
 
-    Returns (is_class_a, evidence_string). Requires the rhodopsin-clan Pfam
-    domain PF00001 or InterPro IPR000276 -- a curated family STRING alone is not
-    accepted, and a chemosensory-clan Pfam hit is rejected outright with its
-    clan named.
+    Returns ``(is_class_a, basis, evidence_string)``.
+
+    The determination is a CLASS test, not a domain-detection test. Detecting
+    PF00001/IPR000276 and reporting the result as though it were a class call
+    errs in both directions, and both directions were measured against live
+    UniProt:
+
+    * False positives on the negative side -- eight anchors (ACKR1/DARC
+      Q5Y7A3, Q8IWP5, Q53ZP8 and Q09554, Q09964, Q09965, Q09966, Q9UJ42) are
+      curated "Belongs to the G protein-coupled receptor 1 family", which IS
+      class A, yet are divergent enough that no rhodopsin profile fires. Domain
+      detection fails all eight; the class they are curated into passes them.
+    * False negatives on the positive side -- A0A0A8JZN4 and P46091 are curated
+      into the CMKLR family, which names no GPCR class at all, but both carry
+      PF00001 and both are genuinely class A. A curation-only test would drop
+      them.
+
+    So curation decides where it speaks, and the signature decides where it does
+    not. Precedence, delegated to ``gpcr_class_from_evidence`` -- the SAME
+    resolver that decided anchor-set membership -- so that this audit and the
+    anchor set cannot drift apart:
+
+    1. The curated "Belongs to the G[- ]protein[- ]coupled receptor N family"
+       statement. N=1 is class A, N=2 class B, N=3 class C. It is decisive in
+       BOTH directions: a curated family-2/3 entry is rejected even when a
+       rhodopsin signature fires on it.
+    2. Where curation names no class family (absent, or a family such as CMKLR
+       or Fz/Smo that carries no number), the specific Pfam family PF00001.
+    3. Failing that, InterPro IPR000276 -- the weakest basis, recorded as such.
+
+    A chemosensory-clan hit (CL0176, NOT the rhodopsin clan CL0192) is rejected
+    with its clan named, but only in the signature-fallback branch: it cannot
+    override an explicit curated class.
     """
     pfam = set(cross_reference_ids(entry, "Pfam"))
     interpro = set(cross_reference_ids(entry, "InterPro"))
     curated = curated_family_text(entry)
 
+    signatures = []
+    if PFAM_7TM_1 in pfam:
+        signatures.append(f"Pfam:{PFAM_7TM_1}")
+    if INTERPRO_RHODOPSIN in interpro:
+        signatures.append(f"InterPro:{INTERPRO_RHODOPSIN}")
+    corroboration = ("corroborated by " + "+".join(signatures) if signatures
+                     else "no rhodopsin-clan signature")
+
+    # 1. Curated class statement, decisive in both directions.
+    resolved = gpcr_class_from_evidence(curated, ";".join(sorted(pfam)))
+    match = CURATED_GPCR_FAMILY_RE.search(curated or "")
+    curated_class = CURATED_FAMILY_TO_CLASS.get(match.group(1)) if match else None
+    if curated_class == "A":
+        return True, "curated-family-1", f"curated:GPCR-1-family; {corroboration}"
+    if curated_class:
+        return (False, f"curated-family-{match.group(1)}",
+                f"curated:GPCR-{match.group(1)}-family = class {curated_class}, "
+                f"not A; {corroboration}")
+
+    # 2/3. Curation names no class family: fall back to the signature, and say so.
+    context = f"curation non-decisive ({curated or 'no curated family'})"
     wrong_clan = pfam & set(PFAM_NON_CLASS_A)
     if wrong_clan and PFAM_7TM_1 not in pfam:
         names = "; ".join(f"{p} ({PFAM_NON_CLASS_A[p]})" for p in sorted(wrong_clan))
-        return False, f"chemosensory clan, not rhodopsin: {names}"
-
-    evidence = []
+        return False, "chemosensory-clan", f"chemosensory clan, not rhodopsin: {names}; {context}"
     if PFAM_7TM_1 in pfam:
-        evidence.append(f"Pfam:{PFAM_7TM_1}")
+        assert resolved == "A", f"resolver disagreement: PF00001 present but resolved {resolved}"
+        return True, "signature-pfam", f"Pfam:{PFAM_7TM_1}; {context}"
     if INTERPRO_RHODOPSIN in interpro:
-        evidence.append(f"InterPro:{INTERPRO_RHODOPSIN}")
-    if CURATED_CLASS_A_FAMILY in curated.lower():
-        evidence.append("curated:GPCR-1-family")
-
-    domain_backed = PFAM_7TM_1 in pfam or INTERPRO_RHODOPSIN in interpro
-    if not domain_backed:
-        return False, ("no rhodopsin-clan domain (" + (curated or "no curated family") + ")")
-    return True, "+".join(evidence)
+        return True, "signature-interpro", f"InterPro:{INTERPRO_RHODOPSIN} only; {context}"
+    return False, "no-evidence", f"no curated class family and no rhodopsin-clan signature ({curated or 'none'})"
 
 
 def citations(entry: dict) -> List[dict]:
@@ -476,12 +543,13 @@ def gate_entry(entry: dict, pubmed_abstracts: Optional[Dict[str, str]] = None) -
         "pass_evidence_code": False, "pass_literature": False,
         "pass_characterized": False, "deorphanized": False,
         "evidence_tier": "", "family": family_for_report(name),
-        "class_a_evidence": "", "protein_existence": "",
+        "class_a_evidence": "", "class_a_basis": "", "protein_existence": "",
         "evidence_codes": "", "primary_pmids": "", "failed_at": "",
     }
 
-    is_class_a, class_a_evidence = verify_class_a(entry)
+    is_class_a, class_a_basis, class_a_evidence = verify_class_a(entry)
     verdict["class_a_evidence"] = class_a_evidence
+    verdict["class_a_basis"] = class_a_basis
     verdict["pass_class_a"] = is_class_a
     if not is_class_a:
         verdict["failed_at"] = "class_a"
@@ -693,7 +761,7 @@ def write_tsv(rows: Sequence[dict], columns: Sequence[str], path: str) -> None:
 
 VERDICT_COLUMNS = [
     "accession", "protein_name", "family", "organism", "taxid", "phylum", "reviewed",
-    "sequence_length", "protein_existence", "class_a_evidence",
+    "sequence_length", "protein_existence", "class_a_basis", "class_a_evidence",
     "pass_class_a", "pass_existence", "pass_evidence_code", "pass_literature",
     "pass_characterized", "deorphanized", "evidence_tier", "failed_at",
     "primary_pmids", "evidence_codes",
@@ -889,7 +957,7 @@ def run_corrections(args) -> int:
         entry = entries[accession]
         name = protein_name(entry)
         curated = curated_family_text(entry)
-        _, class_a_evidence = verify_class_a(entry)
+        _, _, class_a_evidence = verify_class_a(entry)
 
         in_anchor = anchors.get(accession, {}).get("family", "(not an anchor)")
         if in_anchor != current:
