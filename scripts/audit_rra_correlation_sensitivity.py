@@ -236,6 +236,36 @@ def analyze(df, threshold=0.7, top_k=20, groups=None, id_col="id"):
     }
 
 
+def _interpret_fusion_impact(imp) -> str:
+    """State what the measurement shows, derived from the measurement.
+
+    This sentence used to be a hardcoded claim that the correlation was inert
+    -- printed unconditionally, four lines below the numbers, and on the real
+    cohort those numbers were Spearman 0.6122 with 380 positions of
+    displacement. A conclusion that cannot be false is not a conclusion, so it
+    is now computed from the same values the block above prints.
+    """
+    spearman = float(imp["order_spearman"])
+    displacement = int(imp["max_displacement"])
+    changed = int(imp["n_top_k_changed"])
+    inert = spearman >= 0.9999 and displacement == 0
+
+    if inert:
+        return (
+            f"An order Spearman of {spearman:.4f} with {displacement} displacement "
+            "means the measured correlation does NOT change the ranking, so the "
+            "double-counting objection, while structurally real, is inert here."
+        )
+    return (
+        f"Fusing the flagged groups DOES change the ranking: order Spearman "
+        f"{spearman:.4f}, max displacement {displacement} positions, and "
+        f"{changed} of the top-{imp['top_k']} ids change. The double-counting "
+        "objection is NOT inert on this data -- the correlated signals are "
+        "moving the order, so the grouped and ungrouped rankings are different "
+        "answers and one of them has to be chosen deliberately."
+    )
+
+
 def write_report(result, out_prefix):
     """Emit ``<prefix>_correlation.tsv``, ``_sensitivity.json`` and ``_sensitivity.md``."""
     result["correlation"].to_csv(out_prefix + "_correlation.tsv", sep="\t")
@@ -275,9 +305,8 @@ def write_report(result, out_prefix):
         f"- ids entering/leaving top-{imp['top_k']}: {imp['n_top_k_changed']}",
         f"- max position displacement: {imp['max_displacement']}",
         "",
-        "An order Spearman of 1.0 with 0 displacement means the measured "
-        "correlation does NOT change the ranking, and the council's "
-        "double-counting objection, while structurally real, is inert here.",
+        "",
+        _interpret_fusion_impact(imp),
     ]
     with open(out_prefix + "_sensitivity.md", "w") as fh:
         fh.write("\n".join(lines) + "\n")
