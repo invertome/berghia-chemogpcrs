@@ -14,6 +14,8 @@ ERROR (fail loud), never a silent drop.
 from __future__ import annotations
 
 import csv
+import os
+import tempfile
 from typing import Dict, Set
 
 
@@ -63,9 +65,36 @@ def subset_fasta_by_ids(source_fasta: str, ids: Set[str], out_path: str) -> int:
             f"{len(missing)} requested anchor id(s) missing from {source_fasta}: "
             f"{sorted(missing)[:5]}"
         )
-    with open(out_path, "w") as out:
-        for cid in sorted(kept):
-            out.write(kept[cid])
+    # Publish by rename, never by writing the destination in place.
+    #
+    # This output is a production input: the reference npz is built from it and
+    # the family prototypes are built from that. Opening the destination with
+    # "w" truncates it at open and refills incrementally, so an interruption
+    # leaves a SHORT BUT VALID FASTA -- and a short FASTA parses, so every
+    # downstream consumer accepts it. That is not hypothetical: the anchor set
+    # this script reads was itself left half-written by an interrupted run,
+    # 55 of 63 rows applied, and only a failing test revealed it.
+    #
+    # The temp lives in the destination directory because os.replace is only
+    # atomic within one filesystem, and is removed on any failure so a partial
+    # file cannot be left behind for a glob to find.
+    out_dir = os.path.dirname(os.path.abspath(out_path)) or "."
+    fd, tmp = tempfile.mkstemp(dir=out_dir,
+                               prefix=os.path.basename(out_path) + ".",
+                               suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as out:
+            for cid in sorted(kept):
+                out.write(kept[cid])
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(tmp, out_path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     return len(kept)
 
 
