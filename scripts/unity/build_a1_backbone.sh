@@ -135,7 +135,9 @@ else
   echo "[a1_backbone] ClipKit skipped (RUN_BACKBONE_CLIPKIT=0)"
   cp "$BACKBONE_ALN" "$REF_ALN"
 fi
-NCOL=$(awk '/^>/{next}{print length($0); exit}' "$REF_ALN")
+# Sum the first record's residue lines: taking only the first line reports the
+# FASTA wrap width (60), not the alignment width, in the provenance summary.
+NCOL=$(awk '/^>/{if(seen) exit; seen=1; next} seen{n+=length($0)} END{print n+0}' "$REF_ALN")
 echo "[a1_backbone] reference alignment: $(grep -c '^>' "$REF_ALN") seqs, ~${NCOL} cols -> $REF_ALN"
 
 # --- Backbone tree: IQ-TREE 3 with PROFILE MIXTURE MODELS --------------------

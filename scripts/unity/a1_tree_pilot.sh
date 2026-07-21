@@ -105,7 +105,9 @@ for name in "${!COND[@]}"; do
   aln="${COND[$name]}"
   trim="${OUTDIR}/${name}_trim.fa"
   clipkit "$aln" -m smart-gap -o "$trim" 2> "${OUTDIR}/${name}_clipkit.log" || cp "$aln" "$trim"
-  ncol=$(awk '/^>/{next}{print length($0); exit}' "$trim")
+  # Sum the first record's residue lines: taking only the first line reports the
+  # FASTA wrap width (60), not the alignment width.
+  ncol=$(awk '/^>/{if(seen) exit; seen=1; next} seen{n+=length($0)} END{print n+0}' "$trim")
   echo "[a1_pilot] $name: $(grep -c '^>' "$trim") seqs, ~${ncol} cols -> FastTree"
   FastTree -lg "$trim" > "${OUTDIR}/${name}.nwk" 2> "${OUTDIR}/${name}.fasttree.log" \
     && TREE_ARGS+=(--tree "${name}=${OUTDIR}/${name}.nwk") \
