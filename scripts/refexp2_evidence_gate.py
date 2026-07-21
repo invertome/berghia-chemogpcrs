@@ -114,6 +114,22 @@ INTERPRO_RHODOPSIN = "IPR000276"  # GPCR, rhodopsin-like superfamily
 # and both return 5700 within Mollusca, so the net is not narrowed by the choice.
 CURATED_CLASS_A_FAMILY = "g-protein coupled receptor 1 family"
 
+# The family string ALONE is not the universe. Unreviewed records frequently
+# carry the domain signature but no curated family statement, so a family-only
+# net never examines them at all. Measured live 2026-07-21 for Lophotrochozoa
+# PE1/PE2: 381 entries by family string, 572 by the union below -- a third of
+# the eligible records were invisible to the narrower query.
+#
+# This widens the SEARCH ONLY. verify_class_a still re-derives class per entry
+# from the record's own curated statement, so admitting a record to the
+# candidate pool is not admitting it to the reference set. refexp3 builds the
+# same union from these same two constants.
+CLASS_A_UNIVERSE = (
+    f'(family:"{CURATED_CLASS_A_FAMILY}" '
+    f"OR xref:pfam-{PFAM_7TM_1} "
+    f"OR xref:interpro-{INTERPRO_RHODOPSIN})"
+)
+
 # Pfam clan CL0176 (Chemosens_recp) -- NOT the rhodopsin clan. A hit on these
 # does not establish class A, and silently treating it as if it did is the
 # specific trap this constant exists to name.
@@ -220,6 +236,25 @@ _PLACEHOLDER_NAME = re.compile(
 # Admitting them would have been exactly the "lower the bar to produce a number"
 # failure this gate is meant to prevent.
 _ABBREVIATION_INDEX_NAME = re.compile(r"^[A-Za-z]{2,8}[-_ ]?\d{1,4}[A-Za-z]?$")
+
+# The rule above matches on SHAPE, and that shape is also what a genuine
+# spelled-out name takes once it carries an isoform number: "Opsin-3",
+# "Peropsin 1", "Xenopsin1" and "Acropsin 1" are all letters-then-digits and
+# were all being rejected as placeholders. That contradicts the rule's own
+# stated discriminator -- a spelled-out word -- because "opsin" IS one.
+#
+# So the shape test is kept and a spelled-out functional word exempts a name
+# from it. The vocabulary is spelled-out terms only: an acronym plus a serial
+# number ("NPYR-10", "GCR002", "TKR2", "NPFR1") carries no such word and is
+# still rejected, which is the case the rule was added for.
+_SPELLED_OUT_FUNCTION_WORD = re.compile(
+    r"opsin|rhodopsin|receptor|hormone|serotonin|dopamine|adrenergic|"
+    r"histamine|octopamine|tyramine|muscarinic|melatonin|corazonin|"
+    r"tachykinin|kinin|orexin|gastrin|somatostatin|opioid|purinoceptor|"
+    r"prostaglandin|prostanoid|thromboxane|cannabinoid|leukotriene|"
+    r"chemokine|allatotropin|allatostatin|adipokinetic|sulfakinin",
+    re.I,
+)
 
 
 def protein_existence_level(entry: dict) -> int:
@@ -457,7 +492,8 @@ def name_asserts_function(name: str) -> bool:
         return False
     if _PLACEHOLDER_NAME.match(stripped):
         return False
-    if _ABBREVIATION_INDEX_NAME.match(stripped):
+    if (_ABBREVIATION_INDEX_NAME.match(stripped)
+            and not _SPELLED_OUT_FUNCTION_WORD.search(stripped)):
         return False
     # A name that is only a bare GPCR label carries no ligand.
     bare = re.sub(r"[\s\-_,\.]+", " ", stripped).strip().lower()
@@ -774,7 +810,7 @@ VERDICT_COLUMNS = [
 
 def discovery_query() -> str:
     return (f"(taxonomy_id:{LOPHOTROCHOZOA_TAXID}) AND "
-            f'family:"{CURATED_CLASS_A_FAMILY}" AND (existence:1 OR existence:2)')
+            f"{CLASS_A_UNIVERSE} AND (existence:1 OR existence:2)")
 
 
 def run_discover(args) -> int:
