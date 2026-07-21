@@ -18,10 +18,20 @@ ADMITTED -- assigned a real family, merged into the reference set.
     A name is an author's label; an InterPro family entry is a curated
     classification, and only the second is allowed to place a prototype.
 
-EXCLUDED -- evidence-gate survivors whose names commit to nothing
-    ("Transmembrane receptor", "Multitransmembrane protein", "4656HH"). They
-    pass the evidence gate but carry no family-level signature, so there is no
-    family to assign. They stay out rather than being parked in a catch-all.
+EXCLUDED -- evidence-gate survivors carrying no family-level signature. They
+    pass the evidence gate but nothing curated places them in a family, so there
+    is no family to assign. They stay out rather than being parked in a catch-all.
+
+    A CORRECTED STANDARD. These were originally screened on their protein names
+    ("Transmembrane receptor", "Multitransmembrane protein", "4656HH") while the
+    admissions were required to show a curated InterPro family entry -- two
+    different standards, and the looser one was wrong. Q9NJC9 was excluded as
+    "RHO G-protein coupled receptor", a name that commits to nothing, while its
+    record carried better opsin evidence than any of the nine opsins admitted.
+    It is now admitted. All five exclusions were re-audited 2026-07-21 under the
+    curated standard; the remaining four hold on that evidence, not on their
+    names. Exclusion here means "no curated family signature", never "the name
+    was uninformative".
 
 PROBE -- the target class. Handled by refexp5_build_chemoreceptor_probe.py and
     named here only so this module is the single place that accounts for all
@@ -107,6 +117,31 @@ ADMIT: dict[str, tuple[str, str, str, frozenset[str]]] = {
                    PEPTIDE_SIGNATURES),
     "A0AAU6WVE3": ("peptide", "Haliotis discus hannai", "Sex peptide receptor",
                    PEPTIDE_SIGNATURES),
+    # --- opsin, ratified later (1) ---------------------------------------
+    # Admitted 2026-07-21, reversing an earlier exclusion. The exclusion was
+    # made on the protein name ("RHO G-protein coupled receptor" commits to no
+    # family) while the admissions were required to show curated evidence --
+    # two different standards, and the looser one produced the error. Under the
+    # SAME curated check the admissions face, this record is the strongest
+    # opsin in the held set: IPR050125 (the opsin family entry) PLUS IPR027430
+    # (visual-pigment retinal binding site), photoreceptor-activity and
+    # phototransduction GO, and the only curated SIMILARITY statement of the 22
+    # held entries. None of the nine opsins admitted above carries the retinal
+    # binding site. Re-audited against live UniProt 2026-07-21.
+    "Q9NJC9": ("opsin", "Schistosoma mansoni", "RHO G-protein coupled receptor",
+               OPSIN_SIGNATURES),
+}
+
+# Admissions whose ruling CHANGED, so the disposition table carries the history
+# rather than presenting a reversal as if it had always been the call.
+ADMISSION_NOTES: dict[str, str] = {
+    "Q9NJC9": ("; ratified 2026-07-21, REVERSING an earlier exclusion. The "
+               "exclusion was made on the protein name; re-audited under the "
+               "curated standard this record carries IPR050125 plus the "
+               "IPR027430 retinal binding site, photoreceptor-activity and "
+               "phototransduction GO, and the only SIMILARITY statement among "
+               "the 22 held entries -- stronger opsin evidence than any of the "
+               "nine opsins admitted first, none of which has the binding site"),
 }
 
 # accession -> (reason, protein_name). Kept out of the reference set.
@@ -120,13 +155,17 @@ EXCLUDE: dict[str, tuple[str, str]] = {
                "Transmembrane receptor"),
     "C0M0N9": ("name commits to no family; pathway GO terms only, no InterPro "
                "family-level signature", "Multitransmembrane protein"),
-    "Q9NJC9": ("name commits to no family. NOTE: unlike the other four, this "
-               "record DOES carry opsin evidence (IPR050125 + the IPR027430 "
-               "retinal binding site + photoreceptor-activity GO). It is held "
-               "out here per the standing ruling, not for want of evidence, and "
-               "is flagged for a separate call",
-               "RHO G-protein coupled receptor"),
 }
+
+# The four exclusions above were re-audited against live UniProt + the InterPro
+# API on 2026-07-21 under the SAME curated standard the admissions face, because
+# the fifth exclusion (Q9NJC9) turned out to be wrong and had been screened on
+# its name. Result: all four hold. Not one carries an InterPro FAMILY-type entry
+# beyond IPR000276/IPR017452, the generic pair every held entry has; none has a
+# SIMILARITY statement; none has family-informative GO. C9K4W2 has no Pfam hit
+# at all. The name-based screen happened to agree with the curated evidence on
+# these four -- it was still the wrong standard to apply, and Q9NJC9 is what it
+# cost. Measured entry types, not assumed: see tests/unit/test_refexp4_exclusion_audit.py.
 
 # accession -> protein_name. Target class; see refexp5_build_chemoreceptor_probe.py.
 PROBE: dict[str, str] = {
@@ -342,14 +381,37 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"verified {len(verified)} != {len(ADMIT)} admissions")
 
     existing_ids = [composite_id(r) for r in existing]
-    existing_acc = {r["accession"] for r in existing}
-    clash = sorted({v["accession"] for v in verified} & existing_acc)
-    if clash:
-        raise SystemExit(f"ERROR: admissions reuse accessions already present: "
-                         f"{clash}")
+    existing_by_acc = {r["accession"]: r for r in existing}
+
+    # A ratified entry already in the reference set is NOT a clash -- it is a
+    # prior run of this same module. Ratifying a later entry (Q9NJC9) must not
+    # require re-admitting, renumbering or rewriting the fourteen that landed
+    # first: identifiers are write-once and pre-existing rows are copied through
+    # untouched. So the admissions are partitioned rather than rejected.
+    #
+    # The already-present ones are still VERIFIED above against live UniProt and
+    # are re-checked here for family agreement. Silently skipping them would let
+    # the ratified family drift away from the recorded one with no error.
+    already, to_add = [], []
+    for v in verified:
+        prior = existing_by_acc.get(v["accession"])
+        if prior is None:
+            to_add.append(v)
+            continue
+        if prior["family"] != v["family"]:
+            raise SystemExit(
+                f"ERROR: {v['accession']} is already in the reference set with "
+                f"family {prior['family']!r}, but this module ratifies it as "
+                f"{v['family']!r}. Refusing to rewrite a write-once row; "
+                "reconcile the ruling first.")
+        already.append(v)
+
+    if not to_add:
+        print(f"\n[idempotent] all {len(already)} ratified admission(s) are "
+              "already in the reference set; nothing to add")
 
     new_rows, prov_rows, new_seqs = [], [], []
-    for v in verified:
+    for v in to_add:
         h = v["held"]
         row = {
             "accession": v["accession"], "tier": TIER_LITERATURE,
@@ -386,7 +448,9 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"\n=== RATIFICATION ===")
     print(f"  held entries        {len(held)}")
-    print(f"  admitted            {len(new_rows)}")
+    print(f"  ratified admissions {len(verified)}")
+    print(f"    already present   {len(already)} (write-once, untouched)")
+    print(f"    newly added       {len(new_rows)}")
     print(f"  excluded            {len(EXCLUDE)}")
     print(f"  probe (target class){len(PROBE):>5}")
     print(f"  anchors {len(existing)} -> {len(merged)}")
@@ -404,7 +468,8 @@ def main(argv: list[str] | None = None) -> int:
             "phylum": v["held"]["phylum"], "disposition": "admitted",
             "assigned_family": v["family"],
             "family_basis": "InterPro:" + ",".join(v["interpro_hits"]),
-            "reason": "curated InterPro family entry corroborates the assignment",
+            "reason": ("curated InterPro family entry corroborates the assignment"
+                       + ADMISSION_NOTES.get(v["accession"], "")),
         })
     for acc, (reason, name) in sorted(EXCLUDE.items()):
         h = held[acc]
@@ -459,12 +524,28 @@ def main(argv: list[str] | None = None) -> int:
     if len(reprov) != len(prov_before) + len(prov_rows):
         failures.append(f"provenance holds {len(reprov)}, expected "
                         f"{len(prov_before) + len(prov_rows)}")
-    for v, cid in zip(verified, cids):
+    # `cids` covers the NEWLY ADDED rows only, so it is parallel to `to_add`,
+    # NOT to `verified` (which also holds the already-present admissions).
+    # Zipping it against `verified` silently pairs the wrong entries.
+    if len(cids) != len(to_add):
+        failures.append(f"composite ids {len(cids)} != admissions to add "
+                        f"{len(to_add)} -- the id list is not parallel")
+    for v, cid in zip(to_add, cids):
         if cid not in refa:
             failures.append(f"{cid} has no sequence in the additions FASTA")
         elif len(refa[cid]) != v["length"]:
             failures.append(f"{cid} sequence length {len(refa[cid])} != "
                             f"{v['length']} at source")
+    # The already-present admissions are re-checked against their OWN ids,
+    # recomputed from the on-disk row rather than assumed by position.
+    for v in already:
+        cid = composite_id(existing_by_acc[v["accession"]])
+        if cid not in refa:
+            failures.append(f"{cid} (already present) has no sequence in the "
+                            "additions FASTA")
+        elif len(refa[cid]) != v["length"]:
+            failures.append(f"{cid} (already present) sequence length "
+                            f"{len(refa[cid])} != {v['length']} at source")
 
     print("\n=== POST-WRITE VERIFICATION ===")
     print(f"  anchor rows            {len(reread)}")

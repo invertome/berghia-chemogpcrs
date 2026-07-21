@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from refexp4_ratify_held_families import (
+    ADMISSION_NOTES,
     ADMIT,
     EXCLUDE,
     OPSIN_SIGNATURES,
@@ -48,7 +49,10 @@ def test_the_three_buckets_are_disjoint():
 
 
 def test_bucket_sizes_are_pinned():
-    assert (len(ADMIT), len(EXCLUDE), len(PROBE)) == (14, 5, 3)
+    """15/4/3 since 2026-07-21: Q9NJC9 moved from EXCLUDE to ADMIT when the
+    exclusions were re-audited under the curated standard the admissions face.
+    See tests/unit/test_refexp4_exclusion_audit.py."""
+    assert (len(ADMIT), len(EXCLUDE), len(PROBE)) == (15, 4, 3)
 
 
 @needs_held
@@ -188,16 +192,24 @@ def test_a_missing_uniprot_record_is_refused(one_admission):
 
 # --- the exclusions ----------------------------------------------------------
 
-def test_the_opsin_evidence_on_Q9NJC9_is_recorded_in_its_exclusion_reason():
-    """Q9NJC9 is excluded by ruling, NOT for want of evidence.
+def test_the_opsin_evidence_on_Q9NJC9_is_still_recorded_after_its_admission():
+    """The live question this test was written to keep open has been ANSWERED.
 
-    Its record carries opsin-family evidence stronger than several admissions
-    (the retinal binding site, which none of the nine admitted opsins have).
-    Recording that in the reason keeps the exclusion reviewable instead of
-    burying a live question.
+    Q9NJC9 used to be excluded, and this test asserted its opsin evidence was
+    recorded in the exclusion reason so the call stayed reviewable. Reviewing
+    it is exactly what happened: re-audited under the curated standard the
+    admissions face, the record carries IPR050125 plus the IPR027430 retinal
+    binding site that none of the nine admitted opsins has, and it was admitted
+    on 2026-07-21.
+
+    The requirement is unchanged in substance -- the evidence must still be
+    written down where a reader will find it -- so the assertion now points at
+    the admission note instead of the exclusion reason.
     """
-    reason, _ = EXCLUDE["Q9NJC9"]
-    assert "IPR050125" in reason and "IPR027430" in reason
+    assert "Q9NJC9" not in EXCLUDE
+    note = ADMISSION_NOTES["Q9NJC9"]
+    assert "IPR050125" in note and "IPR027430" in note
+    assert "REVERSING" in note
 
 
 def test_every_exclusion_states_a_reason():
