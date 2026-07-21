@@ -558,6 +558,28 @@ def family_for_report(name: str) -> str:
 GATE_STAGES = ("class_a", "existence", "evidence_code", "literature",
                "characterized")
 
+# The official UniProt accession grammar. Anything else (notably the tier-9
+# OrthoDB gene ids, <taxid>_<n>_<hex>) cannot be used in an accession: query.
+UNIPROT_ACCESSION = re.compile(
+    r"^([OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9]([A-Z][A-Z0-9]{2}[0-9]){1,2})$")
+
+
+def is_uniprot_accession(accession: str) -> bool:
+    return bool(UNIPROT_ACCESSION.match((accession or "").strip()))
+
+
+def partition_by_resolvability(rows: Sequence[dict]) -> tuple:
+    """Split anchor rows into (UniProt-resolvable, skipped), losing nothing.
+
+    Whole rows are kept on both sides so the skipped set can be itemised with
+    enough context to identify each anchor.
+    """
+    resolvable, skipped = [], []
+    for row in rows:
+        target = resolvable if is_uniprot_accession(row.get("accession", "")) else skipped
+        target.append(row)
+    return resolvable, skipped
+
 
 def gate_entry(entry: dict, pubmed_abstracts: Optional[Dict[str, str]] = None) -> dict:
     """Apply the full gate to one entry. Returns a verdict dict; never raises
@@ -923,13 +945,38 @@ def write_family_summary(verdicts: Sequence[dict], anchor_tsv: str, path: str) -
 
 def run_audit(args) -> int:
     """Apply the same gate to the EXISTING anchors. Measurement only: nothing is
-    removed, no identifier is touched."""
+    removed, no identifier is touched.
+
+    Scoped to UniProt-resolvable accessions. The tier-9 OrthoDB anchors carry
+    gene ids, and ``accession:10228_0_00188c`` is not a valid query term, so
+    including them returns HTTP 400 and kills the entire batch. They are
+    validated by the harvest path instead, and are ITEMISED to a sidecar file
+    here rather than reduced to a count.
+    """
     with open(args.anchor_tsv, newline="") as handle:
         anchors = list(csv.DictReader(handle, delimiter="\t"))
     class_a = [a for a in anchors if a.get("class") == "A"]
-    print(f"[refexp2] auditing {len(class_a)} class-A anchors "
-          f"(of {len(anchors)} total)...", file=sys.stderr)
+    resolvable, skipped = partition_by_resolvability(class_a)
 
+    print(f"[refexp2] class-A anchors {len(class_a)} (of {len(anchors)} total): "
+          f"auditing {len(resolvable)} UniProt-resolvable, "
+          f"skipping {len(skipped)} non-UniProt", file=sys.stderr)
+    if not resolvable:
+        raise RuntimeError(
+            "no UniProt-resolvable class-A anchors: refusing to write an audit "
+            "that would appear complete while covering nothing")
+
+    if skipped:
+        skip_path = f"{args.output}.skipped.tsv"
+        cols = ["accession", "tier", "family", "taxid", "species", "evidence"]
+        with open(skip_path, "w", newline="") as fh:
+            w = csv.DictWriter(fh, fieldnames=cols, delimiter="\t",
+                               extrasaction="ignore")
+            w.writeheader()
+            w.writerows(skipped)
+        print(f"[refexp2] skipped anchors itemised -> {skip_path}", file=sys.stderr)
+
+    class_a = resolvable
     entries = fetch_entries_by_accession(a["accession"] for a in class_a)
     pmids = {pubmed_id(c) for a in class_a
              for c in citations(entries[a["accession"]]) if pubmed_id(c)}

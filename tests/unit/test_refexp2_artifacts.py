@@ -35,13 +35,32 @@ def anchor_accessions():
 
 
 class TestCandidateArtifact:
-    def test_candidates_are_disjoint_from_existing_anchors(self):
-        """Expansion is additive. An accession already anchored must never be
-        re-proposed: re-adding it under a new identifier is exactly the
-        write-once violation that silently corrupts every downstream join."""
+    def test_candidates_overlapping_anchors_are_exactly_the_ratified_ones(self):
+        """Expansion is additive, and ratification is how a candidate becomes an
+        anchor.
+
+        The original form asserted disjointness outright, which held only until
+        the first ratification: the literature-gated candidates were promoted
+        INTO the anchor set by design, so overlap is now the expected state.
+        What must still never happen is a candidate re-entering under a NEW
+        identifier -- that is the write-once violation this guards. So the
+        assertion is now that every overlapping accession is carried by a
+        ratified anchor, unchanged, and that each one passed its own gate.
+        """
         candidates = {r["accession"] for r in read_tsv(CANDIDATES)}
-        overlap = candidates & anchor_accessions()
-        assert not overlap, f"{len(overlap)} candidates are already anchors: {sorted(overlap)[:5]}"
+        anchors = {r["accession"]: r for r in read_tsv(ANCHORS)}
+        overlap = candidates & set(anchors)
+
+        unratified = {a for a in overlap if anchors[a]["tier"] != "10"}
+        assert not unratified, (
+            f"{len(unratified)} candidates collide with anchors that were NOT "
+            f"ratified from the candidate set: {sorted(unratified)[:5]}")
+
+        verdicts = {r["accession"]: r for r in read_tsv(CANDIDATES)}
+        failed = {a for a in overlap if (verdicts[a].get("failed_at") or "")}
+        assert not failed, (
+            f"{len(failed)} ratified anchors failed their own candidate gate: "
+            f"{sorted(failed)[:5]}")
 
     def test_accessions_are_unique(self):
         rows = read_tsv(CANDIDATES)
@@ -120,14 +139,31 @@ class TestCandidateArtifact:
 
 
 class TestAuditArtifact:
-    def test_audit_covers_exactly_the_class_a_anchors(self):
+    def test_audit_covers_exactly_the_uniprot_resolvable_class_a_anchors(self):
         """The join that matters: if the audit and the anchor set disagree on
-        which accessions are class A, every rate reported from it is wrong."""
+        which accessions are class A, every rate reported from it is wrong.
+
+        The audit can only reach UniProt-resolvable accessions -- the tier-9
+        anchors carry OrthoDB gene ids and are validated by the harvest path
+        instead. So this asserts BOTH sides and that their union is the whole
+        class-A set, which is a stronger statement than the old equality: it
+        additionally rules out an anchor falling between the two paths.
+        """
+        from refexp2_evidence_gate import is_uniprot_accession
+
         audited = {r["accession"] for r in read_tsv(AUDIT)}
-        declared = {r["accession"] for r in read_tsv(ANCHORS) if r["class"] == "A"}
-        assert audited == declared, (
-            f"audit/anchor mismatch: {len(audited - declared)} extra, "
-            f"{len(declared - audited)} missing")
+        class_a = [r for r in read_tsv(ANCHORS) if r["class"] == "A"]
+        resolvable = {r["accession"] for r in class_a
+                      if is_uniprot_accession(r["accession"])}
+        assert audited == resolvable, (
+            f"audit/anchor mismatch over the resolvable subset: "
+            f"{len(audited - resolvable)} extra, {len(resolvable - audited)} missing")
+
+        skipped = {r["accession"] for r in read_tsv(AUDIT + ".skipped.tsv")}
+        assert audited.isdisjoint(skipped), "an anchor is both audited and skipped"
+        assert audited | skipped == {r["accession"] for r in class_a}, (
+            "a class-A anchor is reached by neither the audit nor the skipped "
+            "sidecar, so nothing accounts for it")
 
     def test_audit_is_non_trivial(self):
         """A gate that passes everything, or nothing, is not measuring."""
