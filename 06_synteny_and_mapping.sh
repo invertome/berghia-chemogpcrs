@@ -269,7 +269,36 @@ python3 "${SCRIPTS_DIR}/plot_synteny.py" "${RESULTS_DIR}/synteny" "${RESULTS_DIR
 # ID to $TANDEM_CLUSTERS_FILE (consumed by rank_candidates.py in stage 07).
 # Gated on RUN_TANDEM_DETECTION (default 1). Cheap (~seconds) given gffutils
 # SQLite caching; safe to re-run.
-if [ "${RUN_TANDEM_DETECTION:-1}" = "1" ] && [ -f "${GENOME_GFF:-}" ]; then
+#
+# When detection is skipped, any tandem_clusters.csv still on disk is from an
+# EARLIER run. Stage 07 loads that path unconditionally, so it would read those
+# stale values as this run's measurements. The file is not deleted here --
+# discarding a prior measurement is the user's call, not this stage's -- but
+# the collision is called out so it cannot pass for fresh data.
+warn_if_stale_tandem_csv() {
+    local csv="${TANDEM_CLUSTERS_FILE:-${RESULTS_DIR}/synteny/tandem_clusters.csv}"
+    [ -f "$csv" ] || return 0
+    log --level=WARN "STALE ARTIFACT: tandem-cluster detection was skipped but ${csv} still exists from a previous run; stage 07 will load it as if measured by THIS run. Delete it to make the axis genuinely unavailable, or re-run detection."
+}
+
+# Every path out of this block says WHY. The gate used to be a two-clause
+# conditional with no else, so an unset GENOME_GFF skipped the axis in total
+# silence and the stage still reported success. This axis carries
+# TANDEM_CLUSTER_WEIGHT=2.5 -- the largest single weight in the ranking, and
+# the field's signature chemoreceptor signal -- so a silent skip quietly
+# changes what the shortlist means.
+#
+# The two skip reasons are reported separately on purpose: "we chose not to
+# measure" (RUN_TANDEM_DETECTION=0) and "we could not measure" (no GFF) are
+# different facts about the evidence, and the ranking treats them differently
+# from a measured absence of tandem neighbours.
+if [ "${RUN_TANDEM_DETECTION:-1}" != "1" ]; then
+    log --level=WARN "RUN_TANDEM_DETECTION=${RUN_TANDEM_DETECTION:-1} — tandem-cluster axis DISABLED by request; it will not contribute to ranking (weight ${TANDEM_CLUSTER_WEIGHT:-2.5})"
+    warn_if_stale_tandem_csv
+elif [ ! -f "${GENOME_GFF:-}" ]; then
+    log --level=WARN "GENOME_GFF is unset or missing (\"${GENOME_GFF:-<unset>}\") — cannot run tandem-cluster detection; the tandem axis (weight ${TANDEM_CLUSTER_WEIGHT:-2.5}) will be UNAVAILABLE, not zero"
+    warn_if_stale_tandem_csv
+else
     CANDIDATES_FA="${RESULTS_DIR}/chemogpcrs/chemogpcrs_berghia.fa"
     if [ -f "$CANDIDATES_FA" ]; then
         log "Running intra-genome tandem-cluster detection on Berghia candidates..."
@@ -278,6 +307,7 @@ if [ "${RUN_TANDEM_DETECTION:-1}" = "1" ] && [ -f "${GENOME_GFF:-}" ]; then
             || log --level=WARN "Tandem-cluster detection failed (rank_candidates will skip the tandem axis)"
     else
         log --level=WARN "No candidate FASTA at $CANDIDATES_FA — skipping tandem-cluster detection"
+        warn_if_stale_tandem_csv
     fi
 fi
 

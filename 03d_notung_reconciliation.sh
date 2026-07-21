@@ -86,7 +86,7 @@ PHYLO_DIR="${RESULTS_DIR}/phylogenies"
 # duplications. The Python fallback below applies the identical definition so
 # the two backends agree on what a gene tree is.
 GENE_TREES=$(find "$PHYLO_DIR" \( -name "*.treefile" -o -name "*_tree.tre" \) \
-    ! -name "*.original.treefile" 2>/dev/null | head -100)
+    ! -name "*.original.treefile" 2>/dev/null)
 
 if [ -z "$GENE_TREES" ]; then
     log --level=WARN "No gene trees found in ${PHYLO_DIR}"
@@ -95,8 +95,26 @@ if [ -z "$GENE_TREES" ]; then
     exit 0
 fi
 
-TREE_COUNT=$(echo "$GENE_TREES" | wc -l)
-log "Found ${TREE_COUNT} gene trees to reconcile"
+# Discovery and the processing cap are kept SEPARATE. They used to be one
+# statement (`find ... | head -100`), so TREE_COUNT counted the truncated list
+# and the stage logged "Found 100 gene trees to reconcile" whether 100 trees
+# existed or 4,000 did -- a run covering 2.5% of the orthogroups read exactly
+# like a complete one, in the log and in events_summary.json alike.
+#
+# The cap is deliberately UNCHANGED: raising or removing it is a resource
+# decision for the user, not one this stage should make silently. What changes
+# is that the denominator survives, so that decision can be made on evidence.
+TREE_TOTAL=$(printf '%s\n' "$GENE_TREES" | grep -c .)
+RECONCILE_TREE_CAP=100
+GENE_TREES=$(printf '%s\n' "$GENE_TREES" | head -n "$RECONCILE_TREE_CAP")
+TREE_COUNT=$(printf '%s\n' "$GENE_TREES" | grep -c .)
+
+if [ "$TREE_COUNT" -lt "$TREE_TOTAL" ]; then
+    log --level=WARN "TRUNCATED: reconciling ${TREE_COUNT} of ${TREE_TOTAL} gene trees found (cap RECONCILE_TREE_CAP=${RECONCILE_TREE_CAP}); $((TREE_TOTAL - TREE_COUNT)) will NOT be reconciled."
+    log --level=WARN "Duplication/loss counts from this run are LOWER BOUNDS over a ${TREE_COUNT}/${TREE_TOTAL} subset, not totals. Raise the cap in ${BASH_SOURCE[0]##*/} to cover the full set."
+else
+    log "Found ${TREE_COUNT} gene trees to reconcile (complete set; cap ${RECONCILE_TREE_CAP} not reached)"
+fi
 
 # --- GeneRax branch (preferred when binary available) ---
 if [ "$RECONCILIATION_BACKEND" = "generax" ]; then
@@ -258,7 +276,20 @@ results = []
 duplication_events = defaultdict(list)
 loss_events = defaultdict(list)
 
-for tree_file in gene_tree_files[:100]:  # Limit to 100 trees
+# This fallback applies its OWN cap, independent of the bash branch's. Keep the
+# denominator so events_summary.json can say what fraction was covered: without
+# it, 'total_trees_analyzed' reads as a population when it is a capped sample.
+RECONCILE_TREE_CAP = 100
+gene_trees_discovered = len(gene_tree_files)
+selected_trees = gene_tree_files[:RECONCILE_TREE_CAP]
+reconciliation_truncated = gene_trees_discovered > len(selected_trees)
+if reconciliation_truncated:
+    print(f"WARN: TRUNCATED -- reconciling {len(selected_trees)} of "
+          f"{gene_trees_discovered} gene trees (cap {RECONCILE_TREE_CAP}). "
+          f"Duplication/loss counts below are LOWER BOUNDS, not totals.",
+          file=sys.stderr)
+
+for tree_file in selected_trees:
     try:
         gene_tree = Tree(str(tree_file), format=1)
         tree_name = tree_file.stem
@@ -332,8 +363,16 @@ events_summary = {
     'duplication_events': {sp: len(trees) for sp, trees in duplication_events.items()},
     'loss_events': {sp: len(trees) for sp, trees in loss_events.items()},
     'total_trees_analyzed': len(results),
-    'total_duplications': df['duplications'].sum(),
-    'total_losses': df['losses'].sum()
+    'total_duplications': int(df['duplications'].sum()),
+    'total_losses': int(df['losses'].sum()),
+    # Coverage denominator. The three 'total_*' keys above are sums over the
+    # trees ACTUALLY reconciled; when reconciliation_truncated is true they are
+    # lower bounds over a capped subset, and a consumer reading the JSON alone
+    # has no other way to tell that apart from a complete census.
+    'gene_trees_discovered': gene_trees_discovered,
+    'gene_trees_reconciled': len(selected_trees),
+    'reconciliation_tree_cap': RECONCILE_TREE_CAP,
+    'reconciliation_truncated': reconciliation_truncated,
 }
 
 with open(f"{notung_dir}/events_summary.json", 'w') as f:

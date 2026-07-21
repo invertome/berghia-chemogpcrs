@@ -26,6 +26,7 @@ casts one vote, not one vote per redundant signal.
 from __future__ import annotations
 
 import os
+import sys
 
 import numpy as np
 import pandas as pd
@@ -237,6 +238,11 @@ SIGNAL_SPEC = [
 # set (a gated signal with no flag column is skipped entirely).
 _OPTIONAL_FLAG_SIGNALS = frozenset({"phylo", "purifying", "positive", "lse_divergence"})
 
+# Explicit "exclude nothing" for RANKAGG_EXCLUDED_SIGNALS. A token is required
+# because an empty string cannot be distinguished from an accidental empty
+# export; no signal in SIGNAL_SPEC is named this, so it cannot collide.
+_EXCLUDE_NOTHING_TOKEN = "none"
+
 
 def excluded_signals_from_weights(weights, env_var="RANKAGG_EXCLUDED_SIGNALS"):
     """Signals that must NOT vote under rank aggregation.
@@ -254,12 +260,51 @@ def excluded_signals_from_weights(weights, env_var="RANKAGG_EXCLUDED_SIGNALS"):
     full strength under the production default RANK_METHOD=rankagg.
 
     Policy is reversible without touching weights: setting
-    ``RANKAGG_EXCLUDED_SIGNALS`` overrides the derivation verbatim (a
-    comma-separated signal list; empty string = exclude nothing).
+    ``RANKAGG_EXCLUDED_SIGNALS`` overrides the derivation verbatim, as a
+    comma-separated signal list.
+
+      unset               -> derive the exclusions from the weights
+      ``""`` / whitespace -> no intent expressed; derive, and say so on stderr
+      ``"none"``          -> explicitly exclude nothing
+      ``"a,b"``           -> exclude exactly those
+
+    An empty value used to mean "exclude nothing", which made this a trapdoor
+    (bead wtwi): ``export RANKAGG_EXCLUDED_SIGNALS=`` yields ``""``, which is
+    not None, so the override branch returned the empty set and the
+    weight-derived exclusion was skipped -- re-enabling every zero-weighted
+    signal at FULL strength, the exact failure this function exists to
+    prevent. The trap is that the intended value and the accidental value (an
+    empty export, an unset variable interpolated into a wrapper, a CI default
+    that resolved to nothing) are the SAME STRING, so no care at the call site
+    could distinguish them. An empty string is not a measurement of intent, so
+    it no longer decides anything; "exclude nothing" now needs the explicit
+    ``none`` token, which cannot be produced by accident.
     """
     override = os.getenv(env_var)
     if override is not None:
-        return {name.strip() for name in override.split(",") if name.strip()}
+        names = {name.strip() for name in override.split(",") if name.strip()}
+        if _EXCLUDE_NOTHING_TOKEN in {n.lower() for n in names}:
+            if len(names) > 1:
+                raise ValueError(
+                    f"{env_var}={override!r} both excludes nothing and names "
+                    f"signals to exclude. Use '{_EXCLUDE_NOTHING_TOKEN}' alone, "
+                    f"or list only the signals to exclude."
+                )
+            return set()
+        if names:
+            return names
+        # Empty / whitespace / bare separators: no intent expressed. Fall back
+        # to the safe derivation rather than to the unsafe empty set, and make
+        # the fallback visible so it cannot be mistaken for a deliberate policy.
+        derived = {name for name, weight in weights.items() if float(weight) == 0.0}
+        print(
+            f"WARNING: {env_var} is set but empty, which states no policy. "
+            f"Falling back to the weight-derived exclusion "
+            f"{sorted(derived) or '(none)'}. Set {env_var}="
+            f"'{_EXCLUDE_NOTHING_TOKEN}' if you really mean to exclude nothing.",
+            file=sys.stderr,
+        )
+        return derived
     return {name for name, weight in weights.items() if float(weight) == 0.0}
 
 

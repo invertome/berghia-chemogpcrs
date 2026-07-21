@@ -59,8 +59,24 @@ def test_env_override_replaces_the_derived_set(monkeypatch) -> None:
 
 
 def test_env_override_can_disable_exclusion_entirely(monkeypatch) -> None:
-    monkeypatch.setenv("RANKAGG_EXCLUDED_SIGNALS", "")
+    """Disabling the exclusion now needs the explicit `none` token.
+
+    This used to be spelled as the empty string. That made the override a
+    trapdoor (bead wtwi): `export RANKAGG_EXCLUDED_SIGNALS=` produces the same
+    "" that a deliberate "exclude nothing" produced, so an accidental empty
+    assignment silently restored every zero-weighted signal to full strength.
+    The capability is unchanged; only the spelling is, so that the deliberate
+    value can no longer be produced by accident. See
+    tests/unit/test_small_rankagg_excluded_signals_trapdoor.py.
+    """
+    monkeypatch.setenv("RANKAGG_EXCLUDED_SIGNALS", "none")
     assert ra.excluded_signals_from_weights({"purifying": 0}) == set()
+
+
+def test_empty_env_override_falls_back_to_the_derivation(monkeypatch) -> None:
+    """The trapdoor itself: an empty value states no policy, so it decides nothing."""
+    monkeypatch.setenv("RANKAGG_EXCLUDED_SIGNALS", "")
+    assert ra.excluded_signals_from_weights({"purifying": 0}) == {"purifying"}
 
 
 # --------------------------------------------------------------------------
