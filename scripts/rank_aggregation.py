@@ -452,6 +452,89 @@ def excluded_signals_from_weights(weights, env_var="RANKAGG_EXCLUDED_SIGNALS"):
     return {name for name, weight in weights.items() if float(weight) == 0.0}
 
 
+# --------------------------------------------------------------------------- #
+# The production exclusion set, rebuilt from the environment for the downstream
+# RRA consumers (rank_confidence, permutation_null, shortlist_impact,
+# compare_ranking_methods, select_probe_batch, audit_rra_correlation_sensitivity).
+# rank_candidates.py computes it in __main__ as
+#   excluded_signals_from_weights(SCORING_WEIGHTS) | set(QUARANTINED_AXES)
+# but runs the whole pipeline at import, so it cannot be imported. These
+# consumers all read a ranked CSV produced under the SAME environment, so they
+# reconstruct the identical set here rather than let a zero-weight or quarantined
+# signal keep voting in their analyses (bead od2f).
+# --------------------------------------------------------------------------- #
+
+# Signal key -> (weight env var, string default), mirroring rank_candidates.py's
+# module-level *_WEIGHT reads (its lines 182-240, 1292) and config.sh. Kept in
+# signal-key space so it lines up 1:1 with the 13 non-channel SIGNAL_SPEC keys;
+# test_production_excluded_signals.py guards that parity so a newly-added signal
+# cannot silently escape the exclusion derivation.
+_PRODUCTION_WEIGHT_ENV = (
+    ("phylo", "PHYLO_WEIGHT", "2"),
+    ("purifying", "PURIFYING_WEIGHT", "0"),
+    ("positive", "POSITIVE_WEIGHT", "1"),
+    ("lse_divergence", "LSE_DIVERGENCE_WEIGHT", "1"),
+    ("lse_nesting_depth", "LSE_NESTING_DEPTH_WEIGHT", "1"),
+    ("synteny", "SYNTENY_WEIGHT", "3"),
+    ("expression", "EXPR_WEIGHT", "1"),
+    ("chemosensory_expr", "CHEMOSENSORY_EXPR_WEIGHT", "3"),
+    ("gprotein_coexpr", "GPROTEIN_COEXPR_WEIGHT", "2"),
+    ("ecl_divergence", "ECL_DIVERGENCE_WEIGHT", "1.5"),
+    ("expansion", "EXPANSION_WEIGHT", "1.5"),
+    ("og_confidence", "OG_CONFIDENCE_WEIGHT", "1"),
+    ("tandem_cluster", "TANDEM_CLUSTER_WEIGHT", "2.5"),
+)
+
+# The orthogroup-derived axes quarantined together when the stage-03 OrthoFinder
+# run is not trusted (ORTHOLOGY_SOURCE_TRUSTED=0, the default). Mirrors
+# rank_candidates.py:161-163 verbatim.
+_ORTHOLOGY_QUARANTINED_AXES = frozenset(
+    {"purifying", "positive", "expansion", "og_confidence"})
+
+
+def production_ranking_weights():
+    """The production composite weights, rebuilt from the ``*_WEIGHT`` env vars.
+
+    Reads the same variable names and defaults rank_candidates.py reads (via
+    ``getenv_renamed``, which honours the pre-rename weight alias for
+    ``lse_divergence`` exactly as rank_candidates.py does). In a production run
+    config.sh has exported all of them,
+    so the defaults only apply to a bare invocation -- and they match
+    rank_candidates.py's own defaults, so a bare run excludes exactly what the
+    production ranker's bare run would.
+    """
+    from _rank_candidates_lib import getenv_renamed
+    return {key: getenv_renamed(env, default, cast=float)
+            for key, env, default in _PRODUCTION_WEIGHT_ENV}
+
+
+def orthology_quarantined_axes():
+    """The orthogroup-derived axes quarantined for the current environment.
+
+    Empty when ``ORTHOLOGY_SOURCE_TRUSTED`` is truthy; otherwise the four
+    orthogroup-derived axes. Parsing mirrors rank_candidates.py:140-141.
+    """
+    trusted = os.getenv("ORTHOLOGY_SOURCE_TRUSTED", "0").strip().lower() in (
+        "1", "true", "yes", "on")
+    return frozenset() if trusted else _ORTHOLOGY_QUARANTINED_AXES
+
+
+def production_excluded_signals():
+    """Signals barred from voting under the production ranking, rebuilt here.
+
+    Identical to rank_candidates.py's
+    ``excluded_signals_from_weights(SCORING_WEIGHTS) | set(QUARANTINED_AXES)``:
+    the zero-weight axes (a weight of exactly 0 is an EXCLUSION, not a small
+    weight -- e.g. PURIFYING_WEIGHT=0) unioned with the orthology-quarantined
+    axes. The ``RANKAGG_EXCLUDED_SIGNALS`` override is honoured through
+    ``excluded_signals_from_weights``. Downstream RRA consumers pass this into
+    ``build_ranklists_from_df`` so a zeroed or quarantined signal cannot vote in
+    their analyses either (bead od2f).
+    """
+    return (excluded_signals_from_weights(production_ranking_weights())
+            | orthology_quarantined_axes())
+
+
 def build_ranklists_from_df(df, id_col="id", excluded=None):
     """Build ``{signal: {id: score}}`` for every signal in SIGNAL_SPEC from a df.
 
@@ -528,6 +611,21 @@ def build_ranklists_from_df(df, id_col="id", excluded=None):
                 val = 1.0 - val
             signal_map[idv] = val
         if signal_map:
+            # A signal whose voting values are all equal (zero variance) gives
+            # every voting candidate the same normalized rank, so it cannot
+            # discriminate -- yet it still casts a vote in the RRA fusion and
+            # subtly distorts the aggregate. WARN-AND-KEEP (bead zv1j): make it
+            # visible but leave the ranklist unchanged. Guard on >1 voter so a
+            # single-candidate frame (trivially constant, nothing to rank) and
+            # an already-dropped all-NaN signal (empty signal_map) don't trip it.
+            vals = list(signal_map.values())
+            if len(vals) > 1 and min(vals) == max(vals):
+                print(
+                    f"WARNING: signal {key!r} is constant across all {len(vals)} "
+                    f"candidates that vote on it (zero variance); it cannot rank "
+                    f"anything and still contributes to rank aggregation.",
+                    file=sys.stderr,
+                )
             ranklists[key] = signal_map
     return ranklists
 

@@ -26,7 +26,8 @@ from typing import Dict, Mapping, Optional, Sequence
 import numpy as np
 import pandas as pd
 
-from rank_aggregation import build_ranklists_from_df, rra_score
+from rank_aggregation import (build_ranklists_from_df, production_excluded_signals,
+                              rra_score)
 
 
 def bootstrap_rank_intervals(per_signal: Mapping[str, Mapping[str, float]],
@@ -83,7 +84,12 @@ def annotate_ranked_csv(ranked_csv: str, k: int, n_boot: int = 1000,
     is preserved byte-for-byte. Candidates covered by no signal are left blank.
     Returns the number of rows written.
     """
-    per_signal = build_ranklists_from_df(pd.read_csv(ranked_csv), id_col=id_column)
+    # Mirror the production ranker: a zero-weight or orthology-quarantined signal
+    # must not vote here either, or the rank CIs / P(top-k) would describe a
+    # signal set the shortlist never used (bead od2f).
+    per_signal = build_ranklists_from_df(
+        pd.read_csv(ranked_csv), id_col=id_column,
+        excluded=production_excluded_signals())
     intervals = bootstrap_rank_intervals(per_signal, k=k, n_boot=n_boot, seed=seed)
     tiers = assign_tiers(intervals)
 

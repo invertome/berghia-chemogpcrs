@@ -37,6 +37,7 @@ from rank_aggregation import (  # noqa: E402
     aggregate,
     build_ranklists_from_df,
     normalize_group_names,
+    production_excluded_signals,
 )
 
 MIN_POSITIVES_FOR_PRECISION = 5
@@ -56,13 +57,16 @@ def weighted_order(df, id_col="id", score_col="rank_score"):
     return df.sort_values(score_col, ascending=False)[id_col].tolist()
 
 
-def rankagg_order(df, groups=None, method="rra", id_col="id"):
+def rankagg_order(df, groups=None, method="rra", id_col="id", excluded=None):
     """Label-free rank-aggregation ordering (best first) over the 12 signals.
 
     Any id covered by no signal (none should exist -- the 4 base signals are
-    always present) is appended at the tail in df order.
+    always present) is appended at the tail in df order. ``excluded`` names
+    signals barred from voting (a zero-weight or orthology-quarantined axis,
+    mirroring the production ranker -- bead od2f); the default ``None`` excludes
+    nothing.
     """
-    order = aggregate(build_ranklists_from_df(df, id_col=id_col),
+    order = aggregate(build_ranklists_from_df(df, id_col=id_col, excluded=excluded),
                       method=method, groups=groups)
     covered = set(order)
     tail = [i for i in df[id_col].tolist() if i not in covered]
@@ -111,10 +115,17 @@ def biggest_movers(order_a, order_b, n=10):
     return up, down
 
 
-def compare(df, groups=None, method="rra", id_col="id", top_ks=(20, 50)):
-    """Compare the weighted vs rank-aggregation orderings for a signal df."""
+def compare(df, groups=None, method="rra", id_col="id", top_ks=(20, 50),
+            excluded=None):
+    """Compare the weighted vs rank-aggregation orderings for a signal df.
+
+    ``excluded`` is threaded into the rank-aggregation ordering only (a
+    zero-weight/quarantined axis must not vote there -- bead od2f); the weighted
+    ordering is read straight from ``rank_score`` and is unaffected.
+    """
     w_order = weighted_order(df, id_col=id_col)
-    r_order = rankagg_order(df, groups=groups, method=method, id_col=id_col)
+    r_order = rankagg_order(df, groups=groups, method=method, id_col=id_col,
+                            excluded=excluded)
     up, down = biggest_movers(w_order, r_order, n=10)
     return {
         "weighted_order": w_order,
@@ -247,10 +258,17 @@ def _fmt_prec(x):
 
 
 def write_report(df, out_path, positive_ids=None, groups=None, method="rra",
-                 n_perm=10000, seed=0, id_col="id", recompute_fn=None):
-    """Write the weighted-vs-rankagg comparison markdown; return its text."""
+                 n_perm=10000, seed=0, id_col="id", recompute_fn=None,
+                 excluded=None):
+    """Write the weighted-vs-rankagg comparison markdown; return its text.
+
+    ``excluded`` (default ``None`` = exclude nothing) is threaded into the
+    rank-aggregation ordering so a zero-weight/quarantined axis does not vote
+    there -- bead od2f.
+    """
     positive_ids = list(positive_ids or [])
-    res = compare(df, groups=groups, method=method, id_col=id_col)
+    res = compare(df, groups=groups, method=method, id_col=id_col,
+                  excluded=excluded)
     n_pos = len(positive_ids)
 
     L = []
@@ -400,7 +418,8 @@ def main(argv=None):
     if a.controls_csv and os.path.exists(a.controls_csv):
         positive_ids = map_positive_controls(a.controls_csv, df["id"].tolist())
     write_report(df, a.out, positive_ids=positive_ids, groups=groups,
-                 method=a.method, n_perm=a.n_perm, seed=a.seed)
+                 method=a.method, n_perm=a.n_perm, seed=a.seed,
+                 excluded=production_excluded_signals())
     print(f"[compare] wrote {a.out} (positive controls matched: {len(positive_ids)})")
 
 

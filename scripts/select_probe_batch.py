@@ -103,7 +103,8 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rank_aggregation import aggregate, build_ranklists_from_df, normalized_ranks  # noqa: E402
+from rank_aggregation import (  # noqa: E402
+    aggregate, build_ranklists_from_df, normalized_ranks, production_excluded_signals)
 
 # The consensus classifier's two confident non-chemoreceptor calls (see
 # scripts/classify_consensus.py); "chemoreceptor-candidate" (its default) and
@@ -168,15 +169,20 @@ def _excluded_ids(df: pd.DataFrame, classifier_col: str, id_col: str = _ID_COL) 
 
 
 def _rank_agg_order(df: pd.DataFrame, id_col: str = _ID_COL, method: str = "rra",
-                     groups=None) -> List[str]:
+                     groups=None, excluded_signals=None) -> List[str]:
     """Label-free rank-aggregation ordering (best first) over every id in ``df``.
 
     Any id covered by no signal at all (none should exist in production --
     the base signals are always present when their columns exist -- but a
     minimal/test df may omit them) is appended at the tail in sorted id
     order, so every id in ``df`` gets a position.
+
+    ``excluded_signals`` names signals barred from voting (a zero-weight or
+    orthology-quarantined axis, mirroring the production ranker -- bead od2f);
+    the default ``None`` excludes nothing.
     """
-    raw_ranklists = build_ranklists_from_df(df, id_col=id_col)
+    raw_ranklists = build_ranklists_from_df(df, id_col=id_col,
+                                            excluded=excluded_signals)
     order = aggregate(raw_ranklists, method=method, groups=groups)
     covered = set(order)
     tail = sorted(i for i in df[id_col].tolist() if i not in covered)
@@ -243,7 +249,8 @@ def _active_order(eligible_order: List[str], per_signal_ranks: Dict[str, Dict[st
 
 def select_batch(df: pd.DataFrame, per_signal_ranks: Dict[str, Dict[str, float]],
                   batch_size: int, classifier_col: str = "classification",
-                  cluster_col: str = "tandem_cluster_id", mode: str = "active") -> List[str]:
+                  cluster_col: str = "tandem_cluster_id", mode: str = "active",
+                  excluded_signals=None) -> List[str]:
     """An ordered list of <= ``batch_size`` candidate ids for the probe batch.
 
     (a) Excludes ids whose ``classifier_col`` is a confident non-chemoreceptor
@@ -253,9 +260,14 @@ def select_batch(df: pd.DataFrame, per_signal_ranks: Dict[str, Dict[str, float]]
         disagreement (see `_active_order` / the module docstring).
     (c) Diversity: no more than ``ceil(batch_size / n_clusters)`` from any one
         ``cluster_col`` value, in both modes (see `_apply_diversity_cap`).
+
+    ``excluded_signals`` (default ``None`` = exclude nothing) names signals
+    barred from the rank-aggregation vote, mirroring the production ranker so a
+    zero-weight/quarantined axis does not shape the standing order (bead od2f).
     """
     excluded = _excluded_ids(df, classifier_col, id_col=_ID_COL)
-    full_order = _rank_agg_order(df, id_col=_ID_COL)
+    full_order = _rank_agg_order(df, id_col=_ID_COL,
+                                 excluded_signals=excluded_signals)
     eligible = [i for i in full_order if i not in excluded]
 
     if mode == "active":
@@ -271,7 +283,8 @@ def select_batch(df: pd.DataFrame, per_signal_ranks: Dict[str, Dict[str, float]]
 def write_batch(selected: List[str], df: pd.DataFrame,
                  per_signal_ranks: Dict[str, Dict[str, float]], path: str,
                  method: str = "rra", groups=None,
-                 cluster_col: str = "tandem_cluster_id") -> pd.DataFrame:
+                 cluster_col: str = "tandem_cluster_id",
+                 excluded_signals=None) -> pd.DataFrame:
     """Write the bench-ready probe-batch TSV; return the written DataFrame.
 
     Columns: ``id, rank_agg_position, disagreement, cluster,
@@ -283,7 +296,8 @@ def write_batch(selected: List[str], df: pd.DataFrame,
     ``conflicting_signals`` are the signal(s) that rank the candidate best /
     worst (see `_signal_extremes`). Creates parent directories if needed.
     """
-    full_order = _rank_agg_order(df, id_col=_ID_COL, method=method, groups=groups)
+    full_order = _rank_agg_order(df, id_col=_ID_COL, method=method, groups=groups,
+                                 excluded_signals=excluded_signals)
     position = {cand_id: p for p, cand_id in enumerate(full_order, start=1)}
     n_total = len(df)
 
@@ -355,18 +369,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = ap.parse_args(argv)
 
     df = pd.read_csv(args.ranked_csv)
-    raw_ranklists = build_ranklists_from_df(df)
+    # Mirror the production ranker: a zero-weight or orthology-quarantined signal
+    # must not vote in the standing order OR the per-signal disagreement scores,
+    # so exclude it in every consumer of this one build (bead od2f).
+    excluded_signals = production_excluded_signals()
+    raw_ranklists = build_ranklists_from_df(df, excluded=excluded_signals)
     per_signal_ranks = {sig: normalized_ranks(scores) for sig, scores in raw_ranklists.items()}
 
     selected = select_batch(
         df, per_signal_ranks, args.batch_size,
         classifier_col=args.classifier_col, cluster_col=args.cluster_col, mode=args.mode,
+        excluded_signals=excluded_signals,
     )
 
     out_path = args.out or os.path.join(
         os.environ.get("RESULTS_DIR", "results"), "ranking", "probe_batch_active_learning.tsv"
     )
-    write_batch(selected, df, per_signal_ranks, out_path, cluster_col=args.cluster_col)
+    write_batch(selected, df, per_signal_ranks, out_path, cluster_col=args.cluster_col,
+                excluded_signals=excluded_signals)
     print(
         f"[select_probe_batch] mode={args.mode}: wrote {len(selected)} candidates "
         f"to {out_path}",

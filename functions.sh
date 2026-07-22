@@ -1670,8 +1670,27 @@ create_orthogroup_manifest() {
     local orthofinder_dir="$1"
     local manifest_file="${2:-${RESULTS_DIR}/orthogroup_manifest.tsv}"
 
-    # Find Orthogroups.tsv — may be in original or resumed Results_* directory
-    local orthogroups_file=$(find "$orthofinder_dir" -maxdepth 5 -path "*/Orthogroups/Orthogroups.tsv" -type f 2>/dev/null | head -1)
+    # Resolve Orthogroups.tsv through the ONE authoritative-run rule
+    # (scripts/orthofinder_paths.sh: newest Orthogroups/Orthogroups.tsv by mtime,
+    # ties broken by reverse path order). h9pc: this used an unsorted
+    # `find ... | head -1`, whose winner is filesystem-order and not even stable
+    # between invocations, so with more than one Results_* run present the
+    # manifest's OG NAMES could bind to a DIFFERENT run than the SEQUENCES that
+    # stages 04/05 index (they resolve via resolve_orthogroup_sequences_dir ->
+    # resolve_orthofinder_run) -- the same orthogroup id then denotes different
+    # gene sets while every join still succeeds. Routing through the shared
+    # resolver makes the manifest deterministic AND consistent with those stages.
+    local orthogroups_file
+    if type resolve_orthogroups_tsv >/dev/null 2>&1; then
+        orthogroups_file=$(resolve_orthogroups_tsv "$orthofinder_dir" 2>/dev/null || true)
+    else
+        # Deterministic fallback if orthofinder_paths.sh was not sourced: the
+        # same mtime rule inline, never the unsorted find|head that caused h9pc.
+        orthogroups_file=$(find "$orthofinder_dir" -maxdepth 6 -type f \
+                               -path "*/Orthogroups/Orthogroups.tsv" \
+                               -printf '%T@\t%p\n' 2>/dev/null \
+                           | sort -k1,1nr -k2,2r | head -1 | cut -f2-)
+    fi
     if [ -z "$orthogroups_file" ]; then
         log --level=ERROR "Orthogroups.tsv not found under $orthofinder_dir"
         return 1

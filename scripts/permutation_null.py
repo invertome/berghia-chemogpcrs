@@ -69,7 +69,7 @@ def permutation_null_pvalue(per_signal: Mapping[str, Mapping[str, float]],
 def main(argv=None):
     import argparse, json
     import pandas as pd
-    from rank_aggregation import build_ranklists_from_df
+    from rank_aggregation import build_ranklists_from_df, production_excluded_signals
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("--ranked-csv", required=True)
     ap.add_argument("--out", required=True)
@@ -77,7 +77,10 @@ def main(argv=None):
     ap.add_argument("--n-perm", type=int, default=1000)
     a = ap.parse_args(argv)
     df = pd.read_csv(a.ranked_csv)
-    per_signal = build_ranklists_from_df(df)
+    # Mirror the production ranker: a zero-weight or orthology-quarantined signal
+    # must not vote in the null either, or the null measures a signal set the
+    # shortlist never used (bead od2f).
+    per_signal = build_ranklists_from_df(df, excluded=production_excluded_signals())
     p = permutation_null_pvalue(per_signal, k=a.k, n_perm=a.n_perm, seed=0)
     with open(a.out, "w") as fh:
         json.dump({"observed_separation": _order_and_sep(per_signal, a.k),

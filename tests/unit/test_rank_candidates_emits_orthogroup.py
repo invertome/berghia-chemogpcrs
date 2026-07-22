@@ -315,3 +315,44 @@ def test_output_cols_include_norm_signals_for_discovery_view() -> None:
         list_src = src[list_start:end]
         assert "'positive_score_norm'" in list_src, "output_cols missing positive_score_norm"
         assert "'tandem_cluster_score_norm'" in list_src, "output_cols missing tandem_cluster_score_norm"
+
+
+def test_output_cols_include_both_selection_norm_columns() -> None:
+    """Bead 3gri: output_cols must carry BOTH selection norm columns.
+
+    rank_candidates.py reliability-shrinks positive_score_norm AND
+    purifying_score_norm in lock-step (its dnds-reliability loop over
+    ('positive_score_norm', 'purifying_score_norm')). If only positive_score_norm
+    is emitted, every CSV re-reader sees a shrunk positive score but an
+    unshrunk purifying score (it falls back to the raw purifying_score / a
+    default), so the two selection axes are no longer on the same scale.
+
+    A drifted, hand-maintained second output_cols literal once omitted
+    purifying_score_norm exactly this way; the surviving single list must keep
+    both. Source-parsed (the list is defined in __main__, which runs the whole
+    pipeline on import and so cannot be imported).
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    repo = os.path.normpath(os.path.join(here, '..', '..'))
+    with open(os.path.join(repo, 'scripts', 'rank_candidates.py')) as f:
+        src = f.read()
+    occurrences = [m.start() for m in re.finditer(r'output_cols\s*=\s*\[', src)]
+    assert len(occurrences) == 1  # one definition; a second drifting copy is the defect
+    list_start = src.index('[', occurrences[0])
+    bracket_depth = 0
+    end = None
+    for j in range(list_start, len(src)):
+        if src[j] == '[':
+            bracket_depth += 1
+        elif src[j] == ']':
+            bracket_depth -= 1
+            if bracket_depth == 0:
+                end = j + 1
+                break
+    assert end is not None
+    list_src = src[list_start:end]
+    for col in ("purifying_score_norm", "positive_score_norm"):
+        assert f"'{col}'" in list_src or f'"{col}"' in list_src, (
+            f"output_cols is missing {col!r}; the shrunk selection norm columns "
+            "must both be emitted so a re-reader sees them on the same scale"
+        )

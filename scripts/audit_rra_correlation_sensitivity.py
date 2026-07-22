@@ -65,10 +65,11 @@ import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
 
-from rank_aggregation import aggregate, build_ranklists_from_df, rra_score
+from rank_aggregation import (aggregate, build_ranklists_from_df,
+                              production_excluded_signals, rra_score)
 
 
-def signal_matrix(df, id_col="id"):
+def signal_matrix(df, id_col="id", excluded=None):
     """Per-candidate matrix of the values RRA actually votes on.
 
     Columns are SIGNAL_SPEC signal keys; rows are ``df``'s ids in order. NaN
@@ -76,8 +77,13 @@ def signal_matrix(df, id_col="id"):
     has_*_data False, or a missing value). Delegates all column resolution to
     build_ranklists_from_df so this audit and the ranker can never disagree
     about which column, polarity or gate a signal uses.
+
+    ``excluded`` names signals barred from voting (a zero-weight or
+    orthology-quarantined axis, mirroring the production ranker -- bead od2f);
+    the default ``None`` excludes nothing, so a correlation among excluded axes
+    is not measured on a vote the shortlist never cast.
     """
-    ranklists = build_ranklists_from_df(df, id_col=id_col)
+    ranklists = build_ranklists_from_df(df, id_col=id_col, excluded=excluded)
     ids = list(df[id_col])
     return pd.DataFrame(
         {name: [scores.get(i, np.nan) for i in ids]
@@ -216,14 +222,20 @@ def fusion_impact(ranklists, groups, top_k=20):
     }
 
 
-def analyze(df, threshold=0.7, top_k=20, groups=None, id_col="id"):
-    """Full audit of one ranked dataframe. ``groups`` overrides the derived grouping."""
-    matrix = signal_matrix(df, id_col=id_col)
+def analyze(df, threshold=0.7, top_k=20, groups=None, id_col="id", excluded=None):
+    """Full audit of one ranked dataframe. ``groups`` overrides the derived grouping.
+
+    ``excluded`` (default ``None`` = exclude nothing) is threaded into BOTH the
+    correlation matrix and the fusion-impact ranklists so a zero-weight or
+    orthology-quarantined axis is absent from the audit exactly as it is absent
+    from the production vote (bead od2f).
+    """
+    matrix = signal_matrix(df, id_col=id_col, excluded=excluded)
     corr = rank_correlation_matrix(matrix)
     pairs = flag_correlated_pairs(corr, threshold)
     derived = groups_from_pairs(pairs, list(matrix.columns))
     effective = groups if groups is not None else derived
-    ranklists = build_ranklists_from_df(df, id_col=id_col)
+    ranklists = build_ranklists_from_df(df, id_col=id_col, excluded=excluded)
     return {
         "threshold": threshold,
         "signals": list(matrix.columns),
@@ -334,7 +346,7 @@ def main(argv=None):
 
     df = pd.read_csv(args.ranked_csv)
     result = analyze(df, threshold=args.threshold, top_k=args.top_k,
-                     groups=groups)
+                     groups=groups, excluded=production_excluded_signals())
     write_report(result, args.out_prefix)
 
     sat, imp = result["saturation"], result["fusion_impact"]

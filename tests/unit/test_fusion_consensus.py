@@ -49,6 +49,82 @@ def test_rra_missing_candidate_uses_available_models():
 
 
 # ---------------------------------------------------------------------------
+# Task 1 (bead sp4q) — exact-null mapping replaces the Bonferroni clip
+# ---------------------------------------------------------------------------
+from scipy.stats import beta as _beta
+
+
+def _rho_two_identical_models(norm_rank, m=2):
+    """Kolde rho for a candidate whose normalized rank is identical across all m
+    models (its sorted ranks are all == norm_rank): min_k of the Beta-cdf order
+    scores — the exact statistic robust_rank_aggregation computes for such a
+    candidate."""
+    rs = [norm_rank] * m
+    return min(_beta.cdf(rs[k], k + 1, m - k) for k in range(m))
+
+
+def test_rra_exact_null_resolves_the_clipped_tail():
+    # Two models with IDENTICAL score orderings over n candidates: a candidate
+    # ranked j-th (1=most novel) then has both normalized ranks = j/n, so its
+    # Kolde rho = (j/n)**2 at m=2. The OLD Bonferroni clip min(rho*m, 1) mapped
+    # EVERY candidate with rho >= 1/m (=0.5) onto one p=1.0 tie block; the exact
+    # null resolves that tail into distinct, strictly ordered p (bead sp4q).
+    n, m = 20, 2
+    cids = [f"c{j}" for j in range(1, n + 1)]               # c1 best ... c20 worst
+    scores = {c: float(n - k) for k, c in enumerate(cids)}  # strictly decreasing
+    nov = {"m1": dict(scores), "m2": dict(scores)}
+
+    p = robust_rank_aggregation(nov)
+
+    tail = [(c, _rho_two_identical_models((j + 1) / n, m))
+            for j, c in enumerate(cids)]
+    tail = [(c, rho) for c, rho in tail if rho >= 1.0 / m]  # the clipped region
+    assert len(tail) >= 3
+    # OLD behaviour: the Bonferroni clip maps every one of them to exactly 1.0.
+    for _, rho in tail:
+        assert min(rho * m, 1.0) == 1.0
+    # NEW behaviour: distinct values, strictly INCREASING in rho (the exact null
+    # is monotone), so the low-novelty tail is fully resolved — no tie block.
+    tail_p = [p[c] for c, _ in sorted(tail, key=lambda t: t[1])]  # by ascending rho
+    assert len(set(tail_p)) == len(tail_p)
+    assert all(tail_p[i] < tail_p[i + 1] for i in range(len(tail_p) - 1))
+
+
+def test_rra_exact_null_preserves_top_order():
+    # In the unsaturated region (rho < 1/m) the clip is the LINEAR rho*m and the
+    # exact null is also strictly increasing in rho, so both rank the top
+    # (small-rho) candidates in the SAME order — the fix only touches the tail.
+    n, m = 20, 2
+    cids = [f"c{j}" for j in range(1, n + 1)]
+    scores = {c: float(n - k) for k, c in enumerate(cids)}
+    nov = {"m1": dict(scores), "m2": dict(scores)}
+
+    p = robust_rank_aggregation(nov)
+    top = [(c, _rho_two_identical_models((j + 1) / n, m))
+           for j, c in enumerate(cids)]
+    top = [(c, rho) for c, rho in top if rho < 1.0 / m]    # the unclipped region
+    assert len(top) >= 3
+    clip_order = [c for c, _ in sorted(top, key=lambda t: min(t[1] * m, 1.0))]
+    exact_order = [c for c, _ in sorted(top, key=lambda t: p[t[0]])]
+    assert clip_order == exact_order
+
+
+def test_rra_exact_null_edge_cases_are_finite():
+    # m=1 (candidate in a single model): rho == its normalized rank and the exact
+    # null of one order statistic is Beta(1,1)=identity, so p == rho (unchanged
+    # from the clip). Finite and in (0,1].
+    p1 = robust_rank_aggregation({"m1": {"a": 3.0, "b": 2.0, "c": 1.0}})
+    assert all(np.isfinite(v) and 0.0 < v <= 1.0 for v in p1.values())
+    # Boundary rho: last-in-every-model -> rho=1 -> p=1.0; first-in-every-model ->
+    # tiny positive p. Nothing NaN/inf, and order tracks novelty.
+    nov = {mdl: {"top": 9, "mid": 5, "bot": 1} for mdl in ("m1", "m2", "m3")}
+    p = robust_rank_aggregation(nov)
+    assert all(np.isfinite(v) for v in p.values())
+    assert 0.0 < p["top"] < p["mid"] < p["bot"] <= 1.0
+    assert p["bot"] == 1.0
+
+
+# ---------------------------------------------------------------------------
 # Task 2 — confound-independence gate
 # ---------------------------------------------------------------------------
 from fusion_consensus import confound_residuals, residual_independence

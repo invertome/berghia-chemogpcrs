@@ -47,21 +47,38 @@ def rank_average_consensus(novelty: NoveltyByModel) -> Dict[str, float]:
 
 
 def robust_rank_aggregation(novelty: NoveltyByModel) -> Dict[str, float]:
-    """RRA (Kolde et al. 2012, *Bioinformatics* 28:573): per-candidate corrected
-    p that its normalized ranks are consistently smaller (more novel) than the
+    """RRA (Kolde et al. 2012, *Bioinformatics* 28:573): per-candidate p that
+    its normalized ranks are consistently smaller (more novel) than the
     uniform-null expectation.
 
     For a candidate observed in ``m`` models, sort its normalized ranks
     ``r_(1) <= ... <= r_(m)``. Under the null (ranks ~ Uniform(0,1]) the k-th
     order statistic (1-based) is Beta(k, m-k+1)-distributed, so
     ``beta.cdf(r_(k), k, m-k+1)`` is the probability of seeing a rank at least
-    that small by chance. ``rho = min_k`` of those tail probabilities is the RRA
-    statistic; a Bonferroni ``min(rho * m, 1)`` corrects for taking the minimum
-    over m order statistics, yielding a p in (0,1] (every r_(k) >= 1/n > 0, so
-    rho > 0). With the loop index ``k`` 0-based, the (k+1)-th order statistic
-    uses Beta(k+1, m-k) — verified to keep both shape params strictly positive
-    for every k in 0..m-1.
+    that small by chance; ``rho = min_k`` of those tail probabilities is Kolde's
+    RRA statistic. With the loop index ``k`` 0-based, the (k+1)-th order
+    statistic uses Beta(k+1, m-k) — the SAME statistic
+    :func:`rank_aggregation.rho_statistic` computes with a 1-based index
+    (``betainc(j, m-j+1, r_(j))``), since ``betainc`` and ``beta.cdf`` are the
+    same regularized incomplete beta and the 0-/1-based indices coincide.
+
+    rho is then referred to its EXACT null distribution conditioned on ``m``
+    (:func:`rank_aggregation.rho_null_pvalue`), NOT the Bonferroni bound
+    ``min(rho * m, 1)`` this function used to return (bead sp4q / 8k8e). That
+    bound CLIPS: every candidate with ``rho >= 1/m`` collapses onto a single
+    p=1.0 tie block, flattening the whole low-novelty tail. The exact null is
+    strictly increasing in rho, so it resolves that tail into distinct scores
+    and never ties two candidates whose rank vectors differ — and it is the SAME
+    estimator ``rank_aggregation`` applies to the downstream aggregator that
+    rank-transforms this fusion output (``emb_novelty``), so the two are now
+    consistent. LOWER = more consistently novel; p stays in (0,1] (every
+    r_(k) >= 1/n > 0, so rho > 0).
+
+    ``rho_null_pvalue`` is pure numpy/scipy but lives beside pandas-using code,
+    so it is imported lazily (like the module's IO glue) to keep the pure-math
+    top level lightweight.
     """
+    from rank_aggregation import rho_null_pvalue  # single exact-null source (bead sp4q)
     per_model = {m: _descending_percentile_ranks(dict(s)) for m, s in novelty.items()}
     out: Dict[str, float] = {}
     for cid in {c for s in novelty.values() for c in s}:
@@ -69,7 +86,7 @@ def robust_rank_aggregation(novelty: NoveltyByModel) -> Dict[str, float]:
         m = len(rs)
         # k-th smallest of m uniforms (1-based k=index+1): Beta(k, m-k+1)
         rho = min(beta.cdf(rs[k], k + 1, m - k) for k in range(m))
-        out[cid] = float(min(rho * m, 1.0))
+        out[cid] = float(rho_null_pvalue(rho, m))
     return out
 
 
@@ -413,7 +430,7 @@ def _self_test() -> None:
 
     resid = confound_residuals(per_model_novelty, confounds)
     gate = residual_independence(resid, threshold=0.7)
-    rra = robust_rank_aggregation(per_model_novelty)
+    rra = robust_rank_aggregation(per_model_novelty)  # exact-null RRA p (bead sp4q)
     ranks = rank_average_consensus(per_model_novelty)
     combiners = {
         "rra": {c: -float(np.log10(max(rra[c], 1e-300))) for c in rra},

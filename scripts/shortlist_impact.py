@@ -25,7 +25,8 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rank_aggregation import aggregate, build_ranklists_from_df  # noqa: E402
+from rank_aggregation import (  # noqa: E402
+    aggregate, build_ranklists_from_df, production_excluded_signals)
 
 
 def _positions(order):
@@ -82,7 +83,7 @@ def topk_movement(order_a, order_b, k):
     }
 
 
-def shortlist_impact(df, signal_to_toggle="emb_novelty", k=20):
+def shortlist_impact(df, signal_to_toggle="emb_novelty", k=20, excluded=None):
     """Impact of one voter on the top-k RRA shortlist.
 
     Builds the per-signal ranklists from ``df``
@@ -90,6 +91,12 @@ def shortlist_impact(df, signal_to_toggle="emb_novelty", k=20):
     every signal (the production order) and again with ``signal_to_toggle``
     removed (the counterfactual), and reports the top-k Jaccard plus the
     entered/left/mover breakdown attributable to the toggled voter.
+
+    ``excluded`` names signals barred from voting on BOTH sides of the toggle
+    (a zero-weight or orthology-quarantined axis, mirroring the production
+    ranker -- bead od2f). The default ``None`` excludes nothing, so a direct
+    caller reproduces the previous behaviour exactly; the CLI passes
+    ``production_excluded_signals()``.
 
     ``order_a`` is the counterfactual (voter removed) and ``order_b`` is the
     full order, so ``n_entered`` counts candidates the voter pulls INTO the
@@ -99,7 +106,7 @@ def shortlist_impact(df, signal_to_toggle="emb_novelty", k=20):
     absent, or every value was missing), it cannot move anything: Jaccard is
     1.0 and a ``note`` explains why.
     """
-    ranklists = build_ranklists_from_df(df)
+    ranklists = build_ranklists_from_df(df, excluded=excluded)
     order_full = aggregate(ranklists, method="rra")
 
     if signal_to_toggle not in ranklists:
@@ -164,7 +171,8 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     df = pd.read_csv(a.ranked_csv)
-    res = shortlist_impact(df, signal_to_toggle=a.signal, k=a.k)
+    res = shortlist_impact(df, signal_to_toggle=a.signal, k=a.k,
+                           excluded=production_excluded_signals())
     print(_format_report(res, a.k, a.signal))
     return res
 
