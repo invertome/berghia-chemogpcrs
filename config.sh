@@ -46,6 +46,12 @@ export GENOME_PROTEIN="${GENOME_DIR}/${BERGHIA_FILE_PREFIX}.proteins.fa"
 export GENOME_CDS="${GENOME_DIR}/${BERGHIA_FILE_PREFIX}.cds.fna"
 
 # --- Tool Paths (update based on Conda environment) ---
+# Canonical name of the project conda env. Single source of truth for the
+# shared activate_conda_env helper (functions.sh) and the Unity submit wrapper
+# (scripts/unity/submit_stage.sh). Every numbered stage self-activates this env
+# before running its tools, so a clean-shell sbatch submit still finds them.
+export CONDA_ENV="${CONDA_ENV:-berghia-gpcr}"
+
 export HMMBUILD="hmmbuild"
 export HMMSEARCH="hmmsearch"
 export HHMAKE="hhmake"

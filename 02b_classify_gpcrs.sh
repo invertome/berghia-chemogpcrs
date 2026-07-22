@@ -16,6 +16,7 @@
 
 source config.sh
 source functions.sh
+activate_conda_env   # self-activate the project conda env before running tools
 
 # Initialize pipeline
 init_pipeline

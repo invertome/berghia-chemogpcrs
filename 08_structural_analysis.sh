@@ -22,6 +22,7 @@
 
 source config.sh
 source functions.sh
+activate_conda_env   # self-activate the project conda env before running tools
 
 # --- Collect stage 05's ancestral-sequence reconstructions ---
 # Arguments: $1 - ASR directory (${RESULTS_DIR}/asr), $2 - output FASTA

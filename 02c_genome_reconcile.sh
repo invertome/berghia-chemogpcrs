@@ -26,12 +26,15 @@
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=${SLURM_EMAIL}
 
-# The env is activated by the caller (sbatch wrapper / interactive shell), as with
-# every other numbered stage; we do not self-activate. NOT using `set -u` here
-# because config.sh/functions.sh reference many optionally-set vars.
+# Self-activate the project conda env (activate_conda_env, functions.sh) like every
+# other numbered stage, so a clean-shell sbatch submit still finds the tools (TMbed
+# etc.). NOT using `set -u` here because config.sh/functions.sh reference many
+# optionally-set vars (and set -u would also trip the CONDA_BACKUP_CXX gxx
+# deactivate hook that `conda activate` runs).
 set -eo pipefail
 source config.sh
 source functions.sh
+activate_conda_env   # self-activate the project conda env before running tools
 
 RECON_DIR="${RESULTS_DIR}/reconciliation"
 WORK="${RECON_DIR}/work"

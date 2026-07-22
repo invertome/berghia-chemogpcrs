@@ -105,6 +105,59 @@ log() {
     esac
 }
 
+# --- Activate the pipeline conda environment (shared by all numbered stages) ---
+# Every numbered stage runs its compute tools (TMbed, HMMER, IQ-TREE, HyPhy, ...)
+# out of the project conda env. sbatch does NOT reliably propagate an activated
+# env from the submitting login shell: a clean-shell submit lands on the base
+# PATH and the tools are simply missing (this is what killed stage 02c). So each
+# stage self-activates by calling this helper right after sourcing config/functions.
+#
+# CANONICAL ORDER -- call this BEFORE enabling `set -u`:
+#     set -eo pipefail                 # strict, but NOT nounset yet
+#     source config.sh; source functions.sh
+#     activate_conda_env               # sources conda.sh + `conda activate`
+#     set -u                           # (optional) safe ONLY after activation
+# The order is load-bearing: `conda activate` runs the previous env's gxx
+# deactivate hook, which dereferences CONDA_BACKUP_CXX without guarding it. Under
+# `set -u` that unbound variable aborts the script before any real work runs;
+# activating while nounset is still off avoids the trap.
+#
+# Idempotent: a no-op when the target env is already active. In a context with no
+# conda at all (e.g. a unit-test host) it warns and returns 0 so it never trips a
+# caller's `set -e`. But when conda IS present and activation genuinely fails, it
+# returns non-zero so a real run fails loud rather than proceeding tool-less.
+activate_conda_env() {
+    local env="${CONDA_ENV:-berghia-gpcr}"
+
+    # Already in the target env -> nothing to do (also avoids re-running the
+    # env's own deactivate hooks unnecessarily).
+    if [ "${CONDA_DEFAULT_ENV:-}" = "${env}" ]; then
+        return 0
+    fi
+
+    # A clean sbatch shell has no `conda` function; source the login profile to
+    # define it. Guarded on file existence so a host without miniconda is fine.
+    if ! command -v conda >/dev/null 2>&1; then
+        local conda_sh="${CONDA_PROFILE:-$HOME/.miniconda3/etc/profile.d/conda.sh}"
+        # shellcheck disable=SC1090
+        [ -f "${conda_sh}" ] && source "${conda_sh}"
+    fi
+
+    # No conda available at all (e.g. a unit-test host): do not kill `set -e`.
+    if ! command -v conda >/dev/null 2>&1; then
+        echo "[conda] WARN: conda not found; skipping activation of '${env}'" >&2
+        return 0
+    fi
+
+    # Real run: activation failure is fatal (broken/missing env -> absent tools).
+    if conda activate "${env}"; then
+        echo "[conda] activated env '${env}' ($(command -v python3 2>/dev/null || echo 'python3 not on PATH'))" >&2
+    else
+        echo "[conda] ERROR: failed to activate conda env '${env}'" >&2
+        return 1
+    fi
+}
+
 # --- Compute File Checksum ---
 # Arguments: $1 - File path
 # Returns: MD5 checksum or "missing" if file doesn't exist

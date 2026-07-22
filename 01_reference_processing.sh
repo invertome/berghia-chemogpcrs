@@ -19,6 +19,7 @@
 
 source config.sh
 source functions.sh
+activate_conda_env   # self-activate the project conda env before running tools
 
 # Create output directories
 mkdir -p "${RESULTS_DIR}/reference_sequences" "${RESULTS_DIR}/hmms" "${LOGS_DIR}" "${SCRIPTS_DIR}" || { log "Error: Cannot create directories"; exit 1; }

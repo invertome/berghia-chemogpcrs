@@ -15,6 +15,7 @@
 
 source config.sh
 source functions.sh
+activate_conda_env   # self-activate the project conda env before running tools
 # ONE deterministic, chronologically-correct rule for which OrthoFinder
 # run is authoritative (mtime of Orthogroups.tsv). Shared by stages
 # 03/03b/04/05/06c/07 so they can no longer resolve different runs.

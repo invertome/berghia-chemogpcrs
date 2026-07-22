@@ -49,6 +49,15 @@ source config.sh
 # shellcheck disable=SC1091
 source functions.sh
 
+# Defense-in-depth: activate the project conda env HERE too, so that with
+# `--export=ALL` below a clean-shell submit propagates the env's PATH to the job
+# even before the stage self-activates. Non-fatal on purpose: the stage
+# self-activates on the compute node regardless, so a login shell that cannot
+# activate (e.g. the env is absent on this host) must warn, not block the submit.
+# Safe on the login node (activation is a metadata op, not compute). set -u is
+# off here, so no CONDA_BACKUP_CXX trap.
+activate_conda_env || echo "[submit_stage] WARN: could not activate '${CONDA_ENV:-berghia-gpcr}' here; the stage self-activates on the compute node anyway." >&2
+
 # Project variables the submitted job should inherit in its environment
 # (sbatch propagates the submitting environment by default). This is NOT the
 # envsubst substitution set. See the SHELL-FORMAT derivation below, which is
@@ -154,6 +163,8 @@ if grep -qE '^#SBATCH[[:space:]]+--array=' "$STAGE_SCRIPT" \
 fi
 
 # Submit and surface the job id on stdout for capture by callers.
-sbatch_out=$(sbatch "${ARRAY_FLAG[@]}" "$@" "$PREPROCESSED")
+# --export=ALL (defense-in-depth) propagates the activated env; it leads so a
+# caller-supplied --export in "$@" still overrides it.
+sbatch_out=$(sbatch --export=ALL "${ARRAY_FLAG[@]}" "$@" "$PREPROCESSED")
 echo "$sbatch_out"
 echo "$sbatch_out" | grep -oP 'Submitted batch job \K\d+'

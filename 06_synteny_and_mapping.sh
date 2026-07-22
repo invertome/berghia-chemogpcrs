@@ -15,6 +15,7 @@
 
 source config.sh
 source functions.sh
+activate_conda_env   # self-activate the project conda env before running tools
 
 # Create output directories
 mkdir -p "${RESULTS_DIR}/mapping" "${RESULTS_DIR}/synteny" "${RESULTS_DIR}/synteny/blast" "${RESULTS_DIR}/synteny/gff" "${LOGS_DIR}" || { log "Error: Cannot create directories"; exit 1; }

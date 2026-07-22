@@ -15,6 +15,7 @@
 
 source config.sh
 source functions.sh
+activate_conda_env   # self-activate the project conda env before running tools
 # shellcheck source=scripts/_report_summary_lib.sh
 source "${SCRIPTS_DIR}/_report_summary_lib.sh"
 
