@@ -109,14 +109,108 @@ def _attr(attrs: dict[str, str], *names: str) -> str | None:
 
 # ---- parse_minimap2_paf -----------------------------------------------------
 
+def _paf_optional_tags(fields: list[str]) -> dict[str, str]:
+    """Map a PAF line's optional ``TAG:TYPE:VALUE`` columns (index >= 12) to
+    ``{TAG: VALUE}``. The split is capped at two so a VALUE that itself contains
+    ':' (e.g. the whole cs string) is preserved intact."""
+    tags: dict[str, str] = {}
+    for col in fields[12:]:
+        parts = col.split(":", 2)
+        if len(parts) == 3:
+            tags[parts[0]] = parts[2]
+    return tags
+
+
+def _identity_from_divergence(tags: dict[str, str]) -> float | None:
+    """True per-base identity (%) from minimap2's divergence tag, or None if no
+    usable tag is present. ``de:f`` (gap-compressed per-base divergence, emitted
+    WITH base alignment: ``-c``/``--cs``/``-a``) is preferred; ``dv:f`` (the
+    coarser approximate divergence emitted WITHOUT base alignment) is the
+    fallback. Both are intron-aware — the intron is a reference skip, not a
+    mismatch — so identity = 100 * (1 - divergence). A tag whose value will not
+    parse as a float yields None (fall through to cs), never a guessed value."""
+    for key in ("de", "dv"):
+        val = tags.get(key)
+        if val is None:
+            continue
+        try:
+            return 100.0 * (1.0 - float(val))
+        except ValueError:
+            # Deliberate: an unparseable divergence value is "no usable
+            # divergence source", so fall through to the exact cs path; if cs is
+            # also absent, parse_minimap2_paf RAISES. None never reaches a gate
+            # as an identity — it is not a silent 0.
+            return None
+    return None
+
+
+def _identity_from_cs(cs: str) -> float | None:
+    """Exact per-base identity (%) from a minimap2 cs string, EXCLUDING intron
+    (``~``) operations: matches / (matches + substitutions + inserted +
+    deleted bases). Ops: ``:N`` / ``=SEQ`` identical run, ``*xy`` substitution,
+    ``+seq`` insertion, ``-seq`` deletion, ``~ab##cd`` intron (skipped, NOT
+    counted). Returns None on an unrecognized op or an empty aligned region, so
+    the caller fails loud rather than trusting a partial parse."""
+    matches = subs = indel = 0
+    i, n = 0, len(cs)
+    while i < n:
+        op = cs[i]
+        i += 1
+        if op == ":":                    # ":<int>" — run of identical bases
+            j = i
+            while j < n and cs[j].isdigit():
+                j += 1
+            if j == i:
+                return None
+            matches += int(cs[i:j]); i = j
+        elif op == "=":                  # "=<seq>" — long-form identical run
+            j = i
+            while j < n and cs[j].isalpha():
+                j += 1
+            matches += (j - i); i = j
+        elif op == "*":                  # "*<ref><qry>" — one substitution
+            subs += 1; i += 2
+        elif op in "+-":                 # "+<seq>"/"-<seq>" — insertion/deletion
+            j = i
+            while j < n and cs[j].isalpha():
+                j += 1
+            indel += (j - i); i = j
+        elif op == "~":                  # "~<2><int><2>" — intron, skipped
+            j = i
+            while j < n and cs[j].isalpha():
+                j += 1
+            while j < n and cs[j].isdigit():
+                j += 1
+            while j < n and cs[j].isalpha():
+                j += 1
+            i = j
+        else:
+            return None
+    aligned = matches + subs + indel
+    return 100.0 * matches / aligned if aligned else None
+
+
 def parse_minimap2_paf(path: str) -> list[Placement]:
     """Parse minimap2 PAF output into Placements.
 
     Column layout (0-based indices): qname[0] qlen[1] qstart[2] qend[3]
     strand[4] tname[5] tlen[6] tstart[7] tend[8] nmatch[9] alen[10]
-    mapq[11] ...(optional SAM-like tags).
+    mapq[11] ...(optional TAG:TYPE:VALUE fields).
 
-    identity = 100 * nmatch / alen; coverage = 100 * (qend-qstart) / qlen.
+    coverage = 100 * (qend-qstart) / qlen. IDENTITY is the TRUE per-base
+    identity, taken from the intron-aware ``de:f``/``dv:f`` divergence tag
+    (identity = 100*(1-div)) or, when absent, computed from the ``cs`` string
+    (matches / (matches+subs+indels), the ``~`` intron op excluded). It is NOT
+    ``nmatch/alen``: under ``-x splice`` ``alen`` spans the genomic footprint
+    INCLUDING introns, so for a multi-exon transcript ``alen >> nmatch`` and
+    that ratio collapses far below the %id gate even for a near-perfect
+    alignment (bead kfqz). Run minimap2 with ``-c --cs`` so one of those
+    intron-aware sources is always emitted.
+
+    A record that carries NEITHER a divergence tag NOR a cs string has no
+    intron-aware identity source; rather than silently fall back to the buggy
+    ``nmatch/alen`` (or to 0), this RAISES ``ValueError`` naming the record —
+    that silent fallback is exactly the failure this fix removes.
     """
     if not os.path.exists(path):
         return []
@@ -130,11 +224,21 @@ def parse_minimap2_paf(path: str) -> list[Placement]:
             try:
                 qlen, qs, qe = int(f[1]), int(f[2]), int(f[3])
                 tstart, tend = int(f[7]), int(f[8])
-                nmatch, alen = int(f[9]), int(f[10])
                 mapq = float(f[11])
             except ValueError:
                 continue
-            pct_identity = 100.0 * nmatch / alen if alen else 0.0
+            tags = _paf_optional_tags(f)
+            pct_identity = _identity_from_divergence(tags)
+            if pct_identity is None and "cs" in tags:
+                pct_identity = _identity_from_cs(tags["cs"])
+            if pct_identity is None:
+                raise ValueError(
+                    f"{path}: minimap2 PAF record for {f[0]} at "
+                    f"{f[5]}:{f[7]}-{f[8]} has no intron-aware identity source "
+                    f"(no de:f/dv:f divergence tag and no cs:Z tag). Re-run "
+                    f"minimap2 with `-c --cs`; nmatch/alen is not used because "
+                    f"under `-x splice` alen spans introns and collapses "
+                    f"identity for multi-exon transcripts.")
             pct_coverage = 100.0 * (qe - qs) / qlen if qlen else 0.0
             out.append(Placement(query=f[0], chrom=f[5], start=tstart, end=tend,
                                   strand=f[4], pct_identity=pct_identity,

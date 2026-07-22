@@ -109,11 +109,13 @@ def _paf_rows():
     # Gene A: true locus (99) + two distinct paralog loci (96, 94) -> TP margin
     #   3.0 and synthetic FP margin 2.0. Gene B: one confident locus -> TP inf.
     # Query names are the full lcl| CDS ids so they join the CDS FASTA headers.
+    # Identity comes from the de:f divergence tag (single-exon synthetic rows,
+    # so de:f == the old nmatch/alen value -> identities/margins unchanged).
     rows = [
-        ("lcl|NC_1.1_cds_XPA_1", 100, 0, 100, "+", "NC_1.1", 1000000, 100, 200, 99, 100, 60),
-        ("lcl|NC_1.1_cds_XPA_1", 100, 0, 100, "+", "NC_1.1", 1000000, 5000, 5100, 96, 100, 60),
-        ("lcl|NC_1.1_cds_XPA_1", 100, 0, 100, "+", "NC_1.1", 1000000, 9000, 9100, 94, 100, 60),
-        ("lcl|NC_1.1_cds_XPB_1", 100, 0, 100, "+", "NC_1.1", 1000000, 20000, 20100, 98, 100, 60),
+        ("lcl|NC_1.1_cds_XPA_1", 100, 0, 100, "+", "NC_1.1", 1000000, 100, 200, 99, 100, 60, "de:f:0.01"),
+        ("lcl|NC_1.1_cds_XPA_1", 100, 0, 100, "+", "NC_1.1", 1000000, 5000, 5100, 96, 100, 60, "de:f:0.04"),
+        ("lcl|NC_1.1_cds_XPA_1", 100, 0, 100, "+", "NC_1.1", 1000000, 9000, 9100, 94, 100, 60, "de:f:0.06"),
+        ("lcl|NC_1.1_cds_XPB_1", 100, 0, 100, "+", "NC_1.1", 1000000, 20000, 20100, 98, 100, 60, "de:f:0.02"),
     ]
     return "\n".join("\t".join(str(x) for x in r) for r in rows) + "\n"
 

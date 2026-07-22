@@ -32,36 +32,38 @@ def test_placement_fields_positional():
 # ---- parse_minimap2_paf ---------------------------------------------------
 
 def test_paf_identity_and_coverage(tmp_path):
-    # minimap2 PAF: qname qlen qstart qend strand tname tlen tstart tend nmatch alen mapq ...
+    # minimap2 PAF: qname qlen qstart qend strand tname tlen tstart tend nmatch
+    # alen mapq  tags...  Identity now comes from the intron-aware cs tag (NOT
+    # nmatch/alen): cs :294*ac -> 294 matches + 1 substitution.
     paf = tmp_path / "m.paf"
     paf.write_text("BersteEVm1\t300\t0\t300\t+\tchr1\t10000\t500\t800\t294\t300\t60\t"
                    "tp:A:P\tcs:Z::294*ac\n")
     p = rc.parse_minimap2_paf(str(paf))[0]
     assert p.chrom == "chr1" and p.strand == "+"
-    assert p.pct_identity == 98.0          # 100 * 294/300 (exact)
+    assert abs(p.pct_identity - 100.0 * 294 / 295) < 1e-6  # 294/(294 match + 1 sub)
     assert p.pct_coverage == 100.0         # 100 * (300-0)/300
 
 
-def test_paf_distinct_qlen_and_alen_denominators(tmp_path):
-    """Guards the identity/coverage denominator wiring: identity uses
-    alen (f[10]) and coverage uses qlen (f[1]). With qlen != alen the
-    two are numerically distinct, so a swapped-denominator regression
-    (identity<->coverage) changes both values and this test fails.
-    Correct:  identity = 100*294/300 = 98.0 ; coverage = 100*300/305 = 98.36..
-    Swapped:  identity = 100*294/305 = 96.39 ; coverage = 100*300/300 = 100.0
+def test_paf_coverage_uses_qlen_denominator(tmp_path):
+    """Coverage uses qlen (f[1]) as its denominator, independent of the
+    identity source. With qlen != (qend-qstart) the coverage is a proper
+    fraction; identity comes from the de:f divergence tag (intron-aware), so a
+    coverage regression cannot masquerade as an identity change and vice versa.
+    Correct: identity = 100*(1-0.02) = 98.0 ; coverage = 100*300/305 = 98.36..
     """
     paf = tmp_path / "m.paf"
-    # qname qlen=305 qstart=0 qend=300 strand tname tlen tstart tend nmatch=294 alen=300 mapq
-    paf.write_text("q1\t305\t0\t300\t+\tchr1\t10000\t500\t800\t294\t300\t60\n")
+    # qname qlen=305 qstart=0 qend=300 strand tname tlen tstart tend nmatch alen mapq de:f
+    paf.write_text("q1\t305\t0\t300\t+\tchr1\t10000\t500\t800\t294\t300\t60\t"
+                   "tp:A:P\tde:f:0.02\n")
     p = rc.parse_minimap2_paf(str(paf))[0]
-    assert p.pct_identity == 98.0                              # 100 * 294/300
+    assert abs(p.pct_identity - 98.0) < 1e-6                   # 100 * (1 - 0.02)
     assert abs(p.pct_coverage - 98.36065573770492) < 1e-9      # 100 * 300/305
 
 
 def test_paf_query_and_score_and_method(tmp_path):
     paf = tmp_path / "m.paf"
     paf.write_text("BersteEVm1\t300\t0\t300\t+\tchr1\t10000\t500\t800\t294\t300\t60\t"
-                   "tp:A:P\n")
+                   "tp:A:P\tde:f:0.01\n")
     p = rc.parse_minimap2_paf(str(paf))[0]
     assert p.query == "BersteEVm1"
     assert p.method == "minimap2"
@@ -72,8 +74,8 @@ def test_paf_query_and_score_and_method(tmp_path):
 def test_paf_multiple_lines_multiple_placements(tmp_path):
     paf = tmp_path / "m.paf"
     paf.write_text(
-        "q1\t300\t0\t300\t+\tchr1\t10000\t500\t800\t294\t300\t60\n"
-        "q2\t200\t0\t200\t-\tchr2\t5000\t100\t300\t190\t200\t40\n"
+        "q1\t300\t0\t300\t+\tchr1\t10000\t500\t800\t294\t300\t60\tde:f:0.02\n"
+        "q2\t200\t0\t200\t-\tchr2\t5000\t100\t300\t190\t200\t40\tde:f:0.05\n"
     )
     placements = rc.parse_minimap2_paf(str(paf))
     assert len(placements) == 2
@@ -87,7 +89,7 @@ def test_paf_skips_short_lines(tmp_path):
     paf.write_text(
         "too\tshort\n"
         "\n"
-        "q1\t300\t0\t300\t+\tchr1\t10000\t500\t800\t294\t300\t60\n"
+        "q1\t300\t0\t300\t+\tchr1\t10000\t500\t800\t294\t300\t60\tde:f:0.02\n"
     )
     placements = rc.parse_minimap2_paf(str(paf))
     assert len(placements) == 1
@@ -97,21 +99,24 @@ def test_paf_skips_short_lines(tmp_path):
 def test_paf_skips_non_numeric_fields(tmp_path):
     paf = tmp_path / "m.paf"
     paf.write_text(
-        "bad\tNOTANUMBER\t0\t300\t+\tchr1\t10000\t500\t800\t294\t300\t60\n"
-        "q1\t300\t0\t300\t+\tchr1\t10000\t500\t800\t294\t300\t60\n"
+        "bad\tNOTANUMBER\t0\t300\t+\tchr1\t10000\t500\t800\t294\t300\t60\tde:f:0.02\n"
+        "q1\t300\t0\t300\t+\tchr1\t10000\t500\t800\t294\t300\t60\tde:f:0.02\n"
     )
     placements = rc.parse_minimap2_paf(str(paf))
     assert len(placements) == 1
     assert placements[0].query == "q1"
 
 
-def test_paf_zero_alen_and_qlen_no_crash(tmp_path):
+def test_paf_zero_qlen_coverage_zero_no_crash(tmp_path):
+    """A zero qlen must not crash the coverage division (-> 0.0). Identity
+    comes from the divergence tag, so alen (no longer used for identity) is
+    irrelevant here."""
     paf = tmp_path / "m.paf"
-    paf.write_text("q1\t0\t0\t0\t+\tchr1\t10000\t500\t800\t0\t0\t60\n")
+    paf.write_text("q1\t0\t0\t0\t+\tchr1\t10000\t500\t800\t0\t0\t60\tde:f:0.0\n")
     placements = rc.parse_minimap2_paf(str(paf))
     assert len(placements) == 1
-    assert placements[0].pct_identity == 0.0
-    assert placements[0].pct_coverage == 0.0
+    assert placements[0].pct_identity == 100.0   # 100 * (1 - 0.0)
+    assert placements[0].pct_coverage == 0.0     # qlen 0 -> 0.0, no ZeroDivisionError
 
 
 def test_paf_missing_file_returns_empty():

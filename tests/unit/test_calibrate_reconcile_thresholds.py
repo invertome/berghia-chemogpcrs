@@ -251,9 +251,12 @@ def test_real_mode_warns_on_partial_id_match(tmp_path, capsys):
     # q3 is requested but absent from the alignment -> a silent tiny-distribution
     # bar would otherwise result. Also exercises _read_ids (comment + blank).
     paf = tmp_path / "aln.paf"
+    # Identity comes from the de:f divergence tag (single-exon synthetic rows,
+    # so de:f matches the old nmatch/alen value); only the id-match count is
+    # asserted below.
     paf.write_text(
-        "q1\t1000\t0\t1000\t+\tchr1\t100000\t5000\t6000\t990\t1000\t60\n"
-        "q2\t1000\t0\t900\t+\tchr1\t100000\t20000\t20900\t880\t900\t60\n")
+        "q1\t1000\t0\t1000\t+\tchr1\t100000\t5000\t6000\t990\t1000\t60\tde:f:0.01\n"
+        "q2\t1000\t0\t900\t+\tchr1\t100000\t20000\t20900\t880\t900\t60\tde:f:0.0222\n")
     ids = tmp_path / "busco.txt"
     ids.write_text("# single-copy ids\n\nq1\nq2\nq3\n")
     code = cal.main(["--minimap2-paf", str(paf),

@@ -220,8 +220,13 @@ MINIMAP_PAF="${WORK}/minimap2.paf"
 GMAP_GFF="${WORK}/gmap.gff3"
 : > "$MINIMAP_PAF"; : > "$GMAP_GFF"
 if [ -s "$CAND_MRNA" ]; then
+    # `-c --cs`: emit base-level alignment so the PAF carries the intron-aware
+    # identity sources reconcile_candidates.py needs (the de:f divergence tag +
+    # the cs string). WITHOUT these, identity would collapse to nmatch/alen,
+    # whose `alen` spans introns under `-x splice` and sinks every multi-exon
+    # transcript below the %id gate (bead kfqz).
     run_command "minimap2_splice" --stdout="$MINIMAP_PAF" \
-        ${MINIMAP2} -x splice -t "$THREADS" "$GENOME" "$CAND_MRNA"
+        ${MINIMAP2} -x splice -c --cs -t "$THREADS" "$GENOME" "$CAND_MRNA"
     run_command "gmap_align" --stdout="$GMAP_GFF" \
         ${GMAP} -D "$GMAP_DB_DIR" -d "$GMAP_DB_NAME" -f gff3_gene -t "$THREADS" "$CAND_MRNA"
 else
