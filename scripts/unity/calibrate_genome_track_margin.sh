@@ -107,7 +107,7 @@ log "RefSeq GPCR CDS subset: $(grep -c '^>' "$GPCR_CDS") records -> ${GPCR_CDS}"
 # Same minimap2/gmap invocation as 02c_genome_reconcile.sh; no gmap_build here.
 log "Mapping the GPCR CDS subset to the genome (minimap2 -x splice + gmap)."
 run_command "margin_minimap2" --stdout="$OUT/gpcr_cds.paf" \
-    "$MINIMAP2" -x splice -t "$THREADS" "$GENOME" "$GPCR_CDS"
+    "$MINIMAP2" -x splice -c --cs -t "$THREADS" "$GENOME" "$GPCR_CDS"
 run_command "margin_gmap" --stdout="$OUT/gpcr_cds.gff3" \
     "$GMAP" -D "$CAL/gmap_index" -d "$GMAP_DB_NAME" -f gff3_gene -t "$THREADS" "$GPCR_CDS"
 

@@ -104,7 +104,7 @@ run_command "gmap_build" ${GMAP_BUILD} -D "${GMAP_DB_DIR}" -d "${GMAP_DB_NAME}" 
 MINIMAP_PAF="${WORK}/minimap2.paf"
 GMAP_GFF="${WORK}/gmap.gff3"
 run_command "minimap2_splice" --stdout="${MINIMAP_PAF}" \
-    ${MINIMAP2} -x splice -t "${THREADS}" "${GENOME_FA}" "${SUBSET_MRNA}"
+    ${MINIMAP2} -x splice -c --cs -t "${THREADS}" "${GENOME_FA}" "${SUBSET_MRNA}"
 run_command "gmap_align" --stdout="${GMAP_GFF}" \
     ${GMAP} -D "${GMAP_DB_DIR}" -d "${GMAP_DB_NAME}" -f gff3_gene -t "${THREADS}" "${SUBSET_MRNA}"
 

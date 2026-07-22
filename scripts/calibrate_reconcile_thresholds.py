@@ -34,7 +34,7 @@ math is reimplemented — the parsers are reused from reconcile_candidates.py):
                                   paralog-family (chemoreceptor candidate)
                                   transcripts, produced exactly as stage 02c
                                   does, e.g.:
-                                    minimap2 -x splice <genome> <transcripts> > aln.paf
+                                    minimap2 -x splice -c --cs <genome> <transcripts> > aln.paf
                                     gmap -d <db> -f gff3_gene <transcripts> > aln.gff3
     --busco-single-copy-ids FILE  one transcript id per line — the true-
                                   same-gene set (from the stage-03a BUSCO run's
